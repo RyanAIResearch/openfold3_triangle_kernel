@@ -124,10 +124,10 @@ class TriangleAttention(nn.Module):
         """
 
         if use_stable_triangle_attention:
-            if self.c_hidden not in (16, 32, 64, 128) or self.no_heads < 1:
+            if self.c_hidden not in (16, 32) or self.no_heads < 1:
                 raise ValueError(
-                    "stable Triangle Attention requires c_hidden in "
-                    "(16, 32, 64, 128) and no_heads >= 1"
+                    "stable Triangle Attention production requires c_hidden in "
+                    "(16, 32) and no_heads >= 1"
                 )
             if chunk_size is not None:
                 raise ValueError(

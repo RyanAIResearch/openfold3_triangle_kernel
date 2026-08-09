@@ -84,8 +84,8 @@ class StreamingTriangleAttentionSupportTest(unittest.TestCase):
         supported, reason = self.support(q=q, k=q, v=q, bias=bias)
         self.assertTrue(supported, reason)
 
-    def test_accepts_all_compiled_head_dimensions(self):
-        for head_dim in (16, 32, 64, 128):
+    def test_accepts_all_production_head_dimensions(self):
+        for head_dim in (16, 32):
             with self.subTest(head_dim=head_dim):
                 shape = (1, 64, 2, 64, head_dim)
                 q = torch.empty(
@@ -111,16 +111,56 @@ class StreamingTriangleAttentionSupportTest(unittest.TestCase):
         supported, reason = self.support(q=q, k=q, v=q, mask=mask, bias=bias)
         self.assertTrue(supported, reason)
 
-    def test_rejects_uncompiled_head_dimension(self):
-        shape = (1, 384, 4, 384, 24)
-        q = torch.empty(
-            (1, 1, 4, 1, 24), device="cuda", dtype=torch.bfloat16
-        ).expand(shape)
-        supported, reason = self.support(q=q, k=q, v=q)
-        self.assertFalse(supported)
-        self.assertIn("D in {16,32,64,128}", reason)
+    def test_rejects_nonproduction_head_dimensions(self):
+        for head_dim in (24, 64, 128):
+            with self.subTest(head_dim=head_dim):
+                shape = (1, 384, 4, 384, head_dim)
+                q = torch.empty(
+                    (1, 1, 4, 1, head_dim),
+                    device="cuda",
+                    dtype=torch.bfloat16,
+                ).expand(shape)
+                supported, reason = self.support(q=q, k=q, v=q)
+                self.assertFalse(supported)
+                self.assertIn("production D in {16,32}", reason)
 
-    def test_rejects_sequence_beyond_cuda_grid_z(self):
+    def _ranked_prefix_case(self, prefix, bias_prefix):
+        sequence, heads, head_dim = 1, 1, 16
+        q_shape = prefix + (sequence, heads, sequence, head_dim)
+        q = torch.empty(
+            (1,) * len(prefix) + (1, 1, 1, head_dim),
+            device="cuda",
+            dtype=torch.bfloat16,
+        ).expand(q_shape)
+        mask = torch.zeros(
+            prefix + (sequence, 1, 1, sequence),
+            device="cuda",
+            dtype=torch.bfloat16,
+        )
+        bias = torch.zeros(
+            bias_prefix + (1, heads, sequence, sequence),
+            device="cuda",
+            dtype=torch.bfloat16,
+        )
+        return self.support(q=q, k=q, v=q, mask=mask, bias=bias)
+
+    def test_accepts_pair_bias_broadcast_at_rank_16(self):
+        prefix = (2,) + (1,) * 15
+        supported, reason = self._ranked_prefix_case(prefix, (1,) * 16)
+        self.assertTrue(supported, reason)
+
+    def test_rejects_pair_bias_broadcast_above_rank_16(self):
+        prefix = (2,) + (1,) * 16
+        supported, reason = self._ranked_prefix_case(prefix, (1,) * 17)
+        self.assertFalse(supported)
+        self.assertIn("at most 16 target-prefix dimensions", reason)
+
+    def test_accepts_rank_17_when_pair_bias_does_not_broadcast(self):
+        prefix = (2,) + (1,) * 16
+        supported, reason = self._ranked_prefix_case(prefix, prefix)
+        self.assertTrue(supported, reason)
+
+    def test_accepts_sequence_above_the_legacy_grid_z_limit(self):
         sequence = 65_536
         q = torch.empty(
             (1, 1, 1, 1, 16), device="cuda", dtype=torch.bfloat16
@@ -134,8 +174,24 @@ class StreamingTriangleAttentionSupportTest(unittest.TestCase):
         supported, reason = self.support(
             q=q, k=q, v=q, mask=mask, bias=bias
         )
+        self.assertTrue(supported, reason)
+
+    def test_rejects_sequence_requiring_too_many_query_blocks(self):
+        sequence = 65_535 * 32 + 1
+        q = torch.empty(
+            (1, 1, 1, 1, 16), device="cuda", dtype=torch.bfloat16
+        ).expand((1, sequence, 1, sequence, 16))
+        mask = torch.empty(
+            (1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16
+        ).expand((1, sequence, 1, 1, sequence))
+        bias = torch.empty(
+            (1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16
+        ).expand((1, 1, 1, sequence, sequence))
+        supported, reason = self.support(
+            q=q, k=q, v=q, mask=mask, bias=bias
+        )
         self.assertFalse(supported)
-        self.assertIn("grid-z", reason)
+        self.assertIn("too many CUDA query blocks", reason)
 
     def test_rejects_heads_beyond_cuda_grid_y(self):
         heads = 65_536

@@ -19,8 +19,11 @@ from typing import Any
 
 import torch
 
-_SUPPORTED_HEAD_DIMS = frozenset((16, 32, 64, 128))
+_SUPPORTED_HEAD_DIMS = frozenset((16, 32))
+_MAX_GRID_X = 2_147_483_647
 _MAX_GRID_YZ = 65_535
+_SMALLEST_QUERY_BLOCK = 32
+_MAX_BROADCAST_PREFIX_RANK = 16
 
 _FORWARD: Any = None
 _DELTA: Any = None
@@ -82,14 +85,22 @@ def is_streaming_supported(
     outer, heads, sequence, head_dim = q.shape[-4:]
     if not prefix or any(dimension <= 0 for dimension in prefix):
         return False, "requires a positive batch prefix"
+    batch = 1
+    for dimension in prefix:
+        batch *= int(dimension)
     if outer != sequence or sequence <= 0:
         return False, "requires equal positive outer/key sequence dimensions"
-    if sequence > _MAX_GRID_YZ:
-        return False, "sequence exceeds Hopper CUDA grid-z limit (65535)"
+    query_blocks = (int(sequence) + _SMALLEST_QUERY_BLOCK - 1) // (
+        _SMALLEST_QUERY_BLOCK
+    )
+    if query_blocks > _MAX_GRID_YZ:
+        return False, "sequence requires too many CUDA query blocks"
     if heads > _MAX_GRID_YZ:
         return False, "head count exceeds Hopper CUDA grid-y limit (65535)"
+    if batch * sequence > _MAX_GRID_X:
+        return False, "flattened batch*sequence exceeds CUDA grid-x limit"
     if heads < 1 or head_dim not in _SUPPORTED_HEAD_DIMS:
-        return False, "requires H>=1 and D in {16,32,64,128}"
+        return False, "requires H>=1 and production D in {16,32}"
     for name, tensor in {"k": k, "v": v}.items():
         if tensor.shape != q.shape:
             return False, f"{name} shape must match q"
@@ -113,6 +124,17 @@ def is_streaming_supported(
             return False, f"{name} prefix is not broadcastable to q prefix"
         if tuple(broadcast_prefix) != prefix:
             return False, f"{name} prefix must broadcast exactly to q prefix"
+    bias_prefix = tuple(pair_bias.shape[:-4])
+    aligned_bias_prefix = (1,) * (len(prefix) - len(bias_prefix)) + bias_prefix
+    bias_requires_broadcast = any(
+        source != target
+        for source, target in zip(aligned_bias_prefix, prefix, strict=True)
+    )
+    if bias_requires_broadcast and len(prefix) > _MAX_BROADCAST_PREFIX_RANK:
+        return (
+            False,
+            "pair_bias broadcast supports at most 16 target-prefix dimensions",
+        )
     if res_mask.requires_grad:
         return False, "res_mask must not require gradients"
     return True, "supported"
@@ -120,25 +142,39 @@ def is_streaming_supported(
 
 class _StreamingTriangleAttention(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, q, k, v, mask, bias):  # noqa: D102
+    def forward(  # noqa: D102
+        ctx,
+        q,
+        k,
+        v,
+        mask,
+        expanded_bias,
+        source_bias,
+        target_prefix,
+        bias_prefix,
+    ):
         with torch.cuda.device(q.device):
             sequence = q.shape[-2]
             out = torch.empty_like(q)
             lse = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
             _forward_extension().streaming_triangle_forward_out(
-                q, k, v, mask, bias, out, lse
+                q, k, v, mask, expanded_bias, out, lse
             )
-        ctx.save_for_backward(q, k, v, mask, bias, out, lse)
+        ctx.save_for_backward(q, k, v, mask, expanded_bias, out, lse)
         ctx.sequence = int(sequence)
+        ctx.target_prefix = tuple(int(value) for value in target_prefix)
+        ctx.bias_prefix = tuple(int(value) for value in bias_prefix)
+        ctx.bias_shape = tuple(source_bias.shape)
         return out
 
     @staticmethod
     def backward(ctx, d_output):  # noqa: D102
         from openfold3.core.kernels.cuda.fused_triangle_dq_dbias_v9 import (
             fused_triangle_dq_dbias_v9,
+            reduce_broadcast_dbias_v9,
         )
 
-        q, k, v, mask, bias, out, lse = ctx.saved_tensors
+        q, k, v, mask, expanded_bias, out, lse = ctx.saved_tensors
         with torch.cuda.device(q.device):
             d_output = d_output.contiguous()
             delta = torch.empty_like(lse)
@@ -151,11 +187,30 @@ class _StreamingTriangleAttention(torch.autograd.Function):
                 stable_triangle_dkdv_v2 as dkdv,
             )
 
-            d_k, d_v = dkdv(q, k, v, d_output, lse, delta, mask, bias)
-            d_q, d_bias = fused_triangle_dq_dbias_v9(
-                q, k, v, d_output, lse, delta, mask, bias
+            d_k, d_v = dkdv(
+                q, k, v, d_output, lse, delta, mask, expanded_bias
             )
-        return d_q, d_k, d_v, None, d_bias.to(bias.dtype)
+            d_q, per_batch_dbias = fused_triangle_dq_dbias_v9(
+                q, k, v, d_output, lse, delta, mask, expanded_bias
+            )
+            if ctx.bias_prefix == ctx.target_prefix:
+                # The reduction is the identity when the bias already has the
+                # complete target prefix.  Keep the same public BF16 gradient
+                # contract without launching a redundant prefix-reduction
+                # kernel.  This is shape-generic; it is not an N-specific
+                # dispatch.
+                d_bias = per_batch_dbias.reshape(ctx.bias_shape).to(
+                    dtype=torch.bfloat16
+                )
+            else:
+                d_bias = reduce_broadcast_dbias_v9(
+                    per_batch_dbias,
+                    target_prefix=ctx.target_prefix,
+                    bias_prefix=ctx.bias_prefix,
+                )
+            if tuple(d_bias.shape) != ctx.bias_shape:
+                raise RuntimeError("fixed dBias reduction returned the wrong shape")
+        return d_q, d_k, d_v, None, None, d_bias, None, None
 
 
 def streaming_triangle_attention(
@@ -178,42 +233,35 @@ def streaming_triangle_attention(
     for dim in prefix:
         batch *= int(dim)
 
-    def one_leaf(qb, kb, vb, mb, bb):
-        return _StreamingTriangleAttention.apply(
-            qb.reshape((1,) + shape).contiguous(),
-            kb.reshape((1,) + shape).contiguous(),
-            vb.reshape((1,) + shape).contiguous(),
-            mb.reshape((1,) + tuple(res_mask.shape[-4:])).contiguous().float(),
-            bb.reshape((1,) + tuple(pair_bias.shape[-4:])).contiguous(),
-        )
-
-    if batch == 1:
-        output_internal = one_leaf(q, k, v, res_mask, pair_bias)
-    else:
-        # Batched prefixes run leaf-by-leaf (each leaf saturates the GPU);
-        # torch.cat keeps the whole thing differentiable.
-        q_flat = q.reshape((batch,) + shape)
-        k_flat = k.reshape((batch,) + shape)
-        v_flat = v.reshape((batch,) + shape)
-        mask_flat = res_mask.expand(prefix + tuple(res_mask.shape[-4:])).reshape(
-            (batch,) + tuple(res_mask.shape[-4:])
-        )
-        bias_flat = pair_bias.expand(prefix + tuple(pair_bias.shape[-4:])).reshape(
-            (batch,) + tuple(pair_bias.shape[-4:])
-        )
-        output_internal = torch.cat(
-            [
-                one_leaf(
-                    q_flat[i],
-                    k_flat[i],
-                    v_flat[i],
-                    mask_flat[i],
-                    bias_flat[i],
-                )
-                for i in range(batch)
-            ],
-            dim=0,
-        )
+    # Flatten every positive prefix into one CUDA batch. Bias broadcasting is
+    # materialized exactly once; its backward reduction is owned by the CUDA
+    # extension and therefore has one fixed order rather than ExpandBackward's
+    # framework-dependent tree.
+    q_flat = q.reshape((batch,) + shape).contiguous()
+    k_flat = k.reshape((batch,) + shape).contiguous()
+    v_flat = v.reshape((batch,) + shape).contiguous()
+    mask_flat = (
+        res_mask.expand(prefix + tuple(res_mask.shape[-4:]))
+        .reshape((batch,) + tuple(res_mask.shape[-4:]))
+        .contiguous()
+        .float()
+    )
+    bias_flat = (
+        pair_bias.expand(prefix + tuple(pair_bias.shape[-4:]))
+        .reshape((batch,) + tuple(pair_bias.shape[-4:]))
+        .contiguous()
+        .detach()
+    )
+    output_internal = _StreamingTriangleAttention.apply(
+        q_flat,
+        k_flat,
+        v_flat,
+        mask_flat,
+        bias_flat,
+        pair_bias,
+        tuple(prefix),
+        tuple(pair_bias.shape[:-4]),
+    )
     output = output_internal.transpose(-2, -3).contiguous()
     return output.reshape(prefix + output.shape[1:])
 

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -14,19 +13,22 @@ _EXTENSION: Any = None
 
 
 def source_sha256() -> dict[str, str]:
+    from openfold3.core.kernels.cuda._aot_runtime import source_sha256_for
+
     source = Path(__file__).with_suffix(".cu")
-    return {source.name: hashlib.sha256(source.read_bytes()).hexdigest()}
+    return source_sha256_for("stable_dkdv", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
     global _EXTENSION
     if _EXTENSION is None:
-        from torch.utils.cpp_extension import load
+        from openfold3.core.kernels.cuda._aot_runtime import load_extension_module
 
-        _EXTENSION = load(
-            name="stable_triangle_dkdv_v2",
-            sources=[str(Path(__file__).with_suffix(".cu"))],
-            extra_cuda_cflags=["-O3", "-lineinfo"],
+        _EXTENSION = load_extension_module(
+            module_key="stable_dkdv",
+            aot_module="openfold3.core.kernels.cuda._ext._stable_dkdv_sm90",
+            source=Path(__file__).with_suffix(".cu"),
+            expected_symbols=("stable_triangle_dkdv_v2_out",),
             verbose=bool(verbose),
         )
     return _EXTENSION

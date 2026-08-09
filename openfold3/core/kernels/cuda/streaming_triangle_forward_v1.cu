@@ -129,7 +129,7 @@ __device__ __forceinline__ float quad_sum(float value) {
   return value;
 }
 
-template <int HeadDim>
+template <int HeadDim, bool TileMajorGrid>
 __global__ __launch_bounds__(kThreads) void streaming_triangle_forward_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
@@ -140,14 +140,23 @@ __global__ __launch_bounds__(kThreads) void streaming_triangle_forward_kernel(
     float* __restrict__ lse,
     int sequence,
     int heads,
+    int batch,
     float scale) {
   constexpr int kKVStride = HeadDim + 8;
   static_assert(HeadDim % 16 == 0 && (kKVStride * 2) % 16 == 0);
   const int lane = threadIdx.x & (kWarpSize - 1);
   const int warp = threadIdx.x / kWarpSize;
-  const int query_block = blockIdx.x * kBlockM;
+  // Keep query tiles on grid.x whenever the CUDA z dimension can hold all
+  // (batch, outer) tasks.  This is the cache-friendly layout used by the
+  // original single-prefix kernel, generalized to every batch/sequence that
+  // fits the hardware grid.  The alternate layout is a functional fallback
+  // for larger B*N; both execute the same tiles and reduction order.
+  const int outer_task = TileMajorGrid ? blockIdx.z : blockIdx.x;
+  const int batch_index = outer_task / sequence;
+  const int outer = outer_task - batch_index * sequence;
+  const int query_block =
+      (TileMajorGrid ? blockIdx.x : blockIdx.z) * kBlockM;
   const int head = blockIdx.y;
-  const int outer = blockIdx.z;
   // Tail-CTA warps whose rows all fall beyond the sequence stay resident:
   // they must keep participating in the cooperative K/V staging loop and its
   // __syncthreads(). Their scores are forced to -inf and their stores are
@@ -162,11 +171,13 @@ __global__ __launch_bounds__(kThreads) void streaming_triangle_forward_kernel(
       kBlockM * kKVStride;
 
   const int64_t head_base =
-      (static_cast<int64_t>(outer) * heads + head) *
+      ((static_cast<int64_t>(batch_index) * sequence + outer) * heads + head) *
       static_cast<int64_t>(sequence) * HeadDim;
-  const int64_t bias_base = static_cast<int64_t>(head) *
+  const int64_t bias_base =
+      (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
-  const int64_t mask_base = static_cast<int64_t>(outer) * sequence;
+  const int64_t mask_base =
+      (static_cast<int64_t>(batch_index) * sequence + outer) * sequence;
 
   // Stage this warp's Q rows (guarded rows load row 0; their stores are
   // guarded at the epilogue, and their softmax state is discarded).
@@ -366,7 +377,8 @@ __global__ __launch_bounds__(kThreads) void streaming_triangle_forward_kernel(
       }
     }
     if (thread_in_group == 0) {
-      lse[(static_cast<int64_t>(outer) * heads + head) * sequence + row] =
+      lse[((static_cast<int64_t>(batch_index) * sequence + outer) * heads +
+           head) * sequence + row] =
           m_state[half] + __logf(l_state[half]);
     }
   }
@@ -389,32 +401,63 @@ void launch_forward(
     torch::Tensor& lse,
     int sequence,
     int heads,
+    int batch,
     cudaStream_t stream) {
   const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
-  const dim3 grid(
-      (sequence + kBlockM - 1) / kBlockM,
-      static_cast<unsigned int>(heads),
-      sequence);
-  const cudaError_t attribute_status = cudaFuncSetAttribute(
-      streaming_triangle_forward_kernel<HeadDim>,
-      cudaFuncAttributeMaxDynamicSharedMemorySize,
-      shared_bytes<HeadDim>());
+  const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
+  const int64_t outer_tasks = static_cast<int64_t>(batch) * sequence;
+  const bool tile_major_grid = outer_tasks <= 65535;
+  const dim3 grid = tile_major_grid
+      ? dim3(
+            static_cast<unsigned int>(query_blocks),
+            static_cast<unsigned int>(heads),
+            static_cast<unsigned int>(outer_tasks))
+      : dim3(
+            static_cast<unsigned int>(outer_tasks),
+            static_cast<unsigned int>(heads),
+            static_cast<unsigned int>(query_blocks));
+  const cudaError_t attribute_status = tile_major_grid
+      ? cudaFuncSetAttribute(
+            streaming_triangle_forward_kernel<HeadDim, true>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shared_bytes<HeadDim>())
+      : cudaFuncSetAttribute(
+            streaming_triangle_forward_kernel<HeadDim, false>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shared_bytes<HeadDim>());
   TORCH_CHECK(
       attribute_status == cudaSuccess,
       "failed to opt in streaming forward shared memory: ",
       cudaGetErrorString(attribute_status));
-  streaming_triangle_forward_kernel<HeadDim>
-      <<<grid, kThreads, shared_bytes<HeadDim>(), stream>>>(
-          reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
-          reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
-          reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
-          mask.data_ptr<float>(),
-          reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
-          reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
-          lse.data_ptr<float>(),
-          sequence,
-          heads,
-          scale);
+  if (tile_major_grid) {
+    streaming_triangle_forward_kernel<HeadDim, true>
+        <<<grid, kThreads, shared_bytes<HeadDim>(), stream>>>(
+            reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
+            mask.data_ptr<float>(),
+            reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
+            reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
+            lse.data_ptr<float>(),
+            sequence,
+            heads,
+            batch,
+            scale);
+  } else {
+    streaming_triangle_forward_kernel<HeadDim, false>
+        <<<grid, kThreads, shared_bytes<HeadDim>(), stream>>>(
+            reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
+            mask.data_ptr<float>(),
+            reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
+            reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
+            lse.data_ptr<float>(),
+            sequence,
+            heads,
+            batch,
+            scale);
+  }
 }
 
 void streaming_triangle_forward_out(
@@ -427,13 +470,23 @@ void streaming_triangle_forward_out(
     torch::Tensor& lse) {
   TORCH_CHECK(q.is_cuda() && q.dtype() == torch::kBFloat16);
   TORCH_CHECK(q.dim() == 5 && q.size(2) >= 1);
-  const int sequence = static_cast<int>(q.size(1));
-  const int heads = static_cast<int>(q.size(2));
-  const int head_dim = static_cast<int>(q.size(4));
+  const int64_t batch64 = q.size(0);
+  const int64_t sequence64 = q.size(1);
+  const int64_t heads64 = q.size(2);
+  const int64_t head_dim64 = q.size(4);
   TORCH_CHECK(
-      sequence > 0 && sequence <= 65535 && heads <= 65535,
-      "sequence/head count exceeds the CUDA y/z grid contract");
-  TORCH_CHECK(q.size(0) == 1 && q.size(3) == sequence);
+      batch64 > 0 && batch64 <= std::numeric_limits<int>::max() &&
+          sequence64 > 0 && sequence64 <= std::numeric_limits<int>::max() &&
+          heads64 > 0 && heads64 <= 65535 && head_dim64 > 0 &&
+          head_dim64 <= std::numeric_limits<int>::max() &&
+          batch64 * sequence64 <= 2147483647LL &&
+          (sequence64 + kBlockM - 1) / kBlockM <= 65535,
+      "batch/sequence/head count exceeds the CUDA grid contract");
+  const int batch = static_cast<int>(batch64);
+  const int sequence = static_cast<int>(sequence64);
+  const int heads = static_cast<int>(heads64);
+  const int head_dim = static_cast<int>(head_dim64);
+  TORCH_CHECK(q.size(3) == sequence);
   const auto check_q_like = [&](const torch::Tensor& tensor) {
     TORCH_CHECK(
         tensor.is_cuda() && tensor.device() == q.device() &&
@@ -448,37 +501,40 @@ void streaming_triangle_forward_out(
   TORCH_CHECK(
       mask.is_cuda() && mask.device() == q.device() &&
           mask.dtype() == torch::kFloat32 && mask.is_contiguous() &&
-          mask.sizes() == torch::IntArrayRef({1, sequence, 1, 1, sequence}),
-      "mask must be contiguous FP32 [1,N,1,1,N] on q.device");
+          mask.sizes() ==
+              torch::IntArrayRef({batch, sequence, 1, 1, sequence}),
+      "mask must be contiguous FP32 [B,N,1,1,N] on q.device");
   TORCH_CHECK(
       bias.is_cuda() && bias.device() == q.device() &&
           bias.dtype() == torch::kBFloat16 && bias.is_contiguous() &&
-          bias.sizes() == torch::IntArrayRef({1, 1, heads, sequence, sequence}),
-      "bias must be contiguous BF16 [1,1,H,N,N] on q.device");
+          bias.sizes() ==
+              torch::IntArrayRef({batch, 1, heads, sequence, sequence}),
+      "bias must be contiguous BF16 [B,1,H,N,N] on q.device");
   TORCH_CHECK(
       lse.is_cuda() && lse.device() == q.device() &&
           lse.dtype() == torch::kFloat32 && lse.is_contiguous() &&
-          lse.sizes() == torch::IntArrayRef({1, sequence, heads, sequence}),
-      "lse must be contiguous FP32 [1,N,H,N] on q.device");
+          lse.sizes() ==
+              torch::IntArrayRef({batch, sequence, heads, sequence}),
+      "lse must be contiguous FP32 [B,N,H,N] on q.device");
 
   const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   switch (head_dim) {
     case 16:
       launch_forward<16>(
-          q, k, v, mask, bias, out, lse, sequence, heads, stream);
+          q, k, v, mask, bias, out, lse, sequence, heads, batch, stream);
       break;
     case 32:
       launch_forward<32>(
-          q, k, v, mask, bias, out, lse, sequence, heads, stream);
+          q, k, v, mask, bias, out, lse, sequence, heads, batch, stream);
       break;
     case 64:
       launch_forward<64>(
-          q, k, v, mask, bias, out, lse, sequence, heads, stream);
+          q, k, v, mask, bias, out, lse, sequence, heads, batch, stream);
       break;
     case 128:
       launch_forward<128>(
-          q, k, v, mask, bias, out, lse, sequence, heads, stream);
+          q, k, v, mask, bias, out, lse, sequence, heads, batch, stream);
       break;
     default:
       TORCH_CHECK(false, "unsupported head_dim: ", head_dim);

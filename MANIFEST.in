@@ -1,0 +1,5 @@
+include setup.py
+include pyproject.toml
+include README.md
+recursive-include tools *.py *.sh
+recursive-include openfold3/core/kernels/cuda *.cu *.py *.json *.md

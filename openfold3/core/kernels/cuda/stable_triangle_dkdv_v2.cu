@@ -106,7 +106,7 @@ __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
       (static_cast<uint32_t>(__bfloat16_as_ushort(h)) << 16);
 }
 
-template <int HeadDim, int StaticSequence>
+template <int HeadDim, int StaticSequence, bool TileMajorGrid>
 __global__ __launch_bounds__(kThreads) void stable_triangle_dkdv_v2_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
@@ -120,6 +120,7 @@ __global__ __launch_bounds__(kThreads) void stable_triangle_dkdv_v2_kernel(
     __nv_bfloat16* __restrict__ out_dv,
     int runtime_sequence,
     int heads,
+    int batch,
     float scale) {
   const int sequence =
       StaticSequence == 0 ? runtime_sequence : StaticSequence;
@@ -130,9 +131,16 @@ __global__ __launch_bounds__(kThreads) void stable_triangle_dkdv_v2_kernel(
   const int warp = tid / kWarpSize;
   const int group = lane >> 2;
   const int thread_in_group = lane & 3;
-  const int key_block_start = blockIdx.x * kKeyBlock;
+  // Prefer key tiles on grid.x whenever z can represent every (batch, outer)
+  // task.  This preserves the cache-friendly legacy ordering for all normal
+  // shapes while retaining an outer-major fallback for larger B*N.  The two
+  // layouts run identical tiles and reductions.
+  const int outer_task = TileMajorGrid ? blockIdx.z : blockIdx.x;
+  const int batch_index = outer_task / sequence;
+  const int outer = outer_task - batch_index * sequence;
+  const int key_block_start =
+      (TileMajorGrid ? blockIdx.x : blockIdx.z) * kKeyBlock;
   const int head = blockIdx.y;
-  const int outer = blockIdx.z;
   const int warp_key = key_block_start + warp * kKeyRowsPerWarp;
 
   extern __shared__ __align__(16) unsigned char smem_raw[];
@@ -146,12 +154,15 @@ __global__ __launch_bounds__(kThreads) void stable_triangle_dkdv_v2_kernel(
   constexpr int kQBufferElements = 2 * kQueryTile * kStride;  // q + do
 
   const int64_t head_base =
-      (static_cast<int64_t>(outer) * heads + head) *
+      ((static_cast<int64_t>(batch_index) * sequence + outer) * heads + head) *
       static_cast<int64_t>(sequence) * HeadDim;
   const int64_t stats_base =
-      (static_cast<int64_t>(outer) * heads + head) * sequence;
-  const int64_t mask_base = static_cast<int64_t>(outer) * sequence;
-  const int64_t bias_base = static_cast<int64_t>(head) *
+      ((static_cast<int64_t>(batch_index) * sequence + outer) * heads + head) *
+      sequence;
+  const int64_t mask_base =
+      (static_cast<int64_t>(batch_index) * sequence + outer) * sequence;
+  const int64_t bias_base =
+      (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
 
   // Stage this warp's 16 K rows (clamped tails; contributions zeroed later).
@@ -259,7 +270,10 @@ __global__ __launch_bounds__(kThreads) void stable_triangle_dkdv_v2_kernel(
                 __bfloat162float(
                     bias[bias_base +
                          static_cast<int64_t>(query) * sequence + key_row]);
-            probability = __expf(value - logsumexp[stats]);
+            const float lse = logsumexp[stats];
+            probability = lse == -std::numeric_limits<float>::infinity()
+                ? 0.0F
+                : __expf(value - lse);
             d_score = probability * (dp[column].v[index] - delta[stats]);
           }
           score[column].v[index] = d_score;
@@ -340,39 +354,75 @@ void launch(
     torch::Tensor& out_dv,
     int sequence,
     int heads,
+    int batch,
     cudaStream_t stream) {
   constexpr int kStride = HeadDim + 8;
   constexpr int kSharedBytes =
       (2 * kKeyBlock * kStride + 4 * kQueryTile * kStride) *
       static_cast<int>(sizeof(__nv_bfloat16));
   const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
-  const dim3 grid(
-      (sequence + kKeyBlock - 1) / kKeyBlock,
-      static_cast<unsigned int>(heads),
-      sequence);
-  const cudaError_t attribute_status = cudaFuncSetAttribute(
-      stable_triangle_dkdv_v2_kernel<HeadDim, StaticSequence>,
-      cudaFuncAttributeMaxDynamicSharedMemorySize,
-      kSharedBytes);
+  const int key_blocks = (sequence + kKeyBlock - 1) / kKeyBlock;
+  const int64_t outer_tasks = static_cast<int64_t>(batch) * sequence;
+  const bool tile_major_grid = outer_tasks <= 65535;
+  const dim3 grid = tile_major_grid
+      ? dim3(
+            static_cast<unsigned int>(key_blocks),
+            static_cast<unsigned int>(heads),
+            static_cast<unsigned int>(outer_tasks))
+      : dim3(
+            static_cast<unsigned int>(outer_tasks),
+            static_cast<unsigned int>(heads),
+            static_cast<unsigned int>(key_blocks));
+  const cudaError_t attribute_status = tile_major_grid
+      ? cudaFuncSetAttribute(
+            stable_triangle_dkdv_v2_kernel<
+                HeadDim, StaticSequence, true>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            kSharedBytes)
+      : cudaFuncSetAttribute(
+            stable_triangle_dkdv_v2_kernel<
+                HeadDim, StaticSequence, false>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            kSharedBytes);
   TORCH_CHECK(
       attribute_status == cudaSuccess,
       "failed to opt in streaming dK/dV shared memory: ",
       cudaGetErrorString(attribute_status));
-  stable_triangle_dkdv_v2_kernel<HeadDim, StaticSequence>
-      <<<grid, kThreads, kSharedBytes, stream>>>(
-          reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
-          reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
-          reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
-          reinterpret_cast<const __nv_bfloat16*>(d_output.data_ptr()),
-          logsumexp.data_ptr<float>(),
-          delta.data_ptr<float>(),
-          mask.data_ptr<float>(),
-          reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
-          reinterpret_cast<__nv_bfloat16*>(out_dk.data_ptr()),
-          reinterpret_cast<__nv_bfloat16*>(out_dv.data_ptr()),
-          sequence,
-          heads,
-          scale);
+  if (tile_major_grid) {
+    stable_triangle_dkdv_v2_kernel<HeadDim, StaticSequence, true>
+        <<<grid, kThreads, kSharedBytes, stream>>>(
+            reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(d_output.data_ptr()),
+            logsumexp.data_ptr<float>(),
+            delta.data_ptr<float>(),
+            mask.data_ptr<float>(),
+            reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
+            reinterpret_cast<__nv_bfloat16*>(out_dk.data_ptr()),
+            reinterpret_cast<__nv_bfloat16*>(out_dv.data_ptr()),
+            sequence,
+            heads,
+            batch,
+            scale);
+  } else {
+    stable_triangle_dkdv_v2_kernel<HeadDim, StaticSequence, false>
+        <<<grid, kThreads, kSharedBytes, stream>>>(
+            reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
+            reinterpret_cast<const __nv_bfloat16*>(d_output.data_ptr()),
+            logsumexp.data_ptr<float>(),
+            delta.data_ptr<float>(),
+            mask.data_ptr<float>(),
+            reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
+            reinterpret_cast<__nv_bfloat16*>(out_dk.data_ptr()),
+            reinterpret_cast<__nv_bfloat16*>(out_dv.data_ptr()),
+            sequence,
+            heads,
+            batch,
+            scale);
+  }
 }
 
 template <int HeadDim>
@@ -389,23 +439,28 @@ void dispatch_sequence(
     torch::Tensor& out_dv,
     int sequence,
     int heads,
+    int batch,
     cudaStream_t stream) {
+  // These lanes only remove bounds/address arithmetic for the three official
+  // training crops. They use the exact same tiles and reduction contract as
+  // the runtime-N fallback, which remains the functional production path for
+  // every other device-feasible sequence length.
   switch (sequence) {
     case 384:
       launch<HeadDim, 384>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dk, out_dv, sequence, heads, stream);
+                           out_dk, out_dv, sequence, heads, batch, stream);
       break;
     case 640:
       launch<HeadDim, 640>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dk, out_dv, sequence, heads, stream);
+                           out_dk, out_dv, sequence, heads, batch, stream);
       break;
     case 768:
       launch<HeadDim, 768>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dk, out_dv, sequence, heads, stream);
+                           out_dk, out_dv, sequence, heads, batch, stream);
       break;
     default:
       launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                         out_dk, out_dv, sequence, heads, stream);
+                         out_dk, out_dv, sequence, heads, batch, stream);
       break;
   }
 }
@@ -423,13 +478,23 @@ void stable_triangle_dkdv_v2_out(
     torch::Tensor& out_dv) {
   TORCH_CHECK(q.is_cuda() && q.dtype() == torch::kBFloat16);
   TORCH_CHECK(q.dim() == 5 && q.size(2) >= 1);
-  const int sequence = static_cast<int>(q.size(1));
-  const int heads = static_cast<int>(q.size(2));
-  const int head_dim = static_cast<int>(q.size(4));
+  const int64_t batch64 = q.size(0);
+  const int64_t sequence64 = q.size(1);
+  const int64_t heads64 = q.size(2);
+  const int64_t head_dim64 = q.size(4);
   TORCH_CHECK(
-      sequence > 0 && sequence <= 65535 && heads <= 65535,
-      "sequence/head count exceeds the CUDA y/z grid contract");
-  TORCH_CHECK(q.size(0) == 1 && q.size(3) == sequence && q.is_contiguous());
+      batch64 > 0 && batch64 <= std::numeric_limits<int>::max() &&
+          sequence64 > 0 && sequence64 <= std::numeric_limits<int>::max() &&
+          heads64 > 0 && heads64 <= 65535 && head_dim64 > 0 &&
+          head_dim64 <= std::numeric_limits<int>::max() &&
+          batch64 * sequence64 <= 2147483647LL &&
+          (sequence64 + kKeyBlock - 1) / kKeyBlock <= 65535,
+      "batch/sequence/head count exceeds the CUDA grid contract");
+  const int batch = static_cast<int>(batch64);
+  const int sequence = static_cast<int>(sequence64);
+  const int heads = static_cast<int>(heads64);
+  const int head_dim = static_cast<int>(head_dim64);
+  TORCH_CHECK(q.size(3) == sequence && q.is_contiguous());
   const auto check_q_like = [&](const torch::Tensor& tensor) {
     TORCH_CHECK(
         tensor.is_cuda() && tensor.device() == q.device() &&
@@ -455,31 +520,33 @@ void stable_triangle_dkdv_v2_out(
   TORCH_CHECK(
       mask.is_cuda() && mask.device() == q.device() &&
           mask.dtype() == torch::kFloat32 && mask.is_contiguous() &&
-          mask.sizes() == torch::IntArrayRef({1, sequence, 1, 1, sequence}),
-      "mask must be contiguous FP32 [1,N,1,1,N] on q.device");
+          mask.sizes() ==
+              torch::IntArrayRef({batch, sequence, 1, 1, sequence}),
+      "mask must be contiguous FP32 [B,N,1,1,N] on q.device");
   TORCH_CHECK(
       bias.is_cuda() && bias.device() == q.device() &&
           bias.dtype() == torch::kBFloat16 && bias.is_contiguous() &&
-          bias.sizes() == torch::IntArrayRef({1, 1, heads, sequence, sequence}),
-      "bias must be contiguous BF16 [1,1,H,N,N] on q.device");
+          bias.sizes() ==
+              torch::IntArrayRef({batch, 1, heads, sequence, sequence}),
+      "bias must be contiguous BF16 [B,1,H,N,N] on q.device");
   const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   switch (head_dim) {
     case 16:
       dispatch_sequence<16>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-                 out_dv, sequence, heads, stream);
+                 out_dv, sequence, heads, batch, stream);
       break;
     case 32:
       dispatch_sequence<32>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-                 out_dv, sequence, heads, stream);
+                 out_dv, sequence, heads, batch, stream);
       break;
     case 64:
       dispatch_sequence<64>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-                 out_dv, sequence, heads, stream);
+                 out_dv, sequence, heads, batch, stream);
       break;
     case 128:
       dispatch_sequence<128>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-                 out_dv, sequence, heads, stream);
+                 out_dv, sequence, heads, batch, stream);
       break;
     default:
       TORCH_CHECK(false, "unsupported head_dim for dkdv v2: ", head_dim);

@@ -10,6 +10,8 @@
 #include <cuda_bf16.h>
 #include <torch/extension.h>
 
+#include <limits>
+
 namespace {
 
 constexpr int kWarpSize = 32;
@@ -57,6 +59,9 @@ void streaming_triangle_delta_out(
           output.dtype() == torch::kBFloat16 &&
           output.sizes() == d_output.sizes());
   TORCH_CHECK(d_output.is_contiguous() && output.is_contiguous());
+  TORCH_CHECK(
+      d_output.size(-1) <= std::numeric_limits<int>::max(),
+      "head dimension exceeds the CUDA int indexing contract");
   const int head_dim = static_cast<int>(d_output.size(-1));
   TORCH_CHECK(
       delta.is_cuda() && delta.device() == d_output.device() &&
@@ -64,6 +69,9 @@ void streaming_triangle_delta_out(
   const int64_t rows = d_output.numel() / head_dim;
   TORCH_CHECK(delta.numel() == rows);
   const int64_t blocks = (rows + kWarpsPerBlock - 1) / kWarpsPerBlock;
+  TORCH_CHECK(
+      blocks <= 2147483647LL,
+      "delta launch exceeds the CUDA grid-x contract");
   const c10::cuda::CUDAGuard device_guard(d_output.device());
   // Resolve the runtime kernel handle once per calling thread/device.  This
   // also gives Compute Sanitizer a concrete function handle before launch,

@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -114,7 +115,11 @@ def _make_inputs(
     heads: int,
     head_dim: int,
     seed: int,
-) -> dict[str, torch.Tensor]:
+    *,
+    broadcast_bias: bool,
+    bias_prefix_override: tuple[int, ...] | None,
+    fully_masked: bool,
+) -> dict[str, Any]:
     generator = torch.Generator(device="cuda")
     generator.manual_seed(seed)
     projection_shape = prefix + (sequence, sequence, heads, head_dim)
@@ -122,9 +127,23 @@ def _make_inputs(
     k = _projection_view(projection_shape, generator).requires_grad_(True)
     v = _projection_view(projection_shape, generator).requires_grad_(True)
 
+    if bias_prefix_override is not None:
+        if len(bias_prefix_override) != len(prefix) or any(
+            bias not in (1, target)
+            for target, bias in zip(
+                prefix, bias_prefix_override, strict=True
+            )
+        ):
+            raise ValueError(
+                "--bias-prefix must match the target prefix rank and each "
+                "dimension must be one or the target dimension"
+            )
+        bias_prefix = bias_prefix_override
+    else:
+        bias_prefix = (1,) * len(prefix) if broadcast_bias else prefix
     pair_bias_physical = (
         torch.randn(
-            prefix + (sequence, sequence, heads),
+            bias_prefix + (sequence, sequence, heads),
             device="cuda",
             dtype=torch.float32,
             generator=generator,
@@ -142,10 +161,13 @@ def _make_inputs(
         device="cuda",
         dtype=torch.bfloat16,
     )
-    masked_keys = 1 if sequence == 1 else min(
-        sequence - 1, max(1, sequence // 17)
-    )
-    mask[..., -masked_keys:] = -1.0e9
+    if fully_masked:
+        mask.fill_(float("-inf"))
+    else:
+        masked_keys = 1 if sequence == 1 else min(
+            sequence - 1, max(1, sequence // 17)
+        )
+        mask[..., -masked_keys:] = -1.0e9
 
     d_output = torch.randn(
         prefix + (sequence, sequence, heads, head_dim),
@@ -160,6 +182,101 @@ def _make_inputs(
         "mask": mask,
         "pair_bias": pair_bias,
         "d_output": d_output,
+        "bias_prefix": bias_prefix,
+    }
+
+
+def _batch_to_bias_map(
+    target_prefix: tuple[int, ...], bias_prefix: tuple[int, ...]
+) -> list[int]:
+    bias_strides = [1] * len(bias_prefix)
+    for axis in range(len(bias_prefix) - 2, -1, -1):
+        bias_strides[axis] = bias_strides[axis + 1] * bias_prefix[axis + 1]
+    mapping: list[int] = []
+    for flat_index in range(math.prod(target_prefix)):
+        remaining = flat_index
+        coordinates = [0] * len(target_prefix)
+        for axis in range(len(target_prefix) - 1, -1, -1):
+            coordinates[axis] = remaining % target_prefix[axis]
+            remaining //= target_prefix[axis]
+        mapping.append(
+            sum(
+                (0 if bias_prefix[axis] == 1 else coordinates[axis])
+                * bias_strides[axis]
+                for axis in range(len(target_prefix))
+            )
+        )
+    return mapping
+
+
+def _broadcast_bias_reference(
+    inputs: dict[str, Any],
+    prefix: tuple[int, ...],
+    observed_dbias: torch.Tensor,
+) -> dict[str, Any]:
+    """Compare CUDA-owned prefix reduction with independent public calls."""
+
+    bias_prefix = tuple(inputs["bias_prefix"])
+    batch = math.prod(prefix)
+    bias_batch = math.prod(bias_prefix)
+    q_tail = tuple(inputs["q"].shape[-4:])
+    mask_tail = tuple(inputs["mask"].shape[-4:])
+    bias_tail = tuple(inputs["pair_bias"].shape[-4:])
+    output_tail = tuple(inputs["d_output"].shape[-4:])
+    q_flat = inputs["q"].reshape((batch,) + q_tail)
+    k_flat = inputs["k"].reshape((batch,) + q_tail)
+    v_flat = inputs["v"].reshape((batch,) + q_tail)
+    mask_flat = inputs["mask"].reshape((batch,) + mask_tail)
+    d_output_flat = inputs["d_output"].reshape((batch,) + output_tail)
+    bias_values = inputs["pair_bias"].reshape((bias_batch,) + bias_tail)
+    accumulators = [
+        torch.zeros(bias_tail, dtype=torch.float32, device="cpu")
+        for _ in range(bias_batch)
+    ]
+    mapping = _batch_to_bias_map(prefix, bias_prefix)
+    for batch_index, bias_index in enumerate(mapping):
+        bias_leaf = (
+            bias_values[bias_index : bias_index + 1]
+            .detach()
+            .clone()
+            .requires_grad_(True)
+        )
+        output = streaming_triangle_attention(
+            q_flat[batch_index : batch_index + 1].detach(),
+            k_flat[batch_index : batch_index + 1].detach(),
+            v_flat[batch_index : batch_index + 1].detach(),
+            mask_flat[batch_index : batch_index + 1],
+            bias_leaf,
+        )
+        (gradient,) = torch.autograd.grad(
+            output,
+            (bias_leaf,),
+            d_output_flat[batch_index : batch_index + 1],
+            retain_graph=False,
+            create_graph=False,
+        )
+        # The production reducer defines its contract as ascending-batch FP32
+        # additions of already-rounded public BF16 per-batch gradients.
+        accumulators[bias_index].add_(gradient[0].detach().cpu().float())
+    reference = (
+        torch.stack(accumulators, dim=0)
+        .to(torch.bfloat16)
+        .reshape(observed_dbias.shape)
+    )
+    observed_cpu = observed_dbias.detach().cpu().contiguous()
+    mismatch = int(torch.count_nonzero(observed_cpu != reference).item())
+    max_abs = float(
+        (observed_cpu.float() - reference.float()).abs().max().item()
+    )
+    return {
+        "target_prefix": list(prefix),
+        "bias_prefix": list(bias_prefix),
+        "flattened_batch": batch,
+        "bias_batches": bias_batch,
+        "fixed_batch_order": list(range(batch)),
+        "raw_different_elements": mismatch,
+        "maximum_abs_delta": max_abs,
+        "passed": mismatch == 0,
     }
 
 
@@ -182,6 +299,34 @@ def _source_manifest() -> dict[str, str]:
     }
 
 
+def _forward_backward(
+    inputs: dict[str, Any],
+) -> tuple[torch.Tensor, tuple[torch.Tensor, ...]]:
+    """Run the public facade and its complete VJP once."""
+
+    output = streaming_triangle_attention(
+        inputs["q"],
+        inputs["k"],
+        inputs["v"],
+        inputs["mask"],
+        inputs["pair_bias"],
+    )
+    gradients = torch.autograd.grad(
+        output,
+        (
+            inputs["q"],
+            inputs["k"],
+            inputs["v"],
+            inputs["pair_bias"],
+        ),
+        inputs["d_output"],
+        retain_graph=False,
+        create_graph=False,
+        allow_unused=False,
+    )
+    return output, gradients
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -193,6 +338,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.heads,
         args.head_dim,
         args.seed,
+        broadcast_bias=args.broadcast_bias,
+        bias_prefix_override=(
+            tuple(args.bias_prefix) if args.bias_prefix is not None else None
+        ),
+        fully_masked=args.fully_masked,
     )
     layout_contract = {
         "qkv_projection_views_noncontiguous": all(
@@ -203,12 +353,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "pair_bias_bf16": inputs["pair_bias"].dtype == torch.bfloat16,
         "mask_bf16": inputs["mask"].dtype == torch.bfloat16,
-        "mask_contains_official_negative_value": bool(
+        "mask_contains_expected_negative_value": bool(
             torch.count_nonzero(inputs["mask"] != 0).item() > 0
-            and torch.all(
-                inputs["mask"][inputs["mask"] != 0]
-                == torch.tensor(-1.0e9, device="cuda", dtype=torch.bfloat16)
-            ).item()
+            and (
+                torch.isneginf(inputs["mask"]).all().item()
+                if args.fully_masked
+                else torch.all(
+                    inputs["mask"][inputs["mask"] != 0]
+                    == torch.tensor(-1.0e9, device="cuda", dtype=torch.bfloat16)
+                ).item()
+            )
         ),
         "upstream_gradient_public_layout_contiguous": bool(
             inputs["d_output"].is_contiguous()
@@ -232,29 +386,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ]
         raise RuntimeError(f"production input-layout contract failed: {failed}")
 
-    counter_before = invocation_count()
-    output = streaming_triangle_attention(
-        inputs["q"],
-        inputs["k"],
-        inputs["v"],
-        inputs["mask"],
-        inputs["pair_bias"],
-    )
-    leaves = (
-        inputs["q"],
-        inputs["k"],
-        inputs["v"],
-        inputs["pair_bias"],
-    )
-    gradients = torch.autograd.grad(
-        output,
-        leaves,
-        inputs["d_output"],
-        retain_graph=False,
-        create_graph=False,
-        allow_unused=False,
-    )
+    for _ in range(args.warmup):
+        warmup_output, warmup_gradients = _forward_backward(inputs)
+        del warmup_output, warmup_gradients
     torch.cuda.synchronize()
+
+    counter_before = invocation_count()
+    if args.cuda_profiler_range:
+        torch.cuda.cudart().cudaProfilerStart()
+    try:
+        torch.cuda.nvtx.range_push("streaming.public_facade.full_forward_backward")
+        try:
+            output, gradients = _forward_backward(inputs)
+        finally:
+            torch.cuda.nvtx.range_pop()
+        # Every measured kernel must finish before cudaProfilerStop closes the
+        # capture range.  Warmup/JIT stays outside the range.
+        torch.cuda.synchronize()
+    finally:
+        if args.cuda_profiler_range:
+            torch.cuda.cudart().cudaProfilerStop()
     counter_after = invocation_count()
 
     route = {
@@ -284,6 +435,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "per_tensor": {name: value["finite"] for name, value in results.items()}
     }
     finite["passed"] = all(finite["per_tensor"].values())
+    fully_masked_zero = {
+        "required": bool(args.fully_masked),
+        "per_tensor": {
+            name: int(torch.count_nonzero(value).item()) == 0
+            for name, value in named_results.items()
+        },
+    }
+    fully_masked_zero["passed"] = bool(
+        not fully_masked_zero["required"]
+        or all(fully_masked_zero["per_tensor"].values())
+    )
+    broadcast_bias_reference = {
+        "required": bool(args.check_broadcast_reference),
+        "passed": not args.check_broadcast_reference,
+    }
+    if args.check_broadcast_reference:
+        broadcast_bias_reference = {
+            "required": True,
+            **_broadcast_bias_reference(
+                inputs,
+                prefix,
+                gradients[3],
+            ),
+        }
     expected_output_shape = prefix + (
         args.sequence,
         args.sequence,
@@ -306,6 +481,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         layout_contract["passed"]
         and route["passed"]
         and finite["passed"]
+        and fully_masked_zero["passed"]
+        and broadcast_bias_reference["passed"]
         and public_output_contract["passed"]
     )
     properties = torch.cuda.get_device_properties(args.device)
@@ -319,6 +496,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "heads": args.heads,
             "head_dim": args.head_dim,
             "seed": args.seed,
+            "warmup": args.warmup,
+            "cuda_profiler_range": args.cuda_profiler_range,
+            "broadcast_bias": args.broadcast_bias,
+            "bias_prefix": list(inputs["bias_prefix"]),
+            "fully_masked": args.fully_masked,
             "dtype": "torch.bfloat16",
             "scale_contract": f"raw q; facade applies 1/sqrt({args.head_dim})",
         },
@@ -329,11 +511,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "torch_version": torch.__version__,
             "torch_cuda_version": torch.version.cuda,
         },
-        "inputs": {name: _tensor_receipt(value) for name, value in inputs.items()},
+        "inputs": {
+            name: _tensor_receipt(value)
+            for name, value in inputs.items()
+            if isinstance(value, torch.Tensor)
+        },
         "input_layout_contract": layout_contract,
         "public_output_contract": public_output_contract,
         "route": route,
         "finite": finite,
+        "fully_masked_zero": fully_masked_zero,
+        "broadcast_bias_reference": broadcast_bias_reference,
         "checksums": {
             name: {
                 "raw_sha256": value["raw_sha256"],
@@ -360,6 +548,41 @@ def parse_args() -> argparse.Namespace:
         help="one or more positive batch-prefix dimensions",
     )
     parser.add_argument("--seed", type=int, default=20260809)
+    parser.add_argument(
+        "--warmup",
+        type=_positive,
+        default=1,
+        help="public F+B warmup iterations outside the optional profiler range",
+    )
+    parser.add_argument(
+        "--cuda-profiler-range",
+        action="store_true",
+        help="surround exactly one measured public F+B with cudaProfilerStart/Stop",
+    )
+    parser.add_argument(
+        "--broadcast-bias",
+        action="store_true",
+        help="broadcast one shared pair-bias tensor over the batch prefix",
+    )
+    parser.add_argument(
+        "--bias-prefix",
+        type=_positive,
+        nargs="+",
+        help="explicit pair-bias prefix, e.g. --prefix 2 3 --bias-prefix 1 3",
+    )
+    parser.add_argument(
+        "--check-broadcast-reference",
+        action="store_true",
+        help=(
+            "compare the fixed CUDA prefix reduction against independent "
+            "single-batch public calls"
+        ),
+    )
+    parser.add_argument(
+        "--fully-masked",
+        action="store_true",
+        help="use real -inf for every key and require finite zero gradients",
+    )
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--output-json", type=Path)
     return parser.parse_args()
@@ -367,6 +590,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.broadcast_bias and args.bias_prefix is not None:
+        raise ValueError("choose --broadcast-bias or --bias-prefix, not both")
     report = run(args)
     rendered = json.dumps(report, indent=2, sort_keys=True)
     if args.output_json is not None:

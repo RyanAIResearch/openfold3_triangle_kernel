@@ -12,30 +12,42 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Lambda
 当前已经具备：
 
 - package-owned public autograd facade 与 CUDA 源码；
+- 四个互不冲突的 AOT CUDA extension module 与 production fail-closed loader；
 - online-softmax forward；
 - zero-atomics recompute backward；
 - 同一输入的逐 bit self-replay；
 - CUDA device、dtype、shape、grid 与 stream 的 fail-closed 检查；
 - generic runtime sequence/head 路径与非整 tile 尾块保护；
+- 将任意正 prefix flatten 为一个 CUDA batch；broadcast dBias 由固定顺序
+  CUDA kernel 归约；
+- 以 query slab、batch chunk 和 leaf wave 限定临时显存，同时保持同一条
+  全局 dBias 归约顺序；
+- fully-masked real `-inf` 行的零输出、零梯度契约；
 - H100 Compute Sanitizer component smoke。
 
-正式放行仍要求同一 clean commit 上完成：
+正式放行仍缺少：
 
-1. public-facade 四后端公平性能报告；
-2. AQLab Triton、NVIDIA cuEq、Lambda Streaming 的 20-step 训练保险丝；
-3. 三后端 1000-step fresh-process stability soak；
-4. 路由、初始状态、batch 顺序、源码/环境哈希和训练状态完整回执。
+1. release commit 的 H100 AOT wheel 动态构建、二进制核验和无编译器
+   clean-install 回执；
+2. 完整 Compute Sanitizer release suite；
+3. 多 GPU/DDP 正确性与性能证据；
+4. 长期训练轨迹、validation quality 与 time-to-quality。
+
+原计划的 1000-step training soak 未在本发布周期内执行。这不构成失败证据，
+但也不能替代长期收敛证据；因此当前状态仍是 production candidate。
 
 ## 运行时支持范围
 
 - GPU：Hopper `sm_90`（当前发布门禁设备为 Lambda H100 80GB）；
 - dtype：Q/K/V 与 pair bias 为 BF16；mask 为 FP32/BF16/FP16；
-- head dimension：`D in {16, 32, 64, 128}`；
+- head dimension：production 只接受 `D in {16, 32}`；
 - sequence/head：设备可行范围内的 runtime `N > 0`、`H > 0`；
-- CUDA grid 边界：`N <= 65535`、`H <= 65535`，实际可用上限还受
-  `O(N^2)` 显存与运行时间限制；
-- batch prefix：任意非空、可广播的正 prefix；当前实现逐 leaf 调度，功能泛化，
-  但尚不是 batch-prefix 并行吞吐优化。
+- CUDA grid 边界：`ceil(N/32) <= 65535`、`H <= 65535`、flatten 后
+  `B*N <= 2^31-1`；实际可用上限还受 `O(N^2)` 输入/输出显存与运行时间限制；
+- batch prefix：任意非空、可广播的正 prefix 会 flatten 为一个 CUDA batch，
+  不再逐 leaf Python 调度；
+- pair bias：若确实需要 broadcast，target prefix rank 必须 `<=16`；若 bias
+  prefix 已与 target prefix 完全一致，则没有这一 broadcast bookkeeping 限制。
 
 `N=384/640/768` 是编译期快车道，不是功能白名单。其他长度走
 `StaticSequence=0` generic kernel，并使用显式尾块 guard；不会因为长度不同而
@@ -47,13 +59,27 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Lambda
 |---|---|
 | `openfold3/core/model/primitives/attention.py` | 显式 Lambda 路由；unsupported fail-closed |
 | `streaming_triangle_attention.py` | public facade、broadcast/prefix 编排、自定义 autograd |
+| `_aot_runtime.py` | AOT import、ABI/device/hash/symbol 核验；production 禁止自动 JIT |
+| `_ext/_streaming_forward_sm90*.so` | 独立 forward AOT module |
+| `_ext/_streaming_delta_sm90*.so` | 独立 delta AOT module |
+| `_ext/_stable_dkdv_sm90*.so` | 独立 dK+dV AOT module |
+| `_ext/_fused_dq_dbias_sm90*.so` | 独立 dQ+dBias/reduce AOT module |
 | `streaming_triangle_forward_v1.{py,cu}` | online-softmax forward 与 LSE |
 | `streaming_triangle_delta_v1.{py,cu}` | backward delta 预计算 |
 | `stable_triangle_dkdv_v2.{py,cu}` | generic/runtime dK+dV |
 | `fused_triangle_dq_dbias_v9.{py,cu}` | fixed-tree dQ+dBias |
 
-上述四组 CUDA 源必须进入 wheel package-data。生产 facade 不允许依赖
+上述四组 CUDA 源作为 build receipt/source distribution 进入 package-data，
+但 production runtime 只 import wheel 内四个 `.so`，不调用 NVCC。只有开发者
+显式设置 `OPENFOLD3_TRIANGLE_ALLOW_JIT=1` 时 loader 才允许 source JIT；缺失、
+损坏或 ABI 不匹配的生产二进制会直接报错。生产 facade 不允许依赖
 `scripts/benchmarks`、旧 resident dK/dV 或旧 v7 backward loader。
+
+发布 wheel ABI 固定为 CPython 3.14、Torch 2.10.0、Torch CUDA 12.9 与
+H100 `sm_90` SASS；不包含 PTX。build manifest 必须记录 commit、dirty 状态、
+ABI/toolchain、所有生产源 SHA-256 以及四个 `.so` 的 SHA-256 和导出符号。
+canonical builder 必须使用 fresh clone，并通过 `nm`、`cuobjdump` 和只读、
+无 NVCC clean-install 的 public-facade F+B smoke。
 
 ## 数值契约
 
@@ -63,11 +89,17 @@ Lambda Streaming 与官方 PyTorch 使用相同实数公式，但浮点执行契
 - mask 与 pair bias 在 FP32 中加入；
 - forward 使用在线 softmax；
 - backward 由保存的 LSE 重算概率；
-- dBias 使用固定归约树，不使用浮点 atomic accumulation。
+- dBias 使用固定归约树，不使用浮点 atomic accumulation；
+- query slab、batch chunk 与 leaf wave 只划分互相独立的输出或已定义的
+  leaf 区间；跨 wave 的 FP32 root 始终按全局 leaf index 左折叠，因此 workspace
+  计划不会改变归约树；
+- workspace planner 的默认目标是 256 MiB（目前不是公开配置项）。若一个
+  最小 `batch x 32-query x leaf` tile 本身超过目标，允许使用该不可约下限。
 
 因此当前承诺是**同后端、同输入、同环境下的逐 bit self-replay**，而不是对
-PyTorch、AQLab 或 cuEq 的逐 bit 一致。训练可用性由 20/1000-step 轨迹、
-optimizer/EMA 状态和验证质量裁决，不能仅由一次 operator replay 推断。
+PyTorch、AQLab 或 cuEq 的逐 bit 一致。训练可用性必须由长期 trajectory、
+optimizer/EMA 状态、validation quality 与 time-to-quality 裁决，不能仅由一次
+operator replay 推断；这些长期证据目前尚未完成。
 
 ## 非生产与历史实现
 

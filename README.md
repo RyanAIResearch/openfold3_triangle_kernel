@@ -9,8 +9,9 @@ addition is a default-off Triangle Attention backend.
 
 > **Release status: production candidate, not GA.** The source is packaged,
 > fail-closed, source-locked, and has passed the current unit/operator gates.
-> The three-backend 1000-step training soak and validation-quality gate are not
-> yet complete, so this repository does not claim production qualification.
+> The planned 1000-step training soak was not run in this release cycle;
+> there is therefore no long-horizon convergence or validation-quality evidence.
+> This repository does not claim production qualification.
 
 ## What is included
 
@@ -31,11 +32,17 @@ It provides:
 - online-softmax BF16 forward on Hopper Tensor Cores;
 - recompute backward with no floating-point atomics;
 - fixed-order dBias reduction and bitwise self-replay in a fixed environment;
-- runtime sequence length and head count, with `D in {16, 32, 64, 128}`;
+- bounded deterministic query-slab workspace planning (256 MiB target by
+  default) without changing the global dBias reduction order;
+- one CUDA batch for arbitrary positive input prefixes, including a fixed-order
+  CUDA reduction when pair bias is broadcast;
+- runtime sequence length and head count, with production `D in {16, 32}`;
 - explicit tail guards for non-tile-aligned sequence lengths;
+- defined zero-output/zero-gradient behavior for fully masked real `-inf` rows;
 - fail-closed routing: unsupported inputs raise instead of silently falling
   back to PyTorch, AQLab Triton, or NVIDIA cuEquivariance;
-- package-owned CUDA sources and public PyTorch autograd integration.
+- four independently named, wheel-owned `sm_90` CUDA extensions and public
+  PyTorch autograd integration.
 
 The exact runtime closure and numerical contract are documented in
 [`PRODUCTION_MANIFEST.md`](openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md).
@@ -53,9 +60,25 @@ use_lma: false
 chunk_size: null
 ```
 
-The current loader builds CUDA extensions on first use, so the runtime must
-provide CUDA/NVCC, a compatible C++ compiler, Ninja, and a writable
-`TORCH_EXTENSIONS_DIR`. A prebuilt AOT wheel is a remaining release task.
+Production imports the four prebuilt CUDA extensions directly from the AOT
+wheel. It never invokes NVCC and never silently falls back to JIT. A source-tree
+developer may explicitly opt into JIT with
+`OPENFOLD3_TRIANGLE_ALLOW_JIT=1`; that switch is not a production fallback.
+
+The canonical wheel is ABI-locked to CPython 3.14, Torch 2.10.0, Torch CUDA
+12.9, and H100 `sm_90` SASS (no embedded PTX). Build it only from a clean,
+committed checkout in the pinned H100 environment:
+
+```bash
+CUDA_HOME=/home/ubuntu/xzz/openfold3_workspace/src/.pixi/envs/openfold3-cuda12 \
+CUDACXX=/home/ubuntu/xzz/openfold3_workspace/src/.pixi/envs/openfold3-cuda12/bin/nvcc \
+tools/build_sm90_wheel.sh
+```
+
+The builder clones the exact commit into a fresh temporary directory, builds
+without isolation, requires `nm` and `cuobjdump` attestation, installs the wheel
+into a read-only compiler-free target, runs a public-facade full forward and
+backward smoke, and copies the wheel plus hash receipts into `dist/`.
 
 ## Validated scope
 
@@ -66,6 +89,8 @@ provide CUDA/NVCC, a compatible C++ compiler, Ninja, and a writable
 - Formal operator shapes: `N={384,640,768}`, `H=4`, `D={16,32}`.
 - Generic runtime paths exist for other positive `N/H` within CUDA grid and
   memory limits, but broad production qualification is still pending.
+- A broadcast pair bias is accepted only when the target prefix rank is at
+  most 16; a non-broadcast prefix is not subject to this bookkeeping limit.
 
 The numerical formula matches Triangle Attention, but floating-point rounding
 and the online-softmax reduction order intentionally differ from stock
@@ -74,12 +99,12 @@ training/quality gates—not raw-bit equality with another backend.
 
 ## Known release blockers
 
-- incomplete three-backend 1000-step stability and validation-quality study;
-- runtime JIT rather than an AOT binary wheel;
-- fully masked real `-inf` rows need an explicit backward contract;
-- dBias fixed-tree workspace grows as `O(H*N^2)` with a large constant;
-- batch prefixes are currently dispatched leaf-by-leaf in Python;
-- clean sanitizer coverage and multi-GPU/DDP release evidence are incomplete.
+- the planned 1000-step training study was not run, so no long-horizon
+  loss/optimizer/EMA trajectory or convergence evidence exists yet;
+- validation quality and time-to-quality have not been established;
+- the AOT wheel still needs its dynamic H100 build, binary attestation, and
+  compiler-free clean-install receipt on the release commit;
+- complete Compute Sanitizer and multi-GPU/DDP release evidence are incomplete.
 
 These limitations are stated explicitly so development results are not
 mistaken for a GA claim.
@@ -90,7 +115,9 @@ Static/package tests:
 
 ```bash
 python -m unittest \
+  openfold3.tests.core.kernels.test_streaming_triangle_aot_packaging \
   openfold3.tests.core.kernels.test_streaming_triangle_packaging \
+  openfold3.tests.core.kernels.test_streaming_triangle_workspace \
   openfold3.tests.core.model.test_attention_stable_routing
 ```
 

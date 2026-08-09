@@ -1,7 +1,9 @@
 # Modified by RyanAIResearch in 2026 to package Lambda Streaming Triangle Attention.
 
 [build-system]
-# torch used at build needs to match the one at runtime
+# CUDAExtension imports the exact runtime Torch ABI.  The canonical sm_90
+# builder therefore uses ``pip wheel --no-build-isolation`` inside the
+# pinned Python 3.14 / Torch 2.10 / CUDA 12.9 environment.
 requires = ["setuptools", "wheel", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
@@ -17,10 +19,6 @@ license = { text = "Apache-2.0" }
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
@@ -30,12 +28,12 @@ urls.Repository = "https://github.com/RyanAIResearch/openfold3_triangle_kernel"
 urls.Issues = "https://github.com/RyanAIResearch/openfold3_triangle_kernel/issues"
 urls.Upstream = "https://github.com/aqlaboratory/openfold-3"
 
-requires-python = ">=3.10"
+requires-python = "==3.14.*"
 dependencies = [
     "numpy",
     "scipy",
     "pandas",
-    "torch", # ==2.5.1",
+    "torch==2.10.0",
     "ml-collections",
     "pytorch-lightning >=2.1",
     "biotite",
@@ -77,7 +75,7 @@ optional-dependencies.cuequivariance = [
     "cuequivariance>=0.8",
     "cuequivariance-ops-torch-cu12>=0.8",
     "cuequivariance-torch>=0.8",
-    "torch>=2.7",
+    "torch==2.10.0",
 ]
 optional-dependencies.deepspeed = [
     "deepspeed>=0.18.7",
@@ -124,27 +122,13 @@ openfold3 = [
     "core/kernels/cuda/streaming_triangle_forward_v1.cu",
     "core/kernels/cuda/streaming_triangle_delta_v1.cu",
     "core/kernels/cuda/stable_triangle_dkdv_v2.cu",
-    "core/kernels/cuda/fused_triangle_dq_dbias_v9.cu"
+    "core/kernels/cuda/fused_triangle_dq_dbias_v9.cu",
+    "core/kernels/cuda/_build_manifest.json"
 ]
 
-# much of the cibuildwheel config taken from benfred/implicit
-[tool.cibuildwheel]
-before-all = "devtools/install_cuda.sh"
-manylinux-x86_64-image = "manylinux2014"
-
-[tool.cibuildwheel.linux]
-repair-wheel-command = """
-AUDITWHEEL_PLAT=manylinux2014_$(uname -m) \
-auditwheel repair \
-    --exclude libc10.so \
-    --exclude libtorch.so \
-    --exclude libtorch_cpu.so \
-    --exclude libtorch_python.so \
-    -w {dest_dir} {wheel}
-"""
-
-[tool.cibuildwheel.linux.environment]
-CUDACXX = "/usr/local/cuda/bin/nvcc"
+# The ABI-locked H100 artifact is intentionally not built through the generic
+# cibuildwheel matrix.  ``tools/build_sm90_wheel.sh`` is the single canonical
+# entry point and emits a linux_x86_64 wheel plus SHA-256 attestation receipts.
 
 [tool.ruff]
 line-length = 88
@@ -186,7 +170,7 @@ files = ["openfold3", "scripts"]
 # runs. Pinning it (rather than following the active interpreter) keeps the
 # baseline from drifting on an unrelated `pixi update`; bump it deliberately,
 # together with a `typecheck-sync`, when the environments move to a new Python.
-# Note this means the `requires-python = ">=3.10"` floor above is not type-checked.
+# This matches the ABI-locked CPython 3.14 production wheel above.
 python_version = "3.14"
 # The baseline is recorded on, and enforced by, linux-64 CI. Without pinning the
 # platform, `sys.platform` branches (device selection, MPS vs CUDA fallbacks) are
