@@ -79,7 +79,14 @@ mkdir -p "$RUNTIME_ROOT" "$EMPTY_PATH"
   --target "$RUNTIME_ROOT" \
   "$WHEEL"
 chmod -R a-w "$RUNTIME_ROOT"
+# DeepSpeed is an optional dependency inherited from the build interpreter.
+# Its import probes nvcc even though this smoke exercises only the prebuilt
+# Triangle Attention extensions.  Select DeepSpeed's documented CPU
+# accelerator for this child process so CUDA_HOME=/nonexistent continues to
+# prove that the kernel wheel itself has no compiler dependency.  This setting
+# is deliberately scoped to the smoke and is never exported to training.
 env -u OPENFOLD3_TRIANGLE_ALLOW_JIT \
+  DS_ACCELERATOR=cpu \
   PATH="$EMPTY_PATH" \
   PYTHONPATH="$RUNTIME_ROOT" \
   PYTHONDONTWRITEBYTECODE=1 \

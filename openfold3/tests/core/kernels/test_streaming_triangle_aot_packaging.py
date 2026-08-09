@@ -123,6 +123,7 @@ class StreamingTriangleAOTPackagingTest(unittest.TestCase):
             "tools/attest_sm90_wheel.py",
             "--require-binary-tools",
             "tools/aot_clean_install_smoke.py",
+            "DS_ACCELERATOR=cpu",
             "git clone --quiet --no-local --no-checkout",
             'git -C "$FRESH_SOURCE" checkout --quiet --detach',
             'git status --porcelain --untracked-files=all',
