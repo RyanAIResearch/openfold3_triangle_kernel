@@ -1,6 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2021 DeepMind Technologies Limited
+# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -110,6 +111,7 @@ class TriangleAttention(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
@@ -120,6 +122,29 @@ class TriangleAttention(nn.Module):
         Returns:
             [*, I, J, C_in] output tensor
         """
+
+        if use_stable_triangle_attention:
+            if self.c_hidden not in (16, 32, 64, 128) or self.no_heads < 1:
+                raise ValueError(
+                    "stable Triangle Attention requires c_hidden in "
+                    "(16, 32, 64, 128) and no_heads >= 1"
+                )
+            if chunk_size is not None:
+                raise ValueError(
+                    "stable Triangle Attention does not support chunked attention"
+                )
+            if any(
+                (
+                    use_deepspeed_evo_attention,
+                    use_cueq_triangle_kernels,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
+                raise ValueError(
+                    "stable Triangle Attention is mutually exclusive with all "
+                    "other attention backends"
+                )
 
         if mask is None:
             # [*, I, J]
@@ -165,6 +190,7 @@ class TriangleAttention(nn.Module):
                 use_lma=use_lma,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
             )
 
         if not self.starting:

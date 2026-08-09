@@ -1,6 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # Copyright 2026 Outpace Bio, Inc.
 # Copyright 2026 Advanced Micro Devices, Inc.
+# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -103,6 +104,9 @@ model_config = mlc.ConfigDict(
                     # Use Triton-based memory-efficient attention kernel. Mutually
                     # exclusive with use_deepspeed_evo_attention and use_lma.
                     "use_triton_triangle_kernels": False,
+                    # Default-off fixed-tree H100 Triangle Attention research
+                    # backend for the main MSA and Pairformer pair blocks only.
+                    "use_stable_triangle_attention": False,
                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
                     # exclusive with use_deepspeed_evo_attention.
                     "use_lma": False,
@@ -116,6 +120,7 @@ model_config = mlc.ConfigDict(
                     "tune_chunk_size": tune_chunk_size,
                     "use_deepspeed_evo_attention": False,
                     "use_cueq_triangle_kernels": False,
+                    "use_stable_triangle_attention": False,
                     "use_triton_triangle_kernels": True,
                     "use_lma": False,
                     "msa_module": {

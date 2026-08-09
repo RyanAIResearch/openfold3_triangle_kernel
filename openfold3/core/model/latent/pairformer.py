@@ -3,6 +3,7 @@
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2025 NVIDIA Corporation
 # Copyright 2021 DeepMind Technologies Limited
+# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -130,6 +131,7 @@ class PairFormerBlock(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -184,6 +186,7 @@ class PairFormerBlock(nn.Module):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,
@@ -331,6 +334,7 @@ class PairFormerStack(nn.Module):
         use_deepspeed_evo_attention: bool,
         use_cueq_triangle_kernels: bool,
         use_triton_triangle_kernels: bool,
+        use_stable_triangle_attention: bool,
         use_lma: bool,
         inplace_safe: bool,
         _mask_trans: bool,
@@ -352,6 +356,7 @@ class PairFormerStack(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
                 _mask_trans=_mask_trans,
@@ -410,6 +415,7 @@ class PairFormerStack(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -446,6 +452,11 @@ class PairFormerStack(nn.Module):
             z:
                 [*, N_token, N_token, C_z] Pair embedding
         """
+        if use_stable_triangle_attention and chunk_size is not None:
+            raise ValueError(
+                "stable Triangle Attention does not support chunked Pairformer stacks"
+            )
+
         blocks = self._prep_blocks(
             s=s,
             z=z,
@@ -455,6 +466,7 @@ class PairFormerStack(nn.Module):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,

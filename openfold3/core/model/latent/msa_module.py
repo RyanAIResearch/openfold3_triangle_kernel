@@ -2,6 +2,7 @@
 # Copyright 2026 Outpace Bio, Inc.
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2021 DeepMind Technologies Limited
+# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -157,6 +158,7 @@ class MSAModuleBlock(MSABlock):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -164,6 +166,11 @@ class MSAModuleBlock(MSABlock):
         _offload_inference: bool = False,
         _offloadable_inputs: Sequence[torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if use_stable_triangle_attention and _offload_inference:
+            raise ValueError(
+                "stable Triangle Attention does not support MSA inference offload"
+            )
+
         msa_trans_mask = msa_mask if _mask_trans else None
 
         if _attn_chunk_size is None:
@@ -264,6 +271,7 @@ class MSAModuleBlock(MSABlock):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,

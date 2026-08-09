@@ -1,6 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # Copyright 2026 Outpace Bio, Inc.
 # Copyright 2026 Advanced Micro Devices, Inc.
+# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -194,6 +195,30 @@ class OpenFold3(nn.Module):
                 [*, N_token, N_token, C_z] Pair representation
         """
         mode_mem_settings = self._get_mode_mem_settings()
+        use_stable_triangle_attention = bool(
+            mode_mem_settings.get("use_stable_triangle_attention", False)
+        )
+
+        if use_stable_triangle_attention:
+            conflicting_backends = [
+                name
+                for name in (
+                    "use_deepspeed_evo_attention",
+                    "use_cueq_triangle_kernels",
+                    "use_triton_triangle_kernels",
+                    "use_lma",
+                )
+                if mode_mem_settings.get(name, False)
+            ]
+            if conflicting_backends:
+                raise ValueError(
+                    "use_stable_triangle_attention is mutually exclusive with: "
+                    + ", ".join(conflicting_backends)
+                )
+            if mode_mem_settings.chunk_size is not None:
+                raise ValueError(
+                    "use_stable_triangle_attention requires chunk_size=None"
+                )
 
         offload_msa_module = self._do_inference_offload(
             seq_len=batch["token_mask"].shape[-1],
@@ -204,6 +229,13 @@ class OpenFold3(nn.Module):
             seq_len=batch["token_mask"].shape[-1],
             module_name=OffloadModules.TEMPLATE_MODULE.value,
         )
+
+        if use_stable_triangle_attention and (
+            offload_msa_module or offload_template_module
+        ):
+            raise ValueError(
+                "use_stable_triangle_attention does not support inference offload"
+            )
 
         s_input, s_init, z_init = self.input_embedder(
             batch=batch,
@@ -250,6 +282,7 @@ class OpenFold3(nn.Module):
                         use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                         use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
+                        use_stable_triangle_attention=use_stable_triangle_attention,
                         use_lma=mode_mem_settings.use_lma,
                         inplace_safe=inplace_safe,
                         offload_inference=offload_template_module,
@@ -298,6 +331,7 @@ class OpenFold3(nn.Module):
                         use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                         use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
+                        use_stable_triangle_attention=use_stable_triangle_attention,
                         use_lma=mode_mem_settings.use_lma,
                         inplace_safe=inplace_safe,
                         _mask_trans=True,
@@ -315,6 +349,7 @@ class OpenFold3(nn.Module):
                     use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                     use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                     use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
+                    use_stable_triangle_attention=use_stable_triangle_attention,
                     use_lma=mode_mem_settings.use_lma,
                     inplace_safe=inplace_safe,
                     _mask_trans=True,

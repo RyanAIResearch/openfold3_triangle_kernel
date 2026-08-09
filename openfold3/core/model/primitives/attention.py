@@ -3,6 +3,7 @@
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2025 NVIDIA Corporation
 # Copyright 2021 DeepMind Technologies Limited
+# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -341,6 +342,7 @@ class Attention(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         lma_q_chunk_size: int = DEFAULT_LMA_Q_CHUNK_SIZE,
         lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
@@ -364,6 +366,10 @@ class Attention(nn.Module):
             use_triton_triangle_kernels:
                 Whether to use Triton-based memory-efficient attention kernel.
                 Mutually exclusive with other kernel options.
+            use_stable_triangle_attention:
+                Whether to use the default-off, fixed-tree H100 Triangle
+                Attention backend. Mutually exclusive with every other
+                attention implementation and high-precision attention.
             use_lma:
                 Whether to use low-memory attention (Staats & Rabe 2021). If
                 none of the "use_<...>" flags are True, a stock PyTorch
@@ -383,6 +389,20 @@ class Attention(nn.Module):
             raise ValueError(
                 "If use_lma is specified, lma_q_chunk_size and "
                 "lma_kv_chunk_size must be provided"
+            )
+
+        if use_stable_triangle_attention and any(
+            (
+                use_deepspeed_evo_attention,
+                use_cueq_triangle_kernels,
+                use_triton_triangle_kernels,
+                use_lma,
+                use_high_precision,
+            )
+        ):
+            raise ValueError(
+                "use_stable_triangle_attention is mutually exclusive with all "
+                "other attention backends and use_high_precision"
             )
 
         if cueq_is_installed and use_cueq_triangle_kernels:
@@ -405,7 +425,8 @@ class Attention(nn.Module):
         attn_options = [
             use_deepspeed_evo_attention
             or use_cueq_triangle_kernels
-            or use_triton_triangle_kernels,
+            or use_triton_triangle_kernels
+            or use_stable_triangle_attention,
             use_lma,
             use_high_precision,
         ]
@@ -415,7 +436,15 @@ class Attention(nn.Module):
         if biases is None:
             biases = []
 
-        # DeepSpeed, cuequivariance, and Triton kernels apply scaling internally
+        if use_stable_triangle_attention and len(biases) != 2:
+            raise ValueError(
+                "stable Triangle Attention requires exactly two biases in "
+                "[mask_bias, pair_bias] order"
+            )
+
+        # Vendor kernels and both stable backends apply 1/sqrt(d) internally,
+        # so every alternative backend consumes raw q.  The stock path alone
+        # asks _prep_qkv to apply the scale.
         q, k, v = self._prep_qkv(
             q_x,
             kv_x,
@@ -423,11 +452,36 @@ class Attention(nn.Module):
                 use_deepspeed_evo_attention
                 or use_cueq_triangle_kernels
                 or use_triton_triangle_kernels
+                or use_stable_triangle_attention
             ),
         )
 
-        # cuequivariance kernel takes precedence over use_deepspeed_evo_attention
-        if use_cueq_triangle_kernels:
+        if use_stable_triangle_attention:
+            # Keep CPU imports and every default/official backend independent of
+            # the research extension. Explicit selection is fail-closed: import,
+            # build, support, launch, and backward failures propagate unchanged.
+            from openfold3.core.kernels.cuda.streaming_triangle_attention import (  # noqa: E501
+                is_streaming_supported,
+                streaming_triangle_attention,
+            )
+
+            streaming_ok, streaming_reason = is_streaming_supported(
+                q, k, v, biases[0], biases[1]
+            )
+            if not streaming_ok:
+                raise ValueError(
+                    "unsupported Lambda Streaming Triangle Attention case: "
+                    f"{streaming_reason}"
+                )
+            # Deterministic streaming backend: raw q, internal scaling,
+            # replay-bitwise vs itself, zero FP atomics. Explicit selection is
+            # fail-closed and never silently substitutes the aligned backend.
+            o = streaming_triangle_attention(q, k, v, biases[0], biases[1])
+        # cuequivariance kernel takes precedence over use_deepspeed_evo_attention.
+        # NOTE: this chain must stay exclusive with the stable branch above —
+        # a plain `if` here silently overwrites the stable result with stock
+        # attention (caught 2026-08-09; regression-locked in the wiring smoke).
+        elif use_cueq_triangle_kernels:
             if not cueq_is_installed:
                 raise ValueError(
                     "Running with `use_cueq_triangle_kernels` but package is not "

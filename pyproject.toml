@@ -1,3 +1,5 @@
+# Modified by RyanAIResearch in 2026 to package Lambda Streaming Triangle Attention.
+
 [build-system]
 # torch used at build needs to match the one at runtime
 requires = ["setuptools", "wheel", "setuptools-scm>=8"]
@@ -24,8 +26,9 @@ classifiers = [
 ]
 urls.Homepage = "https://openfold.io/"
 urls.Documentation = "https://openfold-3.readthedocs.io/en/latest/"
-urls.Repository = "https://github.com/aqlaboratory/openfold-3"
-urls.Issues = "https://github.com/aqlaboratory/openfold-3/issues"
+urls.Repository = "https://github.com/RyanAIResearch/openfold3_triangle_kernel"
+urls.Issues = "https://github.com/RyanAIResearch/openfold3_triangle_kernel/issues"
+urls.Upstream = "https://github.com/aqlaboratory/openfold-3"
 
 requires-python = ">=3.10"
 dependencies = [
@@ -117,7 +120,11 @@ include = ["openfold3*", "scripts*"]
 openfold3 = [
     "projects/*/config/*.yml",
     "tests/test_data/**/*",
-    "scripts/*.sh"
+    "scripts/*.sh",
+    "core/kernels/cuda/streaming_triangle_forward_v1.cu",
+    "core/kernels/cuda/streaming_triangle_delta_v1.cu",
+    "core/kernels/cuda/stable_triangle_dkdv_v2.cu",
+    "core/kernels/cuda/fused_triangle_dq_dbias_v9.cu"
 ]
 
 # much of the cibuildwheel config taken from benfred/implicit

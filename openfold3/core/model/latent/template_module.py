@@ -3,6 +3,7 @@
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2025 NVIDIA Corporation
 # Copyright 2021 DeepMind Technologies Limited
+# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -116,6 +117,7 @@ class TemplatePairBlock(PairBlock):
         use_deepspeed_evo_attention: bool,
         use_cueq_triangle_kernels: bool,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -139,6 +141,7 @@ class TemplatePairBlock(PairBlock):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
             )
@@ -151,6 +154,7 @@ class TemplatePairBlock(PairBlock):
                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                     use_triton_triangle_kernels=use_triton_triangle_kernels,
+                    use_stable_triangle_attention=use_stable_triangle_attention,
                     use_lma=use_lma,
                     inplace_safe=inplace_safe,
                 ),
@@ -179,6 +183,7 @@ class TemplatePairBlock(PairBlock):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -224,6 +229,7 @@ class TemplatePairBlock(PairBlock):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,
@@ -368,6 +374,7 @@ class TemplatePairStack(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -380,6 +387,7 @@ class TemplatePairStack(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
                 _mask_trans=_mask_trans,
@@ -402,6 +410,7 @@ class TemplatePairStack(nn.Module):
                 use_cueq_triangle_kernels
                 or use_triton_triangle_kernels
                 or use_deepspeed_evo_attention
+                or use_stable_triangle_attention
             )
             tuned_chunk_size = self.chunk_size_tuner.tune_chunk_size(
                 representative_fn=blocks[0],
@@ -430,6 +439,7 @@ class TemplatePairStack(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -470,6 +480,7 @@ class TemplatePairStack(nn.Module):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,
@@ -521,6 +532,7 @@ class TemplateEmbedderAllAtom(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
@@ -583,6 +595,7 @@ class TemplateEmbedderAllAtom(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
                 _mask_trans=_mask_trans,
@@ -608,6 +621,7 @@ class TemplateEmbedderAllAtom(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
@@ -625,6 +639,7 @@ class TemplateEmbedderAllAtom(nn.Module):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
             _mask_trans=_mask_trans,
@@ -642,6 +657,7 @@ class TemplateEmbedderAllAtom(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         offload_inference: bool = False,
@@ -687,6 +703,7 @@ class TemplateEmbedderAllAtom(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
             )
@@ -700,6 +717,7 @@ class TemplateEmbedderAllAtom(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
             )
