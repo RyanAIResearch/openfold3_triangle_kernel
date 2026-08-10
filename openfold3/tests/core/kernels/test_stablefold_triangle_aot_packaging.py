@@ -9,20 +9,20 @@ from pathlib import Path
 REPOSITORY = Path(__file__).resolve().parents[4]
 CUDA_PACKAGE = REPOSITORY / "openfold3/core/kernels/cuda"
 LOADERS = (
-    "streaming_triangle_forward_v1.py",
-    "streaming_triangle_delta_v1.py",
-    "stable_triangle_dkdv_v2.py",
-    "fused_triangle_dq_dbias_v9.py",
+    "stablefold_triangle_forward.py",
+    "stablefold_triangle_delta.py",
+    "stablefold_triangle_dkdv.py",
+    "stablefold_triangle_dq_dbias.py",
 )
 EXPECTED_MODULES = {
-    "_streaming_forward_sm90",
-    "_streaming_delta_sm90",
-    "_stable_dkdv_sm90",
-    "_fused_dq_dbias_sm90",
+    "_stablefold_forward_sm90",
+    "_stablefold_delta_sm90",
+    "_stablefold_dkdv_sm90",
+    "_stablefold_dq_dbias_sm90",
 }
 
 
-class StreamingTriangleAOTPackagingTest(unittest.TestCase):
+class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
     def test_production_loaders_do_not_contain_jit_compilation(self):
         for loader in LOADERS:
             text = (CUDA_PACKAGE / loader).read_text()
@@ -106,7 +106,7 @@ class StreamingTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIs(manifest["built"], False)
 
     def test_facade_metadata_contract_is_release_bounded(self):
-        text = (CUDA_PACKAGE / "streaming_triangle_attention.py").read_text()
+        text = (CUDA_PACKAGE / "stablefold_triangle_attention.py").read_text()
         self.assertIn("_SUPPORTED_HEAD_DIMS = frozenset((16, 32))", text)
         self.assertIn("_MAX_BROADCAST_PREFIX_RANK = 16", text)
         self.assertIn("if bias_requires_broadcast and len(prefix) >", text)

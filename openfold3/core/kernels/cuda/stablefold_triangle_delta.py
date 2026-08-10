@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""AOT loader for the production streaming softmax-delta precompute."""
+"""AOT loader for the StableFold softmax-delta precompute."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def source_sha256() -> dict[str, str]:
     from openfold3.core.kernels.cuda._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
-    return source_sha256_for("streaming_delta", source)
+    return source_sha256_for("stablefold_delta", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
@@ -25,12 +25,12 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         from openfold3.core.kernels.cuda._aot_runtime import load_extension_module
 
         _EXTENSION = load_extension_module(
-            module_key="streaming_delta",
+            module_key="stablefold_delta",
             aot_module=(
-                "openfold3.core.kernels.cuda._ext._streaming_delta_sm90"
+                "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90"
             ),
             source=Path(__file__).with_suffix(".cu"),
-            expected_symbols=("streaming_triangle_delta_out",),
+            expected_symbols=("stablefold_triangle_delta_out",),
             verbose=bool(verbose),
         )
     return _EXTENSION

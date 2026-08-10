@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// Streaming-line fused dQ + dBias, bounded-wave v9.
+// StableFold fused dQ + dBias with bounded deterministic waves.
 //
-// Modern rebuild of the v7 leaf under the streaming contract (own fixed
-// reduction tree, tolerance vs PyTorch, replay-bitwise vs self):
-//   * raw mma.sync + ldmatrix fragments (v7 used WMMA with fp32 shared
-//     round-trips and CTA-wide barriers per tile);
+// Production leaf under the StableFold contract (one fixed reduction tree,
+// tolerance vs PyTorch, replay-bitwise vs self):
+//   * raw mma.sync + ldmatrix fragments instead of WMMA with FP32 shared
+//     round-trips and CTA-wide barriers per tile;
 //   * dS = P * (dP - delta) is pure elementwise on identical accumulator
 //     layouts, so the derivative never leaves registers;
 //   * one CTA owns one (query-tile, head, 4-outer leaf). K/V depend on the
@@ -12,7 +12,7 @@
 //     only); CTA barriers exist solely around the per-tile cross-warp
 //     dBias combine;
 //   * the CTA's dBias plane slice has exactly one writer -- zero cross-CTA
-//     coordination, zero atomics, one leaf launch (v7 needed six);
+//     coordination, zero atomics, and one leaf launch;
 //   * a bounded [leaf,batch,head,query-slab,key] workspace is reused. Query
 //     slabs and batch chunks partition independent outputs; leaf waves retain
 //     one global fixed left-associated chain in FP32.
@@ -21,7 +21,7 @@
 // dbias = ((plane0 + plane1) + plane2) + ... in global leaf order. Wave
 // boundaries only spill/reload the FP32 root and do not change arithmetic.
 //
-// Layouts match streaming_triangle_forward_v1: q/k/v/dO [B,N,H,N,D] BF16,
+// Layouts match stablefold_triangle_forward: q/k/v/dO [B,N,H,N,D] BF16,
 // mask [B,N,1,1,N] FP32 additive, bias [B,1,H,N,N] BF16, lse/delta
 // [B,N,H,N] FP32, out_dq [B,N,H,N,D] BF16, out_dbias [B,1,H,N,N] FP32.
 
@@ -125,7 +125,7 @@ template <
     int StaticSequence,
     bool FullQueryTiles,
     bool TaskInGridZ>
-__global__ __launch_bounds__(kThreads) void fused_dq_dbias_v9_leaf_kernel(
+__global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -417,7 +417,7 @@ __global__ __launch_bounds__(kThreads) void fused_dq_dbias_v9_leaf_kernel(
 }
 
 // dbias[h,q,k] = ((plane0 + plane1) + plane2) + ... in leaf order.
-__global__ void fused_dq_dbias_v9_finalize_kernel(
+__global__ void stablefold_dq_dbias_finalize_kernel(
     const __nv_bfloat16* __restrict__ workspace,
     float* __restrict__ out_dbias,
     int64_t active_elements,
@@ -478,7 +478,7 @@ __global__ void fused_dq_dbias_v9_finalize_kernel(
 // FP32 partial is first rounded to the public BF16 per-batch contract, then
 // accumulated with explicit FP32 round-to-nearest additions. One thread owns
 // one output element; no atomics or framework reduction tree participate.
-__global__ void reduce_broadcast_dbias_v9_kernel(
+__global__ void stablefold_reduce_broadcast_dbias_kernel(
     const float* __restrict__ per_batch_dbias,
     __nv_bfloat16* __restrict__ out,
     int64_t output_elements,
@@ -587,13 +587,13 @@ void launch(
 #define SET_DQ_DBIAS_SMEM_ATTRIBUTE(FullTiles, TaskInZ)                    \
   do {                                                                     \
     const cudaError_t status = cudaFuncSetAttribute(                       \
-        fused_dq_dbias_v9_leaf_kernel<                                    \
+        stablefold_dq_dbias_leaf_kernel<                                    \
             HeadDim, StaticSequence, FullTiles, TaskInZ>,                  \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytes);                                                     \
     TORCH_CHECK(                                                           \
         status == cudaSuccess,                                             \
-        "failed to opt in streaming dQ/dBias shared memory: ",            \
+        "failed to opt in StableFold dQ/dBias shared memory: ",           \
         cudaGetErrorString(status));                                       \
   } while (false)
   SET_DQ_DBIAS_SMEM_ATTRIBUTE(true, true);
@@ -644,7 +644,7 @@ void launch(
                   static_cast<unsigned int>(heads),
                   static_cast<unsigned int>(query_blocks));
 #define LAUNCH_DQ_DBIAS_LEAF(FullTiles, TaskInZ)                           \
-  fused_dq_dbias_v9_leaf_kernel<                                          \
+  stablefold_dq_dbias_leaf_kernel<                                          \
       HeadDim, StaticSequence, FullTiles, TaskInZ>                         \
       <<<grid, kThreads, kSharedBytes, stream>>>(                          \
           reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
@@ -682,8 +682,9 @@ void launch(
         }
 #undef LAUNCH_DQ_DBIAS_LEAF
         TORCH_CHECK(
-            cudaGetLastError() == cudaSuccess, "v9 slab leaf launch failed");
-        fused_dq_dbias_v9_finalize_kernel
+            cudaGetLastError() == cudaSuccess,
+            "StableFold dQ/dBias slab leaf launch failed");
+        stablefold_dq_dbias_finalize_kernel
             <<<static_cast<unsigned int>(finalize_blocks),
                finalize_threads,
                0,
@@ -703,7 +704,7 @@ void launch(
                 leaf_base != 0);
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
-            "v9 slab finalizer launch failed");
+            "StableFold dQ/dBias slab finalizer launch failed");
         // Increment by the validated active extent, so even the theoretical
         // INT_MAX boundary cannot overflow a signed host loop counter.
         leaf_base += wave_leaves;
@@ -764,7 +765,7 @@ void dispatch_sequence(
   }
 }
 
-void fused_triangle_dq_dbias_v9_out(
+void stablefold_triangle_dq_dbias_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -884,12 +885,13 @@ void fused_triangle_dq_dbias_v9_out(
                  resident_leaves, batch_chunk, stream);
       break;
     default:
-      TORCH_CHECK(false, "unsupported head_dim for v9: ", head_dim);
+      TORCH_CHECK(false, "unsupported head_dim for StableFold dQ/dBias: ", head_dim);
   }
-  TORCH_CHECK(cudaGetLastError() == cudaSuccess, "v9 launch failed");
+  TORCH_CHECK(
+      cudaGetLastError() == cudaSuccess, "StableFold dQ/dBias launch failed");
 }
 
-void reduce_broadcast_dbias_v9_out(
+void stablefold_reduce_broadcast_dbias_out(
     const torch::Tensor& per_batch_dbias,
     torch::Tensor& out,
     const std::vector<int64_t>& target_prefix,
@@ -971,7 +973,7 @@ void reduce_broadcast_dbias_v9_out(
   const int64_t required_blocks = positive_ceil_div(out.numel(), threads);
   const unsigned int blocks = static_cast<unsigned int>(
       std::min<int64_t>(required_blocks, 65535));
-  reduce_broadcast_dbias_v9_kernel<<<blocks, threads, 0, stream>>>(
+  stablefold_reduce_broadcast_dbias_kernel<<<blocks, threads, 0, stream>>>(
       per_batch_dbias.data_ptr<float>(),
       reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
       out.numel(),
@@ -987,11 +989,11 @@ void reduce_broadcast_dbias_v9_out(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
-      "fused_triangle_dq_dbias_v9_out",
-      &fused_triangle_dq_dbias_v9_out,
-      "Streaming fused dQ+dBias v9 (query-slab deterministic waves)");
+      "stablefold_triangle_dq_dbias_out",
+      &stablefold_triangle_dq_dbias_out,
+      "StableFold fused dQ+dBias (query-slab deterministic waves)");
   module.def(
-      "reduce_broadcast_dbias_v9_out",
-      &reduce_broadcast_dbias_v9_out,
+      "stablefold_reduce_broadcast_dbias_out",
+      &stablefold_reduce_broadcast_dbias_out,
       "Fixed-order broadcast dBias reduction");
 }

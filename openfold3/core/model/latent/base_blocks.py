@@ -1,7 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2021 DeepMind Technologies Limited
-# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
+# Modified by RyanAIResearch in 2026 to integrate StableFold Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.

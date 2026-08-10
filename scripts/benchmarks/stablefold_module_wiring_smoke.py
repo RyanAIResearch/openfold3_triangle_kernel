@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Module-level smoke for the streaming-era stable wiring.
+"""Module-level smoke for the StableFold production wiring.
 
-D=16 and D=32 modules route to the streaming backend: the criterion is
+D=16 and D=32 modules route to StableFold: the criterion is
 tolerance vs stock plus bitwise replay against the same backend.
 """
 
@@ -15,7 +15,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import openfold3.core.model.primitives.attention as attention_module  # noqa: E402
-from openfold3.core.kernels.cuda.streaming_triangle_attention import (  # noqa: E402
+from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E402
     invocation_count,
 )
 from openfold3.core.model.layers.triangular_attention import (  # noqa: E402
@@ -65,20 +65,20 @@ def run_pass(module, x_base, mask, grad_seed, use_stable):
     module.zero_grad(set_to_none=True)
     x = x_base.clone().requires_grad_()
     stock_before = _STOCK_CALLS["count"]
-    streaming_before = invocation_count()
+    stablefold_before = invocation_count()
     out = module(x, mask=mask, use_stable_triangle_attention=use_stable)
     out.backward(grad_seed)
     torch.cuda.synchronize()
     # Routing regression locks (2026-08-09 overwrite bug): a stable pass
-    # must invoke the streaming kernel and must NEVER touch stock attention.
+    # must invoke the StableFold facade and must NEVER touch stock attention.
     if use_stable:
         if _STOCK_CALLS["count"] != stock_before:
             raise AssertionError(
                 "stable pass reached stock _attention (overwrite regression)"
             )
-        if invocation_count() == streaming_before:
+        if invocation_count() == stablefold_before:
             raise AssertionError(
-                "stable pass did not invoke the streaming kernel"
+                "stable pass did not invoke the StableFold facade"
             )
     return {
         "out": out.detach().clone(),
@@ -144,9 +144,9 @@ def case(label, c_in, c_hidden, heads, n, seed, bitwise_required,
 
 def main():
     results = [
-        case("trunk D=32 N=384 (streaming)", 128, 32, 4, 384, 11, False),
-        case("trunk D=32 N=640 (streaming)", 128, 32, 4, 640, 12, False),
-        case("template D=16 N=640 (streaming)", 64, 16, 4, 640, 13, False),
+        case("trunk D=32 N=384 (StableFold)", 128, 32, 4, 384, 11, False),
+        case("trunk D=32 N=640 (StableFold)", 128, 32, 4, 640, 12, False),
+        case("template D=16 N=640 (StableFold)", 64, 16, 4, 640, 13, False),
         case("trunk D=32 N=384 bf16-mask (real AMP dtype)", 128, 32, 4,
              384, 14, False, mask_dtype=torch.bfloat16),
     ]

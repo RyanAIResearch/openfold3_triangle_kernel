@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""AOT loader for the production streaming Triangle Attention forward."""
+"""AOT loader for the StableFold Triangle Attention forward pass."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def source_sha256() -> dict[str, str]:
     from openfold3.core.kernels.cuda._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
-    return source_sha256_for("streaming_forward", source)
+    return source_sha256_for("stablefold_forward", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
@@ -25,12 +25,12 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         from openfold3.core.kernels.cuda._aot_runtime import load_extension_module
 
         _EXTENSION = load_extension_module(
-            module_key="streaming_forward",
+            module_key="stablefold_forward",
             aot_module=(
-                "openfold3.core.kernels.cuda._ext._streaming_forward_sm90"
+                "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90"
             ),
             source=Path(__file__).with_suffix(".cu"),
-            expected_symbols=("streaming_triangle_forward_out",),
+            expected_symbols=("stablefold_triangle_forward_out",),
             verbose=bool(verbose),
         )
     return _EXTENSION

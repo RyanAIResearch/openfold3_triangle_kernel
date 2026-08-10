@@ -4,8 +4,8 @@ import unittest
 
 import torch
 
-from openfold3.core.kernels.cuda.streaming_triangle_attention import (
-    is_streaming_supported,
+from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
+    is_stablefold_supported,
 )
 
 
@@ -13,7 +13,7 @@ from openfold3.core.kernels.cuda.streaming_triangle_attention import (
     torch.cuda.is_available() and torch.cuda.get_device_capability() == (9, 0),
     "Hopper sm_90 CUDA is required",
 )
-class StreamingTriangleAttentionSupportTest(unittest.TestCase):
+class StableFoldTriangleAttentionSupportTest(unittest.TestCase):
     def setUp(self):
         shape = (1, 384, 4, 384, 32)
         # Expanded views exercise the facade's real non-contiguous input
@@ -31,7 +31,7 @@ class StreamingTriangleAttentionSupportTest(unittest.TestCase):
         )
 
     def support(self, *, q=None, k=None, v=None, mask=None, bias=None):
-        return is_streaming_supported(
+        return is_stablefold_supported(
             self.q if q is None else q,
             self.k if k is None else k,
             self.v if v is None else v,

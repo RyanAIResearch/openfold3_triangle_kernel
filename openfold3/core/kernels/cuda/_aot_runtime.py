@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fail-closed loader for the AOT Lambda Triangle Attention extensions.
+"""Fail-closed loader for the AOT StableFold Triangle Attention extensions.
 
 Production always imports the four wheel-owned binary modules.  Runtime JIT
 exists only for source-tree development and requires the explicit

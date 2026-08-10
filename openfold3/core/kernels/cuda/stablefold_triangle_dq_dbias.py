@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Streaming fused dQ + dBias v9 with a bounded fixed dBias tree.
+"""StableFold fused dQ + dBias with a bounded fixed dBias tree.
 
 Each leaf plane has a single writer and the finalizer uses one global fixed
 order. Leaf planes are processed in deterministic waves so temporary storage
@@ -53,7 +53,7 @@ def source_sha256() -> dict[str, str]:
     from openfold3.core.kernels.cuda._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
-    return source_sha256_for("fused_dq_dbias", source)
+    return source_sha256_for("stablefold_dq_dbias", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
@@ -62,14 +62,14 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         from openfold3.core.kernels.cuda._aot_runtime import load_extension_module
 
         _EXTENSION = load_extension_module(
-            module_key="fused_dq_dbias",
+            module_key="stablefold_dq_dbias",
             aot_module=(
-                "openfold3.core.kernels.cuda._ext._fused_dq_dbias_sm90"
+                "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90"
             ),
             source=Path(__file__).with_suffix(".cu"),
             expected_symbols=(
-                "fused_triangle_dq_dbias_v9_out",
-                "reduce_broadcast_dbias_v9_out",
+                "stablefold_triangle_dq_dbias_out",
+                "stablefold_reduce_broadcast_dbias_out",
             ),
             verbose=bool(verbose),
         )
@@ -295,7 +295,7 @@ def workspace_elements(
     ).elements
 
 
-def reduce_broadcast_dbias_v9(
+def stablefold_reduce_broadcast_dbias(
     per_batch_dbias: torch.Tensor,
     *,
     target_prefix: tuple[int, ...],
@@ -330,7 +330,7 @@ def reduce_broadcast_dbias_v9(
             dtype=torch.bfloat16,
         )
     with torch.cuda.device(per_batch_dbias.device), torch.no_grad():
-        load_extension().reduce_broadcast_dbias_v9_out(
+        load_extension().stablefold_reduce_broadcast_dbias_out(
             per_batch_dbias,
             out,
             list(target_prefix),
@@ -339,7 +339,7 @@ def reduce_broadcast_dbias_v9(
     return out
 
 
-def fused_triangle_dq_dbias_v9(
+def stablefold_triangle_dq_dbias(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -389,7 +389,7 @@ def fused_triangle_dq_dbias_v9(
             dtype=torch.float32,
         )
     with torch.cuda.device(q.device), torch.no_grad():
-        load_extension().fused_triangle_dq_dbias_v9_out(
+        load_extension().stablefold_triangle_dq_dbias_out(
             q,
             k,
             v,
@@ -409,9 +409,9 @@ def fused_triangle_dq_dbias_v9(
 
 
 __all__ = [
-    "fused_triangle_dq_dbias_v9",
+    "stablefold_triangle_dq_dbias",
     "load_extension",
-    "reduce_broadcast_dbias_v9",
+    "stablefold_reduce_broadcast_dbias",
     "source_sha256",
     "WorkspacePlan",
     "workspace_elements",

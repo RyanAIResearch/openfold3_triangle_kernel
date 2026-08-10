@@ -9,7 +9,7 @@
 
 The complete AQLab source tree is retained so that the OpenFold3 model,
 training recipe, configuration system, and data pipeline remain runnable. The
-RyanAIResearch delta is limited to the Lambda Streaming Triangle Attention
+RyanAIResearch delta is limited to the StableFold Triangle Attention
 runtime, its OpenFold3 routing/configuration integration, package data, and
 focused release tests.
 

@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Streaming Triangle Attention facade — deterministic research candidate.
+"""StableFold Triangle Attention facade — deterministic production path.
 
 Online-softmax forward plus a zero-atomics recompute backward
-(delta -> v2 dK/dV -> v9 dQ/dBias). Sequence length, head count, and batch
+(delta -> dK/dV -> dQ/dBias). Sequence length, head count, and batch
 prefix are runtime dimensions; D is selected from the compiled Hopper
 specializations. It is bitwise reproducible against itself, but intentionally
 does not claim bitwise alignment with the stock PyTorch floating-point path.
@@ -31,14 +31,14 @@ _INVOCATIONS = 0
 
 
 def invocation_count() -> int:
-    """Number of streaming forward launches (routing regression lock)."""
+    """Number of StableFold facade calls (routing regression lock)."""
     return _INVOCATIONS
 
 
 def _forward_extension() -> Any:
     global _FORWARD
     if _FORWARD is None:
-        from openfold3.core.kernels.cuda.streaming_triangle_forward_v1 import (
+        from openfold3.core.kernels.cuda.stablefold_triangle_forward import (
             load_extension,
         )
 
@@ -49,7 +49,7 @@ def _forward_extension() -> Any:
 def _delta_extension() -> Any:
     global _DELTA
     if _DELTA is None:
-        from openfold3.core.kernels.cuda.streaming_triangle_delta_v1 import (
+        from openfold3.core.kernels.cuda.stablefold_triangle_delta import (
             load_extension,
         )
 
@@ -57,14 +57,14 @@ def _delta_extension() -> Any:
     return _DELTA
 
 
-def is_streaming_supported(
+def is_stablefold_supported(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
     res_mask: torch.Tensor,
     pair_bias: torch.Tensor,
 ) -> tuple[bool, str]:
-    """Metadata-only support check for the streaming path."""
+    """Metadata-only support check for the StableFold path."""
 
     named = {
         "q": q,
@@ -78,7 +78,7 @@ def is_streaming_supported(
     if not q.is_cuda:
         return False, "q/k/v, res_mask, and pair_bias must be CUDA tensors"
     if torch.cuda.get_device_capability(q.device) != (9, 0):
-        return False, "streaming Triangle Attention requires Hopper sm_90"
+        return False, "StableFold Triangle Attention requires Hopper sm_90"
     if q.ndim < 5:
         return False, "q must have shape [*B,O,H,N,D]"
     prefix = tuple(q.shape[:-4])
@@ -140,7 +140,7 @@ def is_streaming_supported(
     return True, "supported"
 
 
-class _StreamingTriangleAttention(torch.autograd.Function):
+class _StableFoldTriangleAttention(torch.autograd.Function):
     @staticmethod
     def forward(  # noqa: D102
         ctx,
@@ -157,7 +157,7 @@ class _StreamingTriangleAttention(torch.autograd.Function):
             sequence = q.shape[-2]
             out = torch.empty_like(q)
             lse = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
-            _forward_extension().streaming_triangle_forward_out(
+            _forward_extension().stablefold_triangle_forward_out(
                 q, k, v, mask, expanded_bias, out, lse
             )
         ctx.save_for_backward(q, k, v, mask, expanded_bias, out, lse)
@@ -169,28 +169,28 @@ class _StreamingTriangleAttention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, d_output):  # noqa: D102
-        from openfold3.core.kernels.cuda.fused_triangle_dq_dbias_v9 import (
-            fused_triangle_dq_dbias_v9,
-            reduce_broadcast_dbias_v9,
+        from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
+            stablefold_reduce_broadcast_dbias,
+            stablefold_triangle_dq_dbias,
         )
 
         q, k, v, mask, expanded_bias, out, lse = ctx.saved_tensors
         with torch.cuda.device(q.device):
             d_output = d_output.contiguous()
             delta = torch.empty_like(lse)
-            _delta_extension().streaming_triangle_delta_out(d_output, out, delta)
+            _delta_extension().stablefold_triangle_delta_out(d_output, out, delta)
             # Keep probability reconstruction on the same raw-Q/post-scale
-            # arithmetic contract as the streaming forward.  The older resident
+            # arithmetic contract as the StableFold forward. The older resident
             # fast lane reconstructs scores using an AQLab-style pre-scaled BF16 K
             # path, so it is intentionally not part of the production facade.
-            from openfold3.core.kernels.cuda.stable_triangle_dkdv_v2 import (
-                stable_triangle_dkdv_v2 as dkdv,
+            from openfold3.core.kernels.cuda.stablefold_triangle_dkdv import (
+                stablefold_triangle_dkdv as dkdv,
             )
 
             d_k, d_v = dkdv(
                 q, k, v, d_output, lse, delta, mask, expanded_bias
             )
-            d_q, per_batch_dbias = fused_triangle_dq_dbias_v9(
+            d_q, per_batch_dbias = stablefold_triangle_dq_dbias(
                 q, k, v, d_output, lse, delta, mask, expanded_bias
             )
             if ctx.bias_prefix == ctx.target_prefix:
@@ -203,7 +203,7 @@ class _StreamingTriangleAttention(torch.autograd.Function):
                     dtype=torch.bfloat16
                 )
             else:
-                d_bias = reduce_broadcast_dbias_v9(
+                d_bias = stablefold_reduce_broadcast_dbias(
                     per_batch_dbias,
                     target_prefix=ctx.target_prefix,
                     bias_prefix=ctx.bias_prefix,
@@ -213,18 +213,18 @@ class _StreamingTriangleAttention(torch.autograd.Function):
         return d_q, d_k, d_v, None, None, d_bias, None, None
 
 
-def streaming_triangle_attention(
+def stablefold_triangle_attention(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
     res_mask: torch.Tensor,
     pair_bias: torch.Tensor,
 ) -> torch.Tensor:
-    """Run one streaming Triangle Attention call (raw q; no fallback)."""
+    """Run one StableFold Triangle Attention call (raw q; no fallback)."""
 
-    supported, reason = is_streaming_supported(q, k, v, res_mask, pair_bias)
+    supported, reason = is_stablefold_supported(q, k, v, res_mask, pair_bias)
     if not supported:
-        raise ValueError(f"unsupported streaming case: {reason}")
+        raise ValueError(f"unsupported StableFold case: {reason}")
     global _INVOCATIONS
     _INVOCATIONS += 1
     prefix = q.shape[:-4]
@@ -252,7 +252,7 @@ def streaming_triangle_attention(
         .contiguous()
         .detach()
     )
-    output_internal = _StreamingTriangleAttention.apply(
+    output_internal = _StableFoldTriangleAttention.apply(
         q_flat,
         k_flat,
         v_flat,
@@ -268,6 +268,6 @@ def streaming_triangle_attention(
 
 __all__ = [
     "invocation_count",
-    "is_streaming_supported",
-    "streaming_triangle_attention",
+    "is_stablefold_supported",
+    "stablefold_triangle_attention",
 ]

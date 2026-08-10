@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the ABI-locked Lambda Triangle Attention sm_90 wheel."""
+"""Build the ABI-locked StableFold Triangle Attention sm_90 wheel."""
 
 from __future__ import annotations
 
@@ -32,29 +32,29 @@ NVCC_FLAGS = [
 ]
 
 EXTENSION_SPECS = {
-    "streaming_forward": {
+    "stablefold_forward": {
         "module": (
-            "openfold3.core.kernels.cuda._ext._streaming_forward_sm90"
+            "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90"
         ),
-        "source": "streaming_triangle_forward_v1.cu",
-        "symbols": ["streaming_triangle_forward_out"],
+        "source": "stablefold_triangle_forward.cu",
+        "symbols": ["stablefold_triangle_forward_out"],
     },
-    "streaming_delta": {
-        "module": "openfold3.core.kernels.cuda._ext._streaming_delta_sm90",
-        "source": "streaming_triangle_delta_v1.cu",
-        "symbols": ["streaming_triangle_delta_out"],
+    "stablefold_delta": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90",
+        "source": "stablefold_triangle_delta.cu",
+        "symbols": ["stablefold_triangle_delta_out"],
     },
-    "stable_dkdv": {
-        "module": "openfold3.core.kernels.cuda._ext._stable_dkdv_sm90",
-        "source": "stable_triangle_dkdv_v2.cu",
-        "symbols": ["stable_triangle_dkdv_v2_out"],
+    "stablefold_dkdv": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
+        "source": "stablefold_triangle_dkdv.cu",
+        "symbols": ["stablefold_triangle_dkdv_out"],
     },
-    "fused_dq_dbias": {
-        "module": "openfold3.core.kernels.cuda._ext._fused_dq_dbias_sm90",
-        "source": "fused_triangle_dq_dbias_v9.cu",
+    "stablefold_dq_dbias": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90",
+        "source": "stablefold_triangle_dq_dbias.cu",
         "symbols": [
-            "fused_triangle_dq_dbias_v9_out",
-            "reduce_broadcast_dbias_v9_out",
+            "stablefold_triangle_dq_dbias_out",
+            "stablefold_reduce_broadcast_dbias_out",
         ],
     },
 }
@@ -113,11 +113,11 @@ def _source_paths() -> list[Path]:
     paths.extend(
         CUDA_PACKAGE / name
         for name in (
-            "streaming_triangle_forward_v1.py",
-            "streaming_triangle_delta_v1.py",
-            "stable_triangle_dkdv_v2.py",
-            "fused_triangle_dq_dbias_v9.py",
-            "streaming_triangle_attention.py",
+            "stablefold_triangle_forward.py",
+            "stablefold_triangle_delta.py",
+            "stablefold_triangle_dkdv.py",
+            "stablefold_triangle_dq_dbias.py",
+            "stablefold_triangle_attention.py",
             "_aot_runtime.py",
         )
     )

@@ -1,4 +1,4 @@
-"""Private AOT CUDA extension modules for Lambda Triangle Attention.
+"""Private AOT CUDA extension modules for StableFold Triangle Attention.
 
 The four binary modules are installed by the H100 ``sm_90`` wheel.  They are
 kept in a private package so their CPython initializer names cannot collide

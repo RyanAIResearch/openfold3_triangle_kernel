@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Streaming dK/dV v2 — the v9-family rewrite of the resident dkdv kernel.
+// StableFold dK/dV with key-block ownership and runtime shape dispatch.
 //
 // One CTA owns one (64-key block, head, outer) and its dK/dV accumulators
 // outright: dK[k]/dV[k] depend only on column k of dS, so key-block
@@ -107,7 +107,7 @@ __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid>
-__global__ __launch_bounds__(kThreads) void stable_triangle_dkdv_v2_kernel(
+__global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -375,21 +375,21 @@ void launch(
             static_cast<unsigned int>(key_blocks));
   const cudaError_t attribute_status = tile_major_grid
       ? cudaFuncSetAttribute(
-            stable_triangle_dkdv_v2_kernel<
+            stablefold_triangle_dkdv_kernel<
                 HeadDim, StaticSequence, true>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             kSharedBytes)
       : cudaFuncSetAttribute(
-            stable_triangle_dkdv_v2_kernel<
+            stablefold_triangle_dkdv_kernel<
                 HeadDim, StaticSequence, false>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             kSharedBytes);
   TORCH_CHECK(
       attribute_status == cudaSuccess,
-      "failed to opt in streaming dK/dV shared memory: ",
+      "failed to opt in StableFold dK/dV shared memory: ",
       cudaGetErrorString(attribute_status));
   if (tile_major_grid) {
-    stable_triangle_dkdv_v2_kernel<HeadDim, StaticSequence, true>
+    stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, true>
         <<<grid, kThreads, kSharedBytes, stream>>>(
             reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
             reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
@@ -406,7 +406,7 @@ void launch(
             batch,
             scale);
   } else {
-    stable_triangle_dkdv_v2_kernel<HeadDim, StaticSequence, false>
+    stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, false>
         <<<grid, kThreads, kSharedBytes, stream>>>(
             reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
             reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
@@ -465,7 +465,7 @@ void dispatch_sequence(
   }
 }
 
-void stable_triangle_dkdv_v2_out(
+void stablefold_triangle_dkdv_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -549,16 +549,16 @@ void stable_triangle_dkdv_v2_out(
                  out_dv, sequence, heads, batch, stream);
       break;
     default:
-      TORCH_CHECK(false, "unsupported head_dim for dkdv v2: ", head_dim);
+      TORCH_CHECK(false, "unsupported head_dim for StableFold dK/dV: ", head_dim);
   }
-  TORCH_CHECK(cudaGetLastError() == cudaSuccess, "dkdv v2 launch failed");
+  TORCH_CHECK(cudaGetLastError() == cudaSuccess, "StableFold dK/dV launch failed");
 }
 
 }  // namespace
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
-      "stable_triangle_dkdv_v2_out",
-      &stable_triangle_dkdv_v2_out,
-      "Streaming dK/dV v2 (key-block ownership, H/D/N general)");
+      "stablefold_triangle_dkdv_out",
+      &stablefold_triangle_dkdv_out,
+      "StableFold dK/dV (key-block ownership, runtime H/D/N)");
 }

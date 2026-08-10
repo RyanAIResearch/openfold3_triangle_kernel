@@ -5,12 +5,12 @@ from unittest import mock
 
 import torch
 
-from openfold3.core.kernels.cuda import streaming_triangle_attention as streaming
+from openfold3.core.kernels.cuda import stablefold_triangle_attention as stablefold
 from openfold3.core.model.primitives.attention import Attention
 
 
 class AttentionStableRoutingTest(unittest.TestCase):
-    def test_unsupported_streaming_case_fails_closed(self):
+    def test_unsupported_stablefold_case_fails_closed(self):
         module = Attention(
             c_q=128,
             c_k=128,
@@ -28,7 +28,7 @@ class AttentionStableRoutingTest(unittest.TestCase):
         with (
             mock.patch.object(module, "_prep_qkv", return_value=(q, k, v)) as prep,
             mock.patch.object(
-                streaming, "is_streaming_supported", return_value=(False, "test")
+                stablefold, "is_stablefold_supported", return_value=(False, "test")
             ),
             self.assertRaisesRegex(ValueError, "unsupported.*test"),
         ):

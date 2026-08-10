@@ -16,31 +16,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 EXPECTED_EXTENSIONS = {
-    "streaming_forward": {
-        "module": "openfold3.core.kernels.cuda._ext._streaming_forward_sm90",
-        "symbols": ["streaming_triangle_forward_out"],
+    "stablefold_forward": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90",
+        "symbols": ["stablefold_triangle_forward_out"],
     },
-    "streaming_delta": {
-        "module": "openfold3.core.kernels.cuda._ext._streaming_delta_sm90",
-        "symbols": ["streaming_triangle_delta_out"],
+    "stablefold_delta": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90",
+        "symbols": ["stablefold_triangle_delta_out"],
     },
-    "stable_dkdv": {
-        "module": "openfold3.core.kernels.cuda._ext._stable_dkdv_sm90",
-        "symbols": ["stable_triangle_dkdv_v2_out"],
+    "stablefold_dkdv": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
+        "symbols": ["stablefold_triangle_dkdv_out"],
     },
-    "fused_dq_dbias": {
-        "module": "openfold3.core.kernels.cuda._ext._fused_dq_dbias_sm90",
+    "stablefold_dq_dbias": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90",
         "symbols": [
-            "fused_triangle_dq_dbias_v9_out",
-            "reduce_broadcast_dbias_v9_out",
+            "stablefold_triangle_dq_dbias_out",
+            "stablefold_reduce_broadcast_dbias_out",
         ],
     },
 }
 LOADER_MEMBERS = (
-    "openfold3/core/kernels/cuda/streaming_triangle_forward_v1.py",
-    "openfold3/core/kernels/cuda/streaming_triangle_delta_v1.py",
-    "openfold3/core/kernels/cuda/stable_triangle_dkdv_v2.py",
-    "openfold3/core/kernels/cuda/fused_triangle_dq_dbias_v9.py",
+    "openfold3/core/kernels/cuda/stablefold_triangle_forward.py",
+    "openfold3/core/kernels/cuda/stablefold_triangle_delta.py",
+    "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.py",
+    "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.py",
 )
 
 

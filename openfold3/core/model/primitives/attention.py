@@ -3,7 +3,7 @@
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2025 NVIDIA Corporation
 # Copyright 2021 DeepMind Technologies Limited
-# Modified by RyanAIResearch in 2026 to integrate Lambda Streaming Triangle Attention.
+# Modified by RyanAIResearch in 2026 to integrate StableFold Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -460,23 +460,23 @@ class Attention(nn.Module):
             # Keep CPU imports and every default/official backend independent of
             # the research extension. Explicit selection is fail-closed: import,
             # build, support, launch, and backward failures propagate unchanged.
-            from openfold3.core.kernels.cuda.streaming_triangle_attention import (  # noqa: E501
-                is_streaming_supported,
-                streaming_triangle_attention,
+            from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E501
+                is_stablefold_supported,
+                stablefold_triangle_attention,
             )
 
-            streaming_ok, streaming_reason = is_streaming_supported(
+            stablefold_ok, stablefold_reason = is_stablefold_supported(
                 q, k, v, biases[0], biases[1]
             )
-            if not streaming_ok:
+            if not stablefold_ok:
                 raise ValueError(
-                    "unsupported Lambda Streaming Triangle Attention case: "
-                    f"{streaming_reason}"
+                    "unsupported StableFold Triangle Attention case: "
+                    f"{stablefold_reason}"
                 )
-            # Deterministic streaming backend: raw q, internal scaling,
+            # Deterministic StableFold backend: raw q, internal scaling,
             # replay-bitwise vs itself, zero FP atomics. Explicit selection is
             # fail-closed and never silently substitutes the aligned backend.
-            o = streaming_triangle_attention(q, k, v, biases[0], biases[1])
+            o = stablefold_triangle_attention(q, k, v, biases[0], biases[1])
         # cuequivariance kernel takes precedence over use_deepspeed_evo_attention.
         # NOTE: this chain must stay exclusive with the stable branch above —
         # a plain `if` here silently overwrites the stable result with stock

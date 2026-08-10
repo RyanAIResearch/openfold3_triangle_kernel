@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute-Sanitizer smoke for the production Streaming facade.
+"""Compute-Sanitizer smoke for the production StableFold facade.
 
 This driver intentionally exercises the package entry point rather than any
 of the individual extension loaders.  Its inputs reproduce OpenFold3's public
@@ -15,9 +15,9 @@ training boundary:
 Run the same command under Compute Sanitizer, for example::
 
     compute-sanitizer --tool memcheck --error-exitcode 99 \
-      python scripts/benchmarks/streaming_triangle_sanitizer_smoke.py \
+      python scripts/benchmarks/stablefold_triangle_sanitizer_smoke.py \
       --sequence 65 --heads 4 --head-dim 32 --prefix 1 \
-      --output-json evidence/streaming_memcheck_n65.json
+      --output-json evidence/stablefold_memcheck_n65.json
 
 The odd default sequence length deliberately covers the generic tail path.
 Use separate fresh processes for memcheck, synccheck, and racecheck.
@@ -38,10 +38,10 @@ import torch
 REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY))
 
-from openfold3.core.kernels.cuda.streaming_triangle_attention import (  # noqa: E402
+from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E402
     invocation_count,
-    is_streaming_supported,
-    streaming_triangle_attention,
+    is_stablefold_supported,
+    stablefold_triangle_attention,
 )
 
 
@@ -241,7 +241,7 @@ def _broadcast_bias_reference(
             .clone()
             .requires_grad_(True)
         )
-        output = streaming_triangle_attention(
+        output = stablefold_triangle_attention(
             q_flat[batch_index : batch_index + 1].detach(),
             k_flat[batch_index : batch_index + 1].detach(),
             v_flat[batch_index : batch_index + 1].detach(),
@@ -282,16 +282,16 @@ def _broadcast_bias_reference(
 
 def _source_manifest() -> dict[str, str]:
     relatives = (
-        "openfold3/core/kernels/cuda/streaming_triangle_attention.py",
-        "openfold3/core/kernels/cuda/streaming_triangle_forward_v1.py",
-        "openfold3/core/kernels/cuda/streaming_triangle_forward_v1.cu",
-        "openfold3/core/kernels/cuda/streaming_triangle_delta_v1.py",
-        "openfold3/core/kernels/cuda/streaming_triangle_delta_v1.cu",
-        "openfold3/core/kernels/cuda/stable_triangle_dkdv_v2.py",
-        "openfold3/core/kernels/cuda/stable_triangle_dkdv_v2.cu",
-        "openfold3/core/kernels/cuda/fused_triangle_dq_dbias_v9.py",
-        "openfold3/core/kernels/cuda/fused_triangle_dq_dbias_v9.cu",
-        "scripts/benchmarks/streaming_triangle_sanitizer_smoke.py",
+        "openfold3/core/kernels/cuda/stablefold_triangle_attention.py",
+        "openfold3/core/kernels/cuda/stablefold_triangle_forward.py",
+        "openfold3/core/kernels/cuda/stablefold_triangle_forward.cu",
+        "openfold3/core/kernels/cuda/stablefold_triangle_delta.py",
+        "openfold3/core/kernels/cuda/stablefold_triangle_delta.cu",
+        "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.py",
+        "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.cu",
+        "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.py",
+        "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.cu",
+        "scripts/benchmarks/stablefold_triangle_sanitizer_smoke.py",
     )
     return {
         relative: hashlib.sha256((REPOSITORY / relative).read_bytes()).hexdigest()
@@ -304,7 +304,7 @@ def _forward_backward(
 ) -> tuple[torch.Tensor, tuple[torch.Tensor, ...]]:
     """Run the public facade and its complete VJP once."""
 
-    output = streaming_triangle_attention(
+    output = stablefold_triangle_attention(
         inputs["q"],
         inputs["k"],
         inputs["v"],
@@ -369,7 +369,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ),
     }
     layout_contract["passed"] = all(layout_contract.values())
-    supported, support_reason = is_streaming_supported(
+    supported, support_reason = is_stablefold_supported(
         inputs["q"],
         inputs["k"],
         inputs["v"],
@@ -377,7 +377,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         inputs["pair_bias"],
     )
     if not supported:
-        raise RuntimeError(f"streaming facade rejected smoke case: {support_reason}")
+        raise RuntimeError(f"StableFold facade rejected smoke case: {support_reason}")
     if not layout_contract["passed"]:
         failed = [
             name
@@ -395,7 +395,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.cuda_profiler_range:
         torch.cuda.cudart().cudaProfilerStart()
     try:
-        torch.cuda.nvtx.range_push("streaming.public_facade.full_forward_backward")
+        torch.cuda.nvtx.range_push("stablefold.public_facade.full_forward_backward")
         try:
             output, gradients = _forward_backward(inputs)
         finally:
@@ -410,8 +410,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     route = {
         "entrypoint": (
-            "openfold3.core.kernels.cuda.streaming_triangle_attention."
-            "streaming_triangle_attention"
+            "openfold3.core.kernels.cuda.stablefold_triangle_attention."
+            "stablefold_triangle_attention"
         ),
         "support_check": support_reason,
         "counter_before": counter_before,
@@ -488,7 +488,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     properties = torch.cuda.get_device_properties(args.device)
     return {
         "schema_version": 1,
-        "purpose": "production Streaming Triangle Attention full F+B sanitizer smoke",
+        "purpose": "production StableFold Triangle Attention full F+B sanitizer smoke",
         "verdict": "PASS" if verdict else "FAIL",
         "case": {
             "prefix": list(prefix),

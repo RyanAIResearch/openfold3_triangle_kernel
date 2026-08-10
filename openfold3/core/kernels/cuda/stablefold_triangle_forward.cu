@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Streaming Triangle Attention forward, v1 (M1 of the streaming line).
+// StableFold Triangle Attention forward with online softmax.
 //
 // FA2-style online softmax: each warp owns 16 query rows and streams KV in
 // 64-key tiles; scores never touch HBM. Deterministic by construction in the
@@ -7,10 +7,10 @@
 // bitwise vs itself. Accuracy contract is the error-ratio bound vs fp64, NOT
 // bitwise vs PyTorch (see PRODUCTION_MANIFEST.md).
 //
-// v1 goals: correctness + replay + arbitrary N. Perf work (cp.async double
+// Goals: correctness, replay stability, and arbitrary N. Perf work (cp.async double
 // buffering, register-layout P reuse, WGMMA) comes after the gate is green.
 //
-// Internal layout contract used by the public streaming facade:
+// Internal layout contract used by the public StableFold facade:
 //   q, k, v : [1, N, H=4, N, D=32] BF16, contiguous
 //   mask    : [1, N, 1, 1, N] FP32 additive (0 or -inf-like)
 //   bias    : [1, 1, H, N, N] BF16 additive
@@ -130,7 +130,7 @@ __device__ __forceinline__ float quad_sum(float value) {
 }
 
 template <int HeadDim, bool TileMajorGrid>
-__global__ __launch_bounds__(kThreads) void streaming_triangle_forward_kernel(
+__global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -418,19 +418,19 @@ void launch_forward(
             static_cast<unsigned int>(query_blocks));
   const cudaError_t attribute_status = tile_major_grid
       ? cudaFuncSetAttribute(
-            streaming_triangle_forward_kernel<HeadDim, true>,
+            stablefold_triangle_forward_kernel<HeadDim, true>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_bytes<HeadDim>())
       : cudaFuncSetAttribute(
-            streaming_triangle_forward_kernel<HeadDim, false>,
+            stablefold_triangle_forward_kernel<HeadDim, false>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_bytes<HeadDim>());
   TORCH_CHECK(
       attribute_status == cudaSuccess,
-      "failed to opt in streaming forward shared memory: ",
+      "failed to opt in StableFold forward shared memory: ",
       cudaGetErrorString(attribute_status));
   if (tile_major_grid) {
-    streaming_triangle_forward_kernel<HeadDim, true>
+    stablefold_triangle_forward_kernel<HeadDim, true>
         <<<grid, kThreads, shared_bytes<HeadDim>(), stream>>>(
             reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
             reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
@@ -444,7 +444,7 @@ void launch_forward(
             batch,
             scale);
   } else {
-    streaming_triangle_forward_kernel<HeadDim, false>
+    stablefold_triangle_forward_kernel<HeadDim, false>
         <<<grid, kThreads, shared_bytes<HeadDim>(), stream>>>(
             reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
             reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
@@ -460,7 +460,7 @@ void launch_forward(
   }
 }
 
-void streaming_triangle_forward_out(
+void stablefold_triangle_forward_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -546,7 +546,7 @@ void streaming_triangle_forward_out(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
-      "streaming_triangle_forward_out",
-      &streaming_triangle_forward_out,
-      "Streaming Triangle Attention forward v1 (online softmax)");
+      "stablefold_triangle_forward_out",
+      &stablefold_triangle_forward_out,
+      "StableFold Triangle Attention forward (online softmax)");
 }

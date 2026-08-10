@@ -1,7 +1,7 @@
-# Lambda Streaming Triangle Attention — release manifest
+# StableFold Triangle Attention — release manifest
 
-本文件描述当前由 `use_stable_triangle_attention=true` 选择的 Lambda
-Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Lambda 路径必须
+本文件描述当前由 `use_stable_triangle_attention=true` 选择的 StableFold
+Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；StableFold 路径必须
 显式启用，并且对不支持的输入直接报错，不会静默回退 PyTorch、AQLab Triton
 或 NVIDIA cuEquivariance。
 
@@ -38,7 +38,7 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Lambda
 
 ## 运行时支持范围
 
-- GPU：Hopper `sm_90`（当前发布门禁设备为 Lambda H100 80GB）；
+- GPU：Hopper `sm_90`（当前发布门禁设备为 H100 80GB）；
 - dtype：Q/K/V 与 pair bias 为 BF16；mask 为 FP32/BF16/FP16；
 - head dimension：production 只接受 `D in {16, 32}`；
 - sequence/head：设备可行范围内的 runtime `N > 0`、`H > 0`；
@@ -57,23 +57,23 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Lambda
 
 | 文件 | 职责 |
 |---|---|
-| `openfold3/core/model/primitives/attention.py` | 显式 Lambda 路由；unsupported fail-closed |
-| `streaming_triangle_attention.py` | public facade、broadcast/prefix 编排、自定义 autograd |
+| `openfold3/core/model/primitives/attention.py` | 显式 StableFold 路由；unsupported fail-closed |
+| `stablefold_triangle_attention.py` | public facade、broadcast/prefix 编排、自定义 autograd |
 | `_aot_runtime.py` | AOT import、ABI/device/hash/symbol 核验；production 禁止自动 JIT |
-| `_ext/_streaming_forward_sm90*.so` | 独立 forward AOT module |
-| `_ext/_streaming_delta_sm90*.so` | 独立 delta AOT module |
-| `_ext/_stable_dkdv_sm90*.so` | 独立 dK+dV AOT module |
-| `_ext/_fused_dq_dbias_sm90*.so` | 独立 dQ+dBias/reduce AOT module |
-| `streaming_triangle_forward_v1.{py,cu}` | online-softmax forward 与 LSE |
-| `streaming_triangle_delta_v1.{py,cu}` | backward delta 预计算 |
-| `stable_triangle_dkdv_v2.{py,cu}` | generic/runtime dK+dV |
-| `fused_triangle_dq_dbias_v9.{py,cu}` | fixed-tree dQ+dBias |
+| `_ext/_stablefold_forward_sm90*.so` | 独立 forward AOT module |
+| `_ext/_stablefold_delta_sm90*.so` | 独立 delta AOT module |
+| `_ext/_stablefold_dkdv_sm90*.so` | 独立 dK+dV AOT module |
+| `_ext/_stablefold_dq_dbias_sm90*.so` | 独立 dQ+dBias/reduce AOT module |
+| `stablefold_triangle_forward.{py,cu}` | online-softmax forward 与 LSE |
+| `stablefold_triangle_delta.{py,cu}` | backward delta 预计算 |
+| `stablefold_triangle_dkdv.{py,cu}` | generic/runtime dK+dV |
+| `stablefold_triangle_dq_dbias.{py,cu}` | fixed-tree dQ+dBias |
 
 上述四组 CUDA 源作为 build receipt/source distribution 进入 package-data，
 但 production runtime 只 import wheel 内四个 `.so`，不调用 NVCC。只有开发者
 显式设置 `OPENFOLD3_TRIANGLE_ALLOW_JIT=1` 时 loader 才允许 source JIT；缺失、
 损坏或 ABI 不匹配的生产二进制会直接报错。生产 facade 不允许依赖
-`scripts/benchmarks`、旧 resident dK/dV 或旧 v7 backward loader。
+`scripts/benchmarks` 或任何历史 backward loader。
 
 发布 wheel ABI 固定为 CPython 3.14、Torch 2.10.0、Torch CUDA 12.9 与
 H100 `sm_90` SASS；不包含 PTX。build manifest 必须记录 commit、dirty 状态、
@@ -83,7 +83,7 @@ canonical builder 必须使用 fresh clone，并通过 `nm`、`cuobjdump` 和只
 
 ## 数值契约
 
-Lambda Streaming 与官方 PyTorch 使用相同实数公式，但浮点执行契约不同：
+StableFold 与官方 PyTorch 使用相同实数公式，但浮点执行契约不同：
 
 - raw BF16 Q/K 进入 HMMA，FP32 accumulator 后乘 scale；
 - mask 与 pair bias 在 FP32 中加入；
@@ -103,9 +103,9 @@ operator replay 推断；这些长期证据目前尚未完成。
 
 ## 非生产与历史实现
 
-`pytorch_aligned_*`、`stable_triangle_attention.py`、resident dK/dV、v7/v8
+`pytorch_aligned_*`、`stable_triangle_attention.py`、resident dK/dV、历史
 backward 以及 `scripts/benchmarks` 中的裸 kernel 链都是参考、诊断或历史实现。
-当前 Lambda 模型路由不会调用它们；observer 仍可监视 aligned facade，目的只是
+当前 StableFold 模型路由不会调用它们；observer 仍可监视 aligned facade，目的只是
 证明其调用次数为零。
 
 性能数字只有在 clean commit、真实 non-contiguous Q/K/V、permuted BF16

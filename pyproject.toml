@@ -1,4 +1,4 @@
-# Modified by RyanAIResearch in 2026 to package Lambda Streaming Triangle Attention.
+# Modified by RyanAIResearch in 2026 to package StableFold Triangle Attention.
 
 [build-system]
 # CUDAExtension imports the exact runtime Torch ABI.  The canonical sm_90
@@ -119,10 +119,10 @@ openfold3 = [
     "projects/*/config/*.yml",
     "tests/test_data/**/*",
     "scripts/*.sh",
-    "core/kernels/cuda/streaming_triangle_forward_v1.cu",
-    "core/kernels/cuda/streaming_triangle_delta_v1.cu",
-    "core/kernels/cuda/stable_triangle_dkdv_v2.cu",
-    "core/kernels/cuda/fused_triangle_dq_dbias_v9.cu",
+    "core/kernels/cuda/stablefold_triangle_forward.cu",
+    "core/kernels/cuda/stablefold_triangle_delta.cu",
+    "core/kernels/cuda/stablefold_triangle_dkdv.cu",
+    "core/kernels/cuda/stablefold_triangle_dq_dbias.cu",
     "core/kernels/cuda/_build_manifest.json"
 ]
 

@@ -4,14 +4,14 @@ import struct
 import unittest
 from pathlib import Path
 
-from openfold3.core.kernels.cuda.fused_triangle_dq_dbias_v9 import (
+from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
     outer_leaf_for,
     workspace_elements,
     workspace_plan,
 )
 
 
-class StreamingTriangleWorkspaceTest(unittest.TestCase):
+class StableFoldTriangleWorkspaceTest(unittest.TestCase):
     def test_outer_leaf_is_sequence_independent(self):
         for sequence in (1, 17, 65, 383, 384, 640, 768, 769, 2048):
             with self.subTest(sequence=sequence):
@@ -145,7 +145,7 @@ class StreamingTriangleWorkspaceTest(unittest.TestCase):
     def test_cuda_source_owns_a_fixed_non_atomic_left_fold(self):
         source = (
             Path(__file__).parents[3]
-            / "core/kernels/cuda/fused_triangle_dq_dbias_v9.cu"
+            / "core/kernels/cuda/stablefold_triangle_dq_dbias.cu"
         ).read_text()
         self.assertIn("root = __fadd_rn", source)
         # The final wave may contain fewer leaves than the resident capacity.

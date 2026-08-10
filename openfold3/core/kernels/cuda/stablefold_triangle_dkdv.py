@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Streaming dK/dV v2 — key-block ownership, H/D/N general."""
+"""StableFold dK/dV with key-block ownership and runtime H/D/N."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def source_sha256() -> dict[str, str]:
     from openfold3.core.kernels.cuda._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
-    return source_sha256_for("stable_dkdv", source)
+    return source_sha256_for("stablefold_dkdv", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
@@ -25,16 +25,16 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         from openfold3.core.kernels.cuda._aot_runtime import load_extension_module
 
         _EXTENSION = load_extension_module(
-            module_key="stable_dkdv",
-            aot_module="openfold3.core.kernels.cuda._ext._stable_dkdv_sm90",
+            module_key="stablefold_dkdv",
+            aot_module="openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
             source=Path(__file__).with_suffix(".cu"),
-            expected_symbols=("stable_triangle_dkdv_v2_out",),
+            expected_symbols=("stablefold_triangle_dkdv_out",),
             verbose=bool(verbose),
         )
     return _EXTENSION
 
 
-def stable_triangle_dkdv_v2(
+def stablefold_triangle_dkdv(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -52,7 +52,7 @@ def stable_triangle_dkdv_v2(
     if out_dv is None:
         out_dv = torch.empty_like(q)
     with torch.cuda.device(q.device), torch.no_grad():
-        load_extension().stable_triangle_dkdv_v2_out(
+        load_extension().stablefold_triangle_dkdv_out(
             q,
             k,
             v,
@@ -67,4 +67,4 @@ def stable_triangle_dkdv_v2(
     return out_dk, out_dv
 
 
-__all__ = ["stable_triangle_dkdv_v2", "load_extension", "source_sha256"]
+__all__ = ["stablefold_triangle_dkdv", "load_extension", "source_sha256"]

@@ -1,8 +1,8 @@
-# Lambda Streaming Triangle Attention for OpenFold3
+# StableFold Triangle Attention for OpenFold3
 
 This repository is a clean, runnable fork of
 [AQLab OpenFold3](https://github.com/aqlaboratory/openfold-3) containing the
-current RyanAIResearch Lambda Streaming Triangle Attention production path for
+current RyanAIResearch StableFold Triangle Attention production path for
 NVIDIA H100 (`sm_90`). The upstream OpenFold3 model, PyTorch Lightning training
 runner, data pipeline, and official recipe remain intact; the only model-level
 addition is a default-off Triangle Attention backend.
@@ -20,11 +20,11 @@ The runtime path is deliberately small:
 ```text
 use_stable_triangle_attention
   -> TriangleAttention / Attention routing
-  -> streaming_triangle_attention.py
-  -> streaming_triangle_forward_v1
-  -> streaming_triangle_delta_v1
-  -> stable_triangle_dkdv_v2
-  -> fused_triangle_dq_dbias_v9
+  -> stablefold_triangle_attention.py
+  -> stablefold_triangle_forward
+  -> stablefold_triangle_delta
+  -> stablefold_triangle_dkdv
+  -> stablefold_triangle_dq_dbias
 ```
 
 It provides:
@@ -82,7 +82,7 @@ backward smoke, and copies the wheel plus hash receipts into `dist/`.
 
 ## Validated scope
 
-- Device gate: Lambda H100 80 GB, compute capability 9.0.
+- Device gate: H100 80 GB, compute capability 9.0.
 - Tensor contract: BF16 Q/K/V and pair bias; FP32/BF16/FP16 additive mask.
 - Clean source snapshot imported from
   `RyanAIResearch/hammer_inference_engine@6db02ff4b31e87bfced98331b22613e96e8ced37`.
@@ -115,16 +115,16 @@ Static/package tests:
 
 ```bash
 python -m unittest \
-  openfold3.tests.core.kernels.test_streaming_triangle_aot_packaging \
-  openfold3.tests.core.kernels.test_streaming_triangle_packaging \
-  openfold3.tests.core.kernels.test_streaming_triangle_workspace \
+  openfold3.tests.core.kernels.test_stablefold_triangle_aot_packaging \
+  openfold3.tests.core.kernels.test_stablefold_triangle_packaging \
+  openfold3.tests.core.kernels.test_stablefold_triangle_workspace \
   openfold3.tests.core.model.test_attention_stable_routing
 ```
 
 One public-facade CUDA forward/backward smoke:
 
 ```bash
-python scripts/benchmarks/streaming_triangle_sanitizer_smoke.py \
+python scripts/benchmarks/stablefold_triangle_sanitizer_smoke.py \
   --sequence 65 --heads 4 --head-dim 32 --prefix 1
 ```
 

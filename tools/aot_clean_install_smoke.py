@@ -13,10 +13,10 @@ from pathlib import Path
 import torch
 
 MODULES = (
-    "openfold3.core.kernels.cuda._ext._streaming_forward_sm90",
-    "openfold3.core.kernels.cuda._ext._streaming_delta_sm90",
-    "openfold3.core.kernels.cuda._ext._stable_dkdv_sm90",
-    "openfold3.core.kernels.cuda._ext._fused_dq_dbias_sm90",
+    "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90",
+    "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90",
+    "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
+    "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90",
 )
 
 
@@ -36,9 +36,9 @@ def main() -> None:
     if any(path.suffix != ".so" for path in binary_paths):
         raise RuntimeError(f"expected four AOT shared objects, got {binary_paths}")
 
-    from openfold3.core.kernels.cuda.streaming_triangle_attention import (
+    from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
         invocation_count,
-        streaming_triangle_attention,
+        stablefold_triangle_attention,
     )
 
     torch.manual_seed(20260809)
@@ -78,7 +78,7 @@ def main() -> None:
         requires_grad=True,
     )
     before = invocation_count()
-    output = streaming_triangle_attention(q, k, v, mask, bias)
+    output = stablefold_triangle_attention(q, k, v, mask, bias)
     d_output = torch.randn_like(output)
     gradients = torch.autograd.grad(output, (q, k, v, bias), d_output)
     torch.cuda.synchronize()

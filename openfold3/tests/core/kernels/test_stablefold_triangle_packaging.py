@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import ast
+import tomllib
 import unittest
 from pathlib import Path
-
-import tomllib
 
 REPOSITORY = Path(__file__).resolve().parents[4]
 CUDA_PACKAGE = REPOSITORY / "openfold3/core/kernels/cuda"
@@ -21,22 +20,19 @@ def _top_level_imports(path: Path) -> set[str]:
     return imports
 
 
-class StreamingTrianglePackagingTest(unittest.TestCase):
+class StableFoldTrianglePackagingTest(unittest.TestCase):
     def test_runtime_facade_does_not_depend_on_benchmark_modules(self):
-        facade = CUDA_PACKAGE / "streaming_triangle_attention.py"
+        facade = CUDA_PACKAGE / "stablefold_triangle_attention.py"
         text = facade.read_text()
         self.assertNotIn("scripts.benchmarks", text)
-        self.assertNotIn("streaming_backward_m2_gate", text)
-        self.assertNotIn("fused_triangle_dq_dbias_v7", text)
-        self.assertNotIn("stable_triangle_dkdv_hmma_resident", text)
 
     def test_runtime_loader_closure_is_package_owned(self):
         runtime_modules = {
-            "streaming_triangle_attention.py",
-            "streaming_triangle_forward_v1.py",
-            "streaming_triangle_delta_v1.py",
-            "stable_triangle_dkdv_v2.py",
-            "fused_triangle_dq_dbias_v9.py",
+            "stablefold_triangle_attention.py",
+            "stablefold_triangle_forward.py",
+            "stablefold_triangle_delta.py",
+            "stablefold_triangle_dkdv.py",
+            "stablefold_triangle_dq_dbias.py",
         }
         for module in runtime_modules:
             imports = _top_level_imports(CUDA_PACKAGE / module)
@@ -51,10 +47,10 @@ class StreamingTrianglePackagingTest(unittest.TestCase):
             project["tool"]["setuptools"]["package-data"]["openfold3"]
         )
         required = {
-            "core/kernels/cuda/streaming_triangle_forward_v1.cu",
-            "core/kernels/cuda/streaming_triangle_delta_v1.cu",
-            "core/kernels/cuda/stable_triangle_dkdv_v2.cu",
-            "core/kernels/cuda/fused_triangle_dq_dbias_v9.cu",
+            "core/kernels/cuda/stablefold_triangle_forward.cu",
+            "core/kernels/cuda/stablefold_triangle_delta.cu",
+            "core/kernels/cuda/stablefold_triangle_dkdv.cu",
+            "core/kernels/cuda/stablefold_triangle_dq_dbias.cu",
         }
         self.assertTrue(required.issubset(package_data))
         for relative in required:
