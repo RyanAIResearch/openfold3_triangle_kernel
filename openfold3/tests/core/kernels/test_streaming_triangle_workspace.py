@@ -148,7 +148,15 @@ class StreamingTriangleWorkspaceTest(unittest.TestCase):
             / "core/kernels/cuda/fused_triangle_dq_dbias_v9.cu"
         ).read_text()
         self.assertIn("root = __fadd_rn", source)
-        self.assertIn("leaf_base += resident_leaves", source)
+        # The final wave may contain fewer leaves than the resident capacity.
+        # Lock both the bounded active extent and the matching increment so a
+        # future rewrite cannot skip the tail or overflow the host loop.
+        self.assertIn("const int wave_leaves =", source)
+        self.assertIn(
+            "std::min(resident_leaves, leaves - leaf_base)", source
+        )
+        self.assertIn("leaf_base += wave_leaves", source)
+        self.assertNotIn("leaf_base += resident_leaves", source)
         self.assertIn("TaskInGridZ", source)
         self.assertIn("task_in_grid_z = leaf_tasks <= 65535", source)
         self.assertNotIn("atomicAdd", source)
