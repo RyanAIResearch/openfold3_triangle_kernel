@@ -228,6 +228,26 @@ __global__ __launch_bounds__(kThreads) void stable_triangle_dkdv_v2_kernel(
     __syncthreads();
     if (query_start + kQueryTile < sequence) {
       issue_query_tile(query_start + kQueryTile, buffer ^ 1);
+      // L2 prefetch of the next query tile's zero-reuse bias rows (one
+      // 128B line covers this warp's key span). Pure hint; bitwise-neutral.
+      if (lane < kQueryTile) {
+        const int next_query = query_start + kQueryTile + lane;
+        const int gq = kExact || next_query < sequence
+            ? next_query
+            : sequence - 1;
+        asm volatile(
+            "prefetch.global.L2 [%0];" ::"l"(
+                bias + bias_base +
+                static_cast<int64_t>(gq) * sequence + warp_key));
+        if (lane == 0) {
+          asm volatile(
+              "prefetch.global.L2 [%0];" ::"l"(
+                  logsumexp + stats_base + query_start + kQueryTile));
+          asm volatile(
+              "prefetch.global.L2 [%0];" ::"l"(
+                  delta + stats_base + query_start + kQueryTile));
+        }
+      }
     }
 
     // S^T tile [16 keys x 32 queries]: A = K rows, B = Q dim-pairs.

@@ -264,6 +264,35 @@ __global__ __launch_bounds__(kThreads) void fused_dq_dbias_v9_leaf_kernel(
       }
       __syncwarp();
 
+      // L2 prefetch of the NEXT tile's bias/mask rows. These are the only
+      // zero-reuse global reads in the hot loop (each bias element is read
+      // exactly once), and NCU attributes the dominant long-scoreboard
+      // stalls (4.71/inst) to them. prefetch.global.L2 is a pure hint: no
+      // destination register, no shared memory, no semantic change.
+      if (key_start + 2 * kKeyTile < sequence) {
+        const int next_keys = key_start + 2 * kKeyTile;
+        if (lane == 0) {
+          asm volatile(
+              "prefetch.global.L2 [%0];" ::"l"(mask + mask_base + next_keys));
+        }
+        if (thread_in_group == 0) {
+#pragma unroll
+          for (int sub = 0; sub < kQuerySubTiles; ++sub) {
+#pragma unroll
+            for (int half = 0; half < 2; ++half) {
+              const int row = sub * kQueryTile + group + half * 8;
+              const int gq = FullQueryTiles || query_start + row < query_end
+                  ? row
+                  : 0;
+              asm volatile(
+                  "prefetch.global.L2 [%0];" ::"l"(
+                      bias + bias_base +
+                      static_cast<int64_t>(gq) * sequence + next_keys));
+            }
+          }
+        }
+      }
+
 #pragma unroll
       for (int sub = 0; sub < kQuerySubTiles; ++sub) {
         uint32_t q_frags[HeadDim / 16][4];
