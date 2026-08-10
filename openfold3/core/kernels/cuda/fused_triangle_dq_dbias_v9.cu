@@ -460,6 +460,110 @@ __global__ void fused_dq_dbias_v9_finalize_kernel(
     int query_capacity,
     int wave_leaves,
     bool continue_root) {
+  // Each thread folds a PAIR of adjacent keys in one row so every workspace
+  // read is a 4B bf16x2 and every root access an 8B float2. The per-element
+  // left-associated chain is untouched -- element order, operand order, and
+  // rounding are identical to the scalar version (bitwise-equal).
+  const int pair_columns = (sequence + 1) >> 1;
+  const int64_t total_pairs =
+      (active_elements / sequence) * pair_columns;
+  const int64_t linear =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (linear >= total_pairs) {
+    return;
+  }
+  int64_t remaining = linear;
+  const int pair_column = static_cast<int>(remaining % pair_columns);
+  remaining /= pair_columns;
+  const int query_local = static_cast<int>(remaining % query_rows);
+  remaining /= query_rows;
+  const int head = static_cast<int>(remaining % heads);
+  const int local_batch = static_cast<int>(remaining / heads);
+  if (local_batch >= active_batch) {
+    return;
+  }
+  const int key = pair_column * 2;
+  const bool has_pair = key + 1 < sequence;
+  const int64_t workspace_plane_elements =
+      static_cast<int64_t>(batch_capacity) * heads * query_capacity * sequence;
+  const int64_t workspace_linear =
+      (((static_cast<int64_t>(local_batch) * heads + head) * query_capacity +
+        query_local) *
+           sequence +
+       key);
+  const int64_t output_linear =
+      (((static_cast<int64_t>(batch_base + local_batch) * heads + head) *
+            sequence +
+        query_base + query_local) *
+           sequence +
+       key);
+  float root0;
+  float root1 = 0.0F;
+  if (continue_root) {
+    root0 = out_dbias[output_linear];
+    if (has_pair) {
+      root1 = out_dbias[output_linear + 1];
+    }
+  } else {
+    if (has_pair) {
+      const uint32_t seed = *reinterpret_cast<const uint32_t*>(
+          workspace + workspace_linear);
+      root0 = __bfloat162float(
+          __ushort_as_bfloat16(static_cast<unsigned short>(seed & 0xFFFFU)));
+      root1 = __bfloat162float(
+          __ushort_as_bfloat16(static_cast<unsigned short>(seed >> 16)));
+    } else {
+      root0 = __bfloat162float(workspace[workspace_linear]);
+    }
+  }
+  const int first_leaf = continue_root ? 0 : 1;
+#pragma unroll 1
+  for (int leaf = first_leaf; leaf < wave_leaves; ++leaf) {
+    const int64_t offset =
+        static_cast<int64_t>(leaf) * workspace_plane_elements +
+        workspace_linear;
+    if (has_pair) {
+      const uint32_t packed =
+          *reinterpret_cast<const uint32_t*>(workspace + offset);
+      root0 = __fadd_rn(
+          root0,
+          __bfloat162float(__ushort_as_bfloat16(
+              static_cast<unsigned short>(packed & 0xFFFFU))));
+      root1 = __fadd_rn(
+          root1,
+          __bfloat162float(
+              __ushort_as_bfloat16(static_cast<unsigned short>(packed >> 16))));
+    } else {
+      root0 = __fadd_rn(root0, __bfloat162float(workspace[offset]));
+    }
+  }
+  if (has_pair) {
+    *reinterpret_cast<float2*>(out_dbias + output_linear) =
+        make_float2(root0, root1);
+  } else {
+    out_dbias[output_linear] = root0;
+  }
+}
+
+// Scalar finalize lane for ODD sequences: with an odd N the row
+// bases (…)*sequence alternate parity, so the paired bf16x2/float2
+// accesses of the vector lane would be misaligned (measured
+// cudaErrorMisalignedAddress at N=255). Values and fold order are
+// identical in both lanes.
+__global__ void fused_dq_dbias_v9_finalize_scalar_kernel(
+    const __nv_bfloat16* __restrict__ workspace,
+    float* __restrict__ out_dbias,
+    int64_t active_elements,
+    int sequence,
+    int heads,
+    int batch_base,
+    int active_batch,
+    int batch_capacity,
+    int query_base,
+    int query_rows,
+    int query_capacity,
+    int wave_leaves,
+    bool continue_root) {
   const int64_t linear =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (linear >= active_elements) {
@@ -646,8 +750,13 @@ void launch(
           active_elements, query_rows, "active dBias slab");
       active_elements = checked_positive_product(
           active_elements, sequence, "active dBias slab");
+      const bool finalize_vector_lane = (sequence % 2) == 0;
+      const int64_t finalize_tasks = finalize_vector_lane
+          ? (active_elements / sequence) *
+              (static_cast<int64_t>(sequence) / 2)
+          : active_elements;
       const int64_t finalize_blocks =
-          positive_ceil_div(active_elements, finalize_threads);
+          positive_ceil_div(finalize_tasks, finalize_threads);
       TORCH_CHECK(
           finalize_blocks > 0 && finalize_blocks <= 2147483647LL,
           "dBias slab finalizer exceeds the CUDA grid-x contract");
@@ -712,24 +821,45 @@ void launch(
 #undef LAUNCH_DQ_DBIAS_LEAF
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess, "v9 slab leaf launch failed");
-        fused_dq_dbias_v9_finalize_kernel
-            <<<static_cast<unsigned int>(finalize_blocks),
-               finalize_threads,
-               0,
-               stream>>>(
-                reinterpret_cast<const __nv_bfloat16*>(workspace.data_ptr()),
-                out_dbias.data_ptr<float>(),
-                active_elements,
-                sequence,
-                heads,
-                batch_base,
-                active_batch,
-                batch_chunk,
-                query_base,
-                query_rows,
-                query_span,
-                wave_leaves,
-                leaf_base != 0);
+        if (finalize_vector_lane) {
+          fused_dq_dbias_v9_finalize_kernel
+              <<<static_cast<unsigned int>(finalize_blocks),
+                 finalize_threads,
+                 0,
+                 stream>>>(
+                  reinterpret_cast<const __nv_bfloat16*>(workspace.data_ptr()),
+                  out_dbias.data_ptr<float>(),
+                  active_elements,
+                  sequence,
+                  heads,
+                  batch_base,
+                  active_batch,
+                  batch_chunk,
+                  query_base,
+                  query_rows,
+                  query_span,
+                  wave_leaves,
+                  leaf_base != 0);
+        } else {
+          fused_dq_dbias_v9_finalize_scalar_kernel
+              <<<static_cast<unsigned int>(finalize_blocks),
+                 finalize_threads,
+                 0,
+                 stream>>>(
+                  reinterpret_cast<const __nv_bfloat16*>(workspace.data_ptr()),
+                  out_dbias.data_ptr<float>(),
+                  active_elements,
+                  sequence,
+                  heads,
+                  batch_base,
+                  active_batch,
+                  batch_chunk,
+                  query_base,
+                  query_rows,
+                  query_span,
+                  wave_leaves,
+                  leaf_base != 0);
+        }
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
             "v9 slab finalizer launch failed");
