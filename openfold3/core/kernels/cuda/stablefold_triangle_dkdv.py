@@ -28,10 +28,23 @@ def load_extension(*, verbose: bool | None = None) -> Any:
             module_key="stablefold_dkdv",
             aot_module="openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
             source=Path(__file__).with_suffix(".cu"),
-            expected_symbols=("stablefold_triangle_dkdv_out",),
+            expected_symbols=(
+                "stablefold_triangle_dkdv_out",
+                "stablefold_triangle_dkdv_delta_true_out",
+            ),
             verbose=bool(verbose),
         )
     return _EXTENSION
+
+
+_KEY_BLOCK = 64
+
+
+def delta_true_partial_elements(sequence: int, heads: int, batch: int) -> int:
+    """FP32 element count of the [rows, key_blocks, {T,Z}] workspace."""
+
+    key_blocks = (sequence + _KEY_BLOCK - 1) // _KEY_BLOCK
+    return batch * sequence * heads * sequence * key_blocks * 2
 
 
 def stablefold_triangle_dkdv(
@@ -46,13 +59,56 @@ def stablefold_triangle_dkdv(
     *,
     out_dk: torch.Tensor | None = None,
     out_dv: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    emit_delta_true: bool = False,
+    delta_true_partials: torch.Tensor | None = None,
+    out_delta_true: torch.Tensor | None = None,
+) -> (
+    tuple[torch.Tensor, torch.Tensor]
+    | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+):
+    """dK/dV; optionally also the consistent delta_true = sum_k P_k dP_k.
+
+    With ``emit_delta_true`` the kernel additionally folds the row scalars
+    T = sum_k w dP and Z = sum_k w per key block (fixed order, single
+    writer, zero atomics) and a follow-up reduce produces
+    ``delta_true = T/Z`` in the lse/delta row layout. dK/dV bits are
+    identical in both modes.
+    """
+
     if out_dk is None:
         out_dk = torch.empty_like(q)
     if out_dv is None:
         out_dv = torch.empty_like(q)
+    if not emit_delta_true:
+        with torch.cuda.device(q.device), torch.no_grad():
+            load_extension().stablefold_triangle_dkdv_out(
+                q,
+                k,
+                v,
+                d_output,
+                logsumexp.reshape(-1).contiguous(),
+                delta.reshape(-1).contiguous(),
+                mask,
+                pair_bias,
+                out_dk,
+                out_dv,
+            )
+        return out_dk, out_dv
+    batch, sequence, heads = int(q.shape[0]), int(q.shape[1]), int(q.shape[2])
+    required = delta_true_partial_elements(sequence, heads, batch)
+    if delta_true_partials is None:
+        delta_true_partials = torch.empty(
+            required, device=q.device, dtype=torch.float32
+        )
+    elif delta_true_partials.numel() < required:
+        raise ValueError(
+            f"delta_true_partials has {delta_true_partials.numel()} elements, "
+            f"but this shape requires {required}"
+        )
+    if out_delta_true is None:
+        out_delta_true = torch.empty_like(logsumexp)
     with torch.cuda.device(q.device), torch.no_grad():
-        load_extension().stablefold_triangle_dkdv_out(
+        load_extension().stablefold_triangle_dkdv_delta_true_out(
             q,
             k,
             v,
@@ -63,8 +119,15 @@ def stablefold_triangle_dkdv(
             pair_bias,
             out_dk,
             out_dv,
+            delta_true_partials,
+            out_delta_true.reshape(-1),
         )
-    return out_dk, out_dv
+    return out_dk, out_dv, out_delta_true
 
 
-__all__ = ["stablefold_triangle_dkdv", "load_extension", "source_sha256"]
+__all__ = [
+    "stablefold_triangle_dkdv",
+    "delta_true_partial_elements",
+    "load_extension",
+    "source_sha256",
+]

@@ -187,11 +187,28 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
                 stablefold_triangle_dkdv as dkdv,
             )
 
-            d_k, d_v = dkdv(
-                q, k, v, d_output, lse, delta, mask, expanded_bias
-            )
+            # Both head dims recover the mathematically consistent
+            # delta_true = sum_k P_k dP_k for dQ, which removes the coherent
+            # row-constant dQ bias of delta = dO . O_bf16 (dQ rel-L2 drops
+            # to the perfect-delta oracle bound). D32 folds the row scalars
+            # in the dK/dV pass (its dQ/dBias recompute then consumes
+            # delta_true directly, improving dBias as well); D16 corrects
+            # dQ in place inside the dQ/dBias kernel via the shifted
+            # covariance form, keeping its dBias bitwise-unchanged. dK/dV
+            # bits are identical to the classical path in both modes.
+            head_dim = int(q.shape[-1])
+            if head_dim == 16:
+                d_k, d_v = dkdv(
+                    q, k, v, d_output, lse, delta, mask, expanded_bias
+                )
+                dq_delta = delta
+            else:
+                d_k, d_v, dq_delta = dkdv(
+                    q, k, v, d_output, lse, delta, mask, expanded_bias,
+                    emit_delta_true=True,
+                )
             d_q, per_batch_dbias = stablefold_triangle_dq_dbias(
-                q, k, v, d_output, lse, delta, mask, expanded_bias
+                q, k, v, d_output, lse, dq_delta, mask, expanded_bias
             )
             if ctx.bias_prefix == ctx.target_prefix:
                 # The reduction is the identity when the bias already has the

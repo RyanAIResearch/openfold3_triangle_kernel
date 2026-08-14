@@ -120,6 +120,26 @@ __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
       (static_cast<uint32_t>(__bfloat16_as_ushort(h)) << 16);
 }
 
+// Pure L2 warmup for zero-reuse operands of the next tile; values and
+// ordering are untouched, so results stay bitwise-identical.
+__device__ __forceinline__ void prefetch_l2(const void* pointer) {
+  asm volatile("prefetch.global.L2 [%0];" ::"l"(pointer));
+}
+
+__device__ __forceinline__ float2 unpack_bf16_pair(uint32_t packed) {
+  const __nv_bfloat162 pair =
+      *reinterpret_cast<const __nv_bfloat162*>(&packed);
+  return make_float2(__bfloat162float(pair.x), __bfloat162float(pair.y));
+}
+
+// Fixed two-level XOR tree over the four accumulator lanes of one MMA row
+// group. Same shuffle-tree ordering discipline as the forward kernel.
+__device__ __forceinline__ float quad_sum(float value) {
+  value += __shfl_xor_sync(0xFFFFFFFFU, value, 1, kWarpSize);
+  value += __shfl_xor_sync(0xFFFFFFFFU, value, 2, kWarpSize);
+  return value;
+}
+
 template <
     int HeadDim,
     int StaticSequence,
@@ -238,12 +258,32 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
       }
     }
 
+    // D16 lanes correct dQ in place with the shifted-covariance form
+    // dQ = scale * (A'/Z - (T'/Z) * (M/Z)) around the external delta as
+    // centering constant (A' = dS@K stays the production accumulation, so
+    // the dS values that feed dBias are untouched). D32 lanes consume the
+    // dkdv-emitted delta_true instead and compile none of this state.
+    constexpr bool kCovariance = HeadDim == 16;
     Acc dq_acc[kQuerySubTiles][HeadDim / 8];
+    uint32_t m_acc[kQuerySubTiles][HeadDim / 8][2];
+    float z_acc[kQuerySubTiles][2];
+    float t_acc[kQuerySubTiles][2];
 #pragma unroll
     for (int sub = 0; sub < kQuerySubTiles; ++sub) {
 #pragma unroll
       for (int tile = 0; tile < HeadDim / 8; ++tile) {
         dq_acc[sub][tile] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+        if constexpr (kCovariance) {
+          m_acc[sub][tile][0] = 0U;
+          m_acc[sub][tile][1] = 0U;
+        }
+      }
+      if constexpr (kCovariance) {
+#pragma unroll
+        for (int half = 0; half < 2; ++half) {
+          z_acc[sub][half] = 0.0F;
+          t_acc[sub][half] = 0.0F;
+        }
       }
     }
 
@@ -263,6 +303,23 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
         my_v[row * kKVStride + col] = v[src];
       }
       __syncwarp();
+
+      // Warm the next key tile's zero-reuse bias rows (CTA-shared, warp 0)
+      // and this outer's mask segment (per warp) in L2.
+      if (key_start + kKeyTile < sequence) {
+        const int next_key_start = key_start + kKeyTile;
+        if (warp == 0) {
+          const int row = lane;
+          if (FullQueryTiles || query_start + row < query_end) {
+            prefetch_l2(
+                bias + bias_base +
+                static_cast<int64_t>(row) * sequence + next_key_start);
+          }
+        }
+        if (lane == 0 && outer_valid) {
+          prefetch_l2(mask + mask_base + next_key_start);
+        }
+      }
 
 #pragma unroll
       for (int sub = 0; sub < kQuerySubTiles; ++sub) {
@@ -310,6 +367,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
                   query_start + sub * kQueryTile + group + half * 8;
               const int index = half * 2 + pair;
               float d_score = 0.0F;
+              float probability = 0.0F;
               if ((kSequenceExact || (outer_valid && key < sequence)) &&
                   (FullQueryTiles || qrow < query_end)) {
                 const float value = score[column].v[index] * scale +
@@ -320,13 +378,20 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
                                  sub * kQueryTile + group + half * 8) *
                                  sequence +
                              key]);
-                const float probability =
+                probability =
                     lse == -std::numeric_limits<float>::infinity()
                     ? 0.0F
                     : __expf(value - lse);
                 d_score = probability * (dp[column].v[index] - dlt);
               }
               score[column].v[index] = d_score;
+              if constexpr (kCovariance) {
+                // dp is dead after d_score; reuse it to stage w for the
+                // M fragment pack. Invalid pairs contribute exact zeros.
+                dp[column].v[index] = probability;
+                z_acc[sub][half] += probability;
+                t_acc[sub][half] += d_score;
+              }
               my_bias_tile[(sub * kQueryTile + group + half * 8) * kKeyTile +
                            column * 8 + thread_in_group * 2 + pair] =
                   d_score;
@@ -334,6 +399,13 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
           }
         }
 
+        Acc m_tile[HeadDim / 8];
+        if constexpr (kCovariance) {
+#pragma unroll
+          for (int tile = 0; tile < HeadDim / 8; ++tile) {
+            m_tile[tile] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+          }
+        }
 #pragma unroll
         for (int chunk = 0; chunk < kKeyTile / 16; ++chunk) {
           uint32_t ds_frag[4];
@@ -345,12 +417,41 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
               score[chunk * 2 + 1].v[0], score[chunk * 2 + 1].v[1]);
           ds_frag[3] = pack_bf16_pair(
               score[chunk * 2 + 1].v[2], score[chunk * 2 + 1].v[3]);
+          uint32_t w_frag[4];
+          if constexpr (kCovariance) {
+            w_frag[0] = pack_bf16_pair(
+                dp[chunk * 2].v[0], dp[chunk * 2].v[1]);
+            w_frag[1] = pack_bf16_pair(
+                dp[chunk * 2].v[2], dp[chunk * 2].v[3]);
+            w_frag[2] = pack_bf16_pair(
+                dp[chunk * 2 + 1].v[0], dp[chunk * 2 + 1].v[1]);
+            w_frag[3] = pack_bf16_pair(
+                dp[chunk * 2 + 1].v[2], dp[chunk * 2 + 1].v[3]);
+          }
 #pragma unroll
           for (int tile = 0; tile < HeadDim / 8; ++tile) {
             uint32_t k_frag[2];
             ldmatrix_b_keytrans(
                 my_k, kKVStride, chunk * 16, tile * 8, lane, k_frag);
             mma_m16n8k16(dq_acc[sub][tile], ds_frag, k_frag);
+            if constexpr (kCovariance) {
+              mma_m16n8k16(m_tile[tile], w_frag, k_frag);
+            }
+          }
+        }
+        if constexpr (kCovariance) {
+          // One RN fold of this key tile's FP32 M partial into the BF16
+          // carry, in fixed ascending key-tile order.
+#pragma unroll
+          for (int tile = 0; tile < HeadDim / 8; ++tile) {
+#pragma unroll
+            for (int half = 0; half < 2; ++half) {
+              const float2 carry =
+                  unpack_bf16_pair(m_acc[sub][tile][half]);
+              m_acc[sub][tile][half] = pack_bf16_pair(
+                  carry.x + m_tile[tile].v[half * 2],
+                  carry.y + m_tile[tile].v[half * 2 + 1]);
+            }
           }
         }
       }
@@ -387,10 +488,27 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
       __syncthreads();
     }
 
-    // dQ epilogue for this warp's outer: scale once, store BF16.
+    // dQ epilogue for this warp's outer: scale once, store BF16. The
+    // covariance lanes first fold the quad row scalars with the fixed
+    // shuffle tree and apply dQ = (A' - (T'/Z) * M) / Z; fully masked
+    // rows have Z == 0 and store exact zeros, as before.
     const int64_t dq_row_base = tensor_base +
         static_cast<int64_t>(query_start) * HeadDim;
     if (kSequenceExact || outer_valid) {
+      float inv_z[kQuerySubTiles][2];
+      float t_over_z[kQuerySubTiles][2];
+      if constexpr (kCovariance) {
+#pragma unroll
+        for (int sub = 0; sub < kQuerySubTiles; ++sub) {
+#pragma unroll
+          for (int half = 0; half < 2; ++half) {
+            const float z = quad_sum(z_acc[sub][half]);
+            const float inverse = z == 0.0F ? 0.0F : 1.0F / z;
+            inv_z[sub][half] = inverse;
+            t_over_z[sub][half] = quad_sum(t_acc[sub][half]) * inverse;
+          }
+        }
+      }
 #pragma unroll
       for (int sub = 0; sub < kQuerySubTiles; ++sub) {
 #pragma unroll
@@ -402,13 +520,22 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
               continue;
             }
             const int column = tile * 8 + thread_in_group * 2;
+            float low = dq_acc[sub][tile].v[half * 2];
+            float high = dq_acc[sub][tile].v[half * 2 + 1];
+            if constexpr (kCovariance) {
+              const float2 m_pair =
+                  unpack_bf16_pair(m_acc[sub][tile][half]);
+              low = (low - t_over_z[sub][half] * m_pair.x) *
+                  inv_z[sub][half];
+              high = (high - t_over_z[sub][half] * m_pair.y) *
+                  inv_z[sub][half];
+            }
             out_dq[dq_row_base + static_cast<int64_t>(row) * HeadDim +
                    column] =
-                __float2bfloat16_rn(dq_acc[sub][tile].v[half * 2] * scale);
+                __float2bfloat16_rn(low * scale);
             out_dq[dq_row_base + static_cast<int64_t>(row) * HeadDim +
                    column + 1] =
-                __float2bfloat16_rn(
-                    dq_acc[sub][tile].v[half * 2 + 1] * scale);
+                __float2bfloat16_rn(high * scale);
           }
         }
       }
@@ -416,7 +543,11 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
   }
 }
 
-// dbias[h,q,k] = ((plane0 + plane1) + plane2) + ... in leaf order.
+// dbias[h,q,k] = ((plane0 + plane1) + plane2) + ... in leaf order. The
+// paired lane folds two adjacent keys per thread with bf16x2/float2
+// transport (identical per-element adds and rounding); odd sequences keep
+// the scalar lane.
+template <bool PairedKeys>
 __global__ void stablefold_dq_dbias_finalize_kernel(
     const __nv_bfloat16* __restrict__ workspace,
     float* __restrict__ out_dbias,
@@ -431,8 +562,10 @@ __global__ void stablefold_dq_dbias_finalize_kernel(
     int query_capacity,
     int wave_leaves,
     bool continue_root) {
+  constexpr int kKeysPerThread = PairedKeys ? 2 : 1;
   const int64_t linear =
-      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+      (static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x) *
+      kKeysPerThread;
   if (linear >= active_elements) {
     return;
   }
@@ -459,19 +592,38 @@ __global__ void stablefold_dq_dbias_finalize_kernel(
         query_base + query_local) *
            sequence +
        key);
-  float root = continue_root
-      ? out_dbias[output_linear]
-      : __bfloat162float(workspace[workspace_linear]);
-  const int first_leaf = continue_root ? 0 : 1;
+  if constexpr (PairedKeys) {
+    float2 root = continue_root
+        ? *reinterpret_cast<const float2*>(out_dbias + output_linear)
+        : unpack_bf16_pair(*reinterpret_cast<const uint32_t*>(
+              workspace + workspace_linear));
+    const int first_leaf = continue_root ? 0 : 1;
 #pragma unroll 1
-  for (int leaf = first_leaf; leaf < wave_leaves; ++leaf) {
-    root = __fadd_rn(
-        root,
-        __bfloat162float(
-            workspace[static_cast<int64_t>(leaf) * workspace_plane_elements +
-                      workspace_linear]));
+    for (int leaf = first_leaf; leaf < wave_leaves; ++leaf) {
+      const float2 plane = unpack_bf16_pair(
+          *reinterpret_cast<const uint32_t*>(
+              workspace +
+              static_cast<int64_t>(leaf) * workspace_plane_elements +
+              workspace_linear));
+      root.x = __fadd_rn(root.x, plane.x);
+      root.y = __fadd_rn(root.y, plane.y);
+    }
+    *reinterpret_cast<float2*>(out_dbias + output_linear) = root;
+  } else {
+    float root = continue_root
+        ? out_dbias[output_linear]
+        : __bfloat162float(workspace[workspace_linear]);
+    const int first_leaf = continue_root ? 0 : 1;
+#pragma unroll 1
+    for (int leaf = first_leaf; leaf < wave_leaves; ++leaf) {
+      root = __fadd_rn(
+          root,
+          __bfloat162float(
+              workspace[static_cast<int64_t>(leaf) * workspace_plane_elements +
+                        workspace_linear]));
+    }
+    out_dbias[output_linear] = root;
   }
-  out_dbias[output_linear] = root;
 }
 
 // Reduce the public per-batch BF16 gradient in flattened batch order. Every
@@ -617,8 +769,11 @@ void launch(
           active_elements, query_rows, "active dBias slab");
       active_elements = checked_positive_product(
           active_elements, sequence, "active dBias slab");
-      const int64_t finalize_blocks =
-          positive_ceil_div(active_elements, finalize_threads);
+      const bool paired_finalize = sequence % 2 == 0;
+      const int64_t finalize_blocks = positive_ceil_div(
+          active_elements,
+          static_cast<int64_t>(finalize_threads) *
+              (paired_finalize ? 2 : 1));
       TORCH_CHECK(
           finalize_blocks > 0 && finalize_blocks <= 2147483647LL,
           "dBias slab finalizer exceeds the CUDA grid-x contract");
@@ -684,24 +839,31 @@ void launch(
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
             "StableFold dQ/dBias slab leaf launch failed");
-        stablefold_dq_dbias_finalize_kernel
-            <<<static_cast<unsigned int>(finalize_blocks),
-               finalize_threads,
-               0,
-               stream>>>(
-                reinterpret_cast<const __nv_bfloat16*>(workspace.data_ptr()),
-                out_dbias.data_ptr<float>(),
-                active_elements,
-                sequence,
-                heads,
-                batch_base,
-                active_batch,
-                batch_chunk,
-                query_base,
-                query_rows,
-                query_span,
-                wave_leaves,
-                leaf_base != 0);
+#define LAUNCH_DQ_DBIAS_FINALIZE(Paired)                                    \
+  stablefold_dq_dbias_finalize_kernel<Paired>                               \
+      <<<static_cast<unsigned int>(finalize_blocks),                        \
+         finalize_threads,                                                  \
+         0,                                                                 \
+         stream>>>(                                                         \
+          reinterpret_cast<const __nv_bfloat16*>(workspace.data_ptr()),     \
+          out_dbias.data_ptr<float>(),                                      \
+          active_elements,                                                  \
+          sequence,                                                         \
+          heads,                                                            \
+          batch_base,                                                       \
+          active_batch,                                                     \
+          batch_chunk,                                                      \
+          query_base,                                                       \
+          query_rows,                                                       \
+          query_span,                                                       \
+          wave_leaves,                                                      \
+          leaf_base != 0)
+        if (paired_finalize) {
+          LAUNCH_DQ_DBIAS_FINALIZE(true);
+        } else {
+          LAUNCH_DQ_DBIAS_FINALIZE(false);
+        }
+#undef LAUNCH_DQ_DBIAS_FINALIZE
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
             "StableFold dQ/dBias slab finalizer launch failed");
