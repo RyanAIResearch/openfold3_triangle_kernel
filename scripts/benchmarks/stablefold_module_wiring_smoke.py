@@ -42,6 +42,11 @@ def max_abs(a, b):
     return (a.float() - b.float()).abs().max().item()
 
 
+def rel_l2(a, b):
+    ref = a.float()
+    return (b.float() - ref).norm().item() / max(ref.norm().item(), 1e-12)
+
+
 def build(c_in, c_hidden, heads, seed):
     torch.manual_seed(seed)
     module = (
@@ -133,10 +138,28 @@ def case(label, c_in, c_hidden, heads, n, seed, bitwise_required,
         max_abs(stock["grads"][key], stable["grads"][key])
         for key in stock["grads"]
     )
-    passed = replay_bad == 0 and out_gap < 0.1 and x_gap < 0.1
+    # Param-grad gate, calibrated 2026-08-14 (4 cases x 10 seeds, healthy
+    # build): worst per-param rel-L2 spans 1.6e-2..8.4e-2 (median 3.9e-2),
+    # already including the known ~1e-2-scale dQ delta mismatch.  The
+    # absolute max-abs gap is un-gateable — healthy values are 1-2 bf16
+    # ulps at large accumulated magnitudes (0.125..1.0), the same range
+    # the 79fc8d3f routing bug printed unmonitored — so the gate uses
+    # rel-L2 at 0.25: ~3x above the worst healthy sample, >=2x below a
+    # temperature-scale error (rel gap ~0.5+).
+    grad_rel_gap = max(
+        rel_l2(stock["grads"][key], stable["grads"][key])
+        for key in stock["grads"]
+    )
+    passed = (
+        replay_bad == 0
+        and out_gap < 0.1
+        and x_gap < 0.1
+        and grad_rel_gap < 0.25
+    )
     print(
         f"{label}: out_gap={out_gap:.2e} x_grad_gap={x_gap:.2e} "
-        f"param_grad_gap={grad_gap:.2e} replay_bad={replay_bad} "
+        f"param_grad_gap={grad_gap:.2e} "
+        f"param_grad_rel_l2={grad_rel_gap:.2e} replay_bad={replay_bad} "
         f"passed={passed}"
     )
     return passed
