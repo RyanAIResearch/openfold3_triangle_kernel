@@ -200,11 +200,13 @@ class OpenFold3(nn.Module):
         )
 
         if use_stable_triangle_attention:
+            # use_cueq_triangle_kernels composes: it keeps accelerating the
+            # non-attention triangle kernels (multiplicative update) while
+            # stable Triangle Attention owns the attention site.
             conflicting_backends = [
                 name
                 for name in (
                     "use_deepspeed_evo_attention",
-                    "use_cueq_triangle_kernels",
                     "use_triton_triangle_kernels",
                     "use_lma",
                 )
