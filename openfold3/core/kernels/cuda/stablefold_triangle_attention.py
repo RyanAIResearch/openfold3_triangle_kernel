@@ -32,6 +32,11 @@ _MAX_BROADCAST_PREFIX_RANK = 16
 _FORWARD: Any = None
 _DELTA: Any = None
 _INVOCATIONS = 0
+# Metadata-only support verdicts, keyed by the tensors' full metadata.
+# Training re-issues a handful of shapes hundreds of times per step, so the
+# ~30-check validator collapses to one dict probe on the hot path.
+_SUPPORT_CACHE: dict = {}
+_SUPPORT_CACHE_LIMIT = 4096
 
 
 def invocation_count() -> int:
@@ -68,8 +73,39 @@ def is_stablefold_supported(
     res_mask: torch.Tensor,
     pair_bias: torch.Tensor,
 ) -> tuple[bool, str]:
-    """Metadata-only support check for the StableFold path."""
+    """Metadata-only support check for the StableFold path (memoized)."""
 
+    try:
+        key = tuple(
+            (
+                tuple(tensor.shape),
+                tensor.dtype,
+                tensor.device,
+                tensor.requires_grad,
+            )
+            for tensor in (q, k, v, res_mask, pair_bias)
+        )
+    except AttributeError:
+        key = None
+    if key is not None:
+        cached = _SUPPORT_CACHE.get(key)
+        if cached is not None:
+            return cached
+    verdict = _is_stablefold_supported_uncached(q, k, v, res_mask, pair_bias)
+    if key is not None:
+        if len(_SUPPORT_CACHE) >= _SUPPORT_CACHE_LIMIT:
+            _SUPPORT_CACHE.clear()
+        _SUPPORT_CACHE[key] = verdict
+    return verdict
+
+
+def _is_stablefold_supported_uncached(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    res_mask: torch.Tensor,
+    pair_bias: torch.Tensor,
+) -> tuple[bool, str]:
     named = {
         "q": q,
         "k": k,
@@ -173,9 +209,15 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, d_output):  # noqa: D102
+        # Module-level lazy siblings: importing them binds no CUDA state (the
+        # extensions load on first use), and hoisting keeps the per-call
+        # backward free of import-machinery overhead.
         from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
             stablefold_reduce_broadcast_dbias,
             stablefold_triangle_dq_dbias,
+        )
+        from openfold3.core.kernels.cuda.stablefold_triangle_dkdv import (
+            stablefold_triangle_dkdv as dkdv,
         )
 
         q, k, v, mask, expanded_bias, out, lse = ctx.saved_tensors
@@ -187,10 +229,6 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
             # arithmetic contract as the StableFold forward. The older resident
             # fast lane reconstructs scores using an AQLab-style pre-scaled BF16 K
             # path, so it is intentionally not part of the production facade.
-            from openfold3.core.kernels.cuda.stablefold_triangle_dkdv import (
-                stablefold_triangle_dkdv as dkdv,
-            )
-
             # Both head dims recover the mathematically consistent
             # delta_true = sum_k P_k dP_k in the dK/dV pass and feed it to
             # the dQ/dBias recompute: this removes the coherent row-constant

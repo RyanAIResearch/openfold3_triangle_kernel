@@ -460,19 +460,12 @@ class Attention(nn.Module):
             # Keep CPU imports and every default/official backend independent of
             # the research extension. Explicit selection is fail-closed: import,
             # build, support, launch, and backward failures propagate unchanged.
+            # The facade validates (memoized) and raises on unsupported cases,
+            # so no separate pre-check runs on this hot path.
             from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E501
-                is_stablefold_supported,
                 stablefold_triangle_attention,
             )
 
-            stablefold_ok, stablefold_reason = is_stablefold_supported(
-                q, k, v, biases[0], biases[1]
-            )
-            if not stablefold_ok:
-                raise ValueError(
-                    "unsupported StableFold Triangle Attention case: "
-                    f"{stablefold_reason}"
-                )
             # Deterministic StableFold backend: raw q, internal scaling,
             # replay-bitwise vs itself, zero FP atomics. Explicit selection is
             # fail-closed and never silently substitutes the aligned backend.
