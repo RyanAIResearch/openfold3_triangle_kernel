@@ -198,6 +198,9 @@ class OpenFold3(nn.Module):
         use_stable_triangle_attention = bool(
             mode_mem_settings.get("use_stable_triangle_attention", False)
         )
+        use_stable_triangle_multiplicative = bool(
+            mode_mem_settings.get("use_stable_triangle_multiplicative", False)
+        )
 
         if use_stable_triangle_attention:
             # use_cueq_triangle_kernels composes: it keeps accelerating the
@@ -285,6 +288,7 @@ class OpenFold3(nn.Module):
                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                         use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
                         use_stable_triangle_attention=use_stable_triangle_attention,
+                        use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                         use_lma=mode_mem_settings.use_lma,
                         inplace_safe=inplace_safe,
                         offload_inference=offload_template_module,
@@ -334,6 +338,7 @@ class OpenFold3(nn.Module):
                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                         use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
                         use_stable_triangle_attention=use_stable_triangle_attention,
+                        use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                         use_lma=mode_mem_settings.use_lma,
                         inplace_safe=inplace_safe,
                         _mask_trans=True,
@@ -352,6 +357,7 @@ class OpenFold3(nn.Module):
                     use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                     use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
                     use_stable_triangle_attention=use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                     use_lma=mode_mem_settings.use_lma,
                     inplace_safe=inplace_safe,
                     _mask_trans=True,
