@@ -203,8 +203,10 @@ __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
-          bool EmitDeltaTrue, bool OuterEqSeq>
+          bool EmitDeltaTrue, bool OuterEqSeq, bool TmaQdo>
 __device__ __forceinline__ void stablefold_triangle_dkdv_body(
+    const CUtensorMap* q_map,
+    const CUtensorMap* do_map,
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -231,6 +233,9 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       StaticSequence > 0 ? StaticSequence : runtime_sequence;
   constexpr bool kExact = StaticSequence != 0;
   constexpr int kStride = HeadDim + 8;
+  // TMA lane stages COMPACT swizzled q/dO tiles (stride == HeadDim);
+  // the cp.async lane keeps the padded stride.
+  constexpr int kQdoStride = TmaQdo ? HeadDim : kStride;
   const int tid = threadIdx.x;
   const int lane = tid & (kWarpSize - 1);
   const int warp = tid / kWarpSize;
@@ -249,15 +254,16 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
   const int head = blockIdx.y;
   const int warp_key = key_block_start + warp * kKeyRowsPerWarp;
 
-  extern __shared__ __align__(16) unsigned char smem_raw[];
+  extern __shared__ __align__(1024) unsigned char smem_raw[];
   // Per-warp K and V slices [16 x D]; shared Q and dO tiles [32 x D].
   __nv_bfloat16* sk = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
       warp * kKeyRowsPerWarp * kStride;
   __nv_bfloat16* sv = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
       kKeyBlock * kStride + warp * kKeyRowsPerWarp * kStride;
+  __shared__ __align__(8) uint64_t qdo_barriers[2];
   __nv_bfloat16* q_buffers = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
       2 * kKeyBlock * kStride;
-  constexpr int kQBufferElements = 2 * kQueryTile * kStride;  // q + do
+  constexpr int kQBufferElements = 2 * kQueryTile * kQdoStride;  // q + do
   // Parity-double-buffered [warp][query][group] staging for the delta-true
   // row scalar T = sum_k w_k * dP_k. The Z = sum_k w_k plane is dropped:
   // Z == 1 +- 1.3e-6 on the real capture (LSE comes from the same score
@@ -356,7 +362,22 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       HeadDim * static_cast<int>(sizeof(__nv_bfloat16)) / 16;
   const auto issue_query_tile = [&](int query_start, int buffer) {
     __nv_bfloat16* bq = q_buffers + buffer * kQBufferElements;
-    __nv_bfloat16* bdo = bq + kQueryTile * kStride;
+    __nv_bfloat16* bdo = bq + kQueryTile * kQdoStride;
+    if constexpr (TmaQdo) {
+      if (tid == 0) {
+        dkdv_mbarrier_expect_tx(
+            &qdo_barriers[buffer],
+            2 * kQueryTile * HeadDim *
+                static_cast<int>(sizeof(__nv_bfloat16)));
+        dkdv_tma_load_3d(
+            q_map, bq, &qdo_barriers[buffer], query_start,
+            static_cast<int>(plane * heads + head));
+        dkdv_tma_load_4d(
+            do_map, bdo, &qdo_barriers[buffer], head, query_start,
+            static_cast<int>(plane));
+      }
+      return;
+    }
     for (int chunk = tid; chunk < kQueryTile * kChunksPerRow;
          chunk += kThreads) {
       const int row = chunk / kChunksPerRow;
@@ -380,15 +401,31 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     }
     cp_async_commit_group();
   };
+  if constexpr (TmaQdo) {
+    if (tid == 0) {
+      dkdv_mbarrier_init(&qdo_barriers[0], 1);
+      dkdv_mbarrier_init(&qdo_barriers[1], 1);
+    }
+    __syncthreads();  // barrier-init visibility before the first issue
+  }
   issue_query_tile(0, 0);
 #pragma unroll 1
   for (int query_start = 0; query_start < sequence;
        query_start += kQueryTile) {
-    const int buffer = (query_start / kQueryTile) & 1;
+    const int tile_index = query_start / kQueryTile;
+    const int buffer = tile_index & 1;
     __nv_bfloat16* sq = q_buffers + buffer * kQBufferElements;
-    __nv_bfloat16* sdo = sq + kQueryTile * kStride;
-    cp_async_wait_all();
-    __syncthreads();
+    __nv_bfloat16* sdo = sq + kQueryTile * kQdoStride;
+    if constexpr (TmaQdo) {
+      dkdv_mbarrier_wait_parity(
+          &qdo_barriers[buffer],
+          static_cast<uint32_t>((tile_index >> 1) & 1));
+      dkdv_proxy_fence();
+      __syncthreads();
+    } else {
+      cp_async_wait_all();
+      __syncthreads();
+    }
     if (query_start + kQueryTile < sequence) {
       issue_query_tile(query_start + kQueryTile, buffer ^ 1);
     }
@@ -423,11 +460,21 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
 #pragma unroll
       for (int chain = 0; chain < HeadDim / 16; ++chain) {
         uint32_t b_frag[2];
-        ldmatrix_b_dimpair(
-            sq, kStride, column * 8, chain * 16, lane, b_frag);
+        if constexpr (TmaQdo) {
+          ldmatrix_b_dimpair_sw<HeadDim>(
+              sq, column * 8, chain * 16, lane, b_frag);
+        } else {
+          ldmatrix_b_dimpair(
+              sq, kStride, column * 8, chain * 16, lane, b_frag);
+        }
         mma_m16n8k16(score[column], k_frags[chain], b_frag);
-        ldmatrix_b_dimpair(
-            sdo, kStride, column * 8, chain * 16, lane, b_frag);
+        if constexpr (TmaQdo) {
+          ldmatrix_b_dimpair_sw<HeadDim>(
+              sdo, column * 8, chain * 16, lane, b_frag);
+        } else {
+          ldmatrix_b_dimpair(
+              sdo, kStride, column * 8, chain * 16, lane, b_frag);
+        }
         mma_m16n8k16(dp[column], v_frags[chain], b_frag);
       }
     }
@@ -542,11 +589,21 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
 #pragma unroll
       for (int tile = 0; tile < HeadDim / 8; ++tile) {
         uint32_t b_frag[2];
-        ldmatrix_b_rowtrans(
-            sdo, kStride, chunk * 16, tile * 8, lane, b_frag);
+        if constexpr (TmaQdo) {
+          ldmatrix_b_rowtrans_sw<HeadDim>(
+              sdo, chunk * 16, tile * 8, lane, b_frag);
+        } else {
+          ldmatrix_b_rowtrans(
+              sdo, kStride, chunk * 16, tile * 8, lane, b_frag);
+        }
         mma_m16n8k16(dv_acc[tile], p_frag, b_frag);
-        ldmatrix_b_rowtrans(
-            sq, kStride, chunk * 16, tile * 8, lane, b_frag);
+        if constexpr (TmaQdo) {
+          ldmatrix_b_rowtrans_sw<HeadDim>(
+              sq, chunk * 16, tile * 8, lane, b_frag);
+        } else {
+          ldmatrix_b_rowtrans(
+              sq, kStride, chunk * 16, tile * 8, lane, b_frag);
+        }
         mma_m16n8k16(dk_acc[tile], ds_frag, b_frag);
       }
     }
@@ -592,8 +649,10 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
 // codegen (the EmitDeltaTrue=false body folds every delta-true statement
 // away and the dead nullptr/0 arguments vanish under inlining).
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
-          bool OuterEqSeq>
+          bool OuterEqSeq, bool TmaQdo>
 __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
+    const __grid_constant__ CUtensorMap q_map,
+    const __grid_constant__ CUtensorMap do_map,
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -611,16 +670,18 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     int io_dim,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
-                                false, OuterEqSeq>(
-      q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-      nullptr, 0, runtime_sequence, outer_count, heads, batch, io_dim,
-      scale);
+                                false, OuterEqSeq, TmaQdo>(
+      &q_map, &do_map, q, k, v, d_output, logsumexp, delta, mask, bias,
+      out_dk, out_dv, nullptr, 0, runtime_sequence, outer_count, heads,
+      batch, io_dim, scale);
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
-          bool OuterEqSeq>
+          bool OuterEqSeq, bool TmaQdo>
 __global__ __launch_bounds__(kThreads)
 void stablefold_triangle_dkdv_delta_true_kernel(
+    const __grid_constant__ CUtensorMap q_map,
+    const __grid_constant__ CUtensorMap do_map,
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -640,10 +701,10 @@ void stablefold_triangle_dkdv_delta_true_kernel(
     int io_dim,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
-                                true, OuterEqSeq>(
-      q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-      delta_true_partials, key_blocks, runtime_sequence, outer_count, heads,
-      batch, io_dim, scale);
+                                true, OuterEqSeq, TmaQdo>(
+      &q_map, &do_map, q, k, v, d_output, logsumexp, delta, mask, bias,
+      out_dk, out_dv, delta_true_partials, key_blocks, runtime_sequence,
+      outer_count, heads, batch, io_dim, scale);
 }
 
 // Fixed ascending fold of the per-key-block row scalars into
@@ -677,7 +738,7 @@ __global__ void stablefold_delta_true_reduce_kernel(
 }
 
 template <int HeadDim, int StaticSequence, bool EmitDeltaTrue,
-          bool OuterEqSeq>
+          bool OuterEqSeq, bool TmaQdo>
 void launch(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -690,6 +751,8 @@ void launch(
     torch::Tensor& out_dk,
     torch::Tensor& out_dv,
     float* delta_true_partials,
+    const CUtensorMap& q_map,
+    const CUtensorMap& do_map,
     int sequence,
     int outer_count,
     int heads,
@@ -698,7 +761,8 @@ void launch(
     cudaStream_t stream) {
   constexpr int kStride = HeadDim + 8;
   constexpr int kSharedBytes =
-      (2 * kKeyBlock * kStride + 4 * kQueryTile * kStride) *
+      (2 * kKeyBlock * kStride +
+       4 * kQueryTile * (TmaQdo ? HeadDim : kStride)) *
           static_cast<int>(sizeof(__nv_bfloat16)) +
       (EmitDeltaTrue
            ? 2 * kWarpsPerBlock * kQueryTile * 9 *
@@ -721,12 +785,12 @@ void launch(
     const cudaError_t attribute_status = tile_major_grid
         ? cudaFuncSetAttribute(
               stablefold_triangle_dkdv_delta_true_kernel<
-                  HeadDim, StaticSequence, true, OuterEqSeq>,
+                  HeadDim, StaticSequence, true, OuterEqSeq, TmaQdo>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes)
         : cudaFuncSetAttribute(
               stablefold_triangle_dkdv_delta_true_kernel<
-                  HeadDim, StaticSequence, false, OuterEqSeq>,
+                  HeadDim, StaticSequence, false, OuterEqSeq, TmaQdo>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes);
     TORCH_CHECK(
@@ -735,8 +799,10 @@ void launch(
         cudaGetErrorString(attribute_status));
     if (tile_major_grid) {
       stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
-                                                 true, OuterEqSeq>
+                                                 true, OuterEqSeq, TmaQdo>
           <<<grid, kThreads, kSharedBytes, stream>>>(
+              q_map,
+              do_map,
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
@@ -757,8 +823,10 @@ void launch(
               scale);
     } else {
       stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
-                                                 false, OuterEqSeq>
+                                                 false, OuterEqSeq, TmaQdo>
           <<<grid, kThreads, kSharedBytes, stream>>>(
+              q_map,
+              do_map,
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
@@ -782,12 +850,12 @@ void launch(
     const cudaError_t attribute_status = tile_major_grid
         ? cudaFuncSetAttribute(
               stablefold_triangle_dkdv_kernel<
-                  HeadDim, StaticSequence, true, OuterEqSeq>,
+                  HeadDim, StaticSequence, true, OuterEqSeq, TmaQdo>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes)
         : cudaFuncSetAttribute(
               stablefold_triangle_dkdv_kernel<
-                  HeadDim, StaticSequence, false, OuterEqSeq>,
+                  HeadDim, StaticSequence, false, OuterEqSeq, TmaQdo>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes);
     TORCH_CHECK(
@@ -796,8 +864,10 @@ void launch(
         cudaGetErrorString(attribute_status));
     if (tile_major_grid) {
       stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, true,
-                                      OuterEqSeq>
+                                      OuterEqSeq, TmaQdo>
           <<<grid, kThreads, kSharedBytes, stream>>>(
+              q_map,
+              do_map,
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
@@ -816,8 +886,10 @@ void launch(
               scale);
     } else {
       stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, false,
-                                      OuterEqSeq>
+                                      OuterEqSeq, TmaQdo>
           <<<grid, kThreads, kSharedBytes, stream>>>(
+              q_map,
+              do_map,
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
@@ -838,7 +910,92 @@ void launch(
   }
 }
 
-template <int HeadDim, bool EmitDeltaTrue>
+
+// cuTensorMapEncodeTiled via the runtime entry point (no -lcuda link).
+using DkdvTensorMapEncodeFn = CUresult (*)(
+    CUtensorMap*, CUtensorMapDataType, cuuint32_t, void*, const cuuint64_t*,
+    const cuuint64_t*, const cuuint32_t*, const cuuint32_t*,
+    CUtensorMapInterleave, CUtensorMapSwizzle, CUtensorMapL2promotion,
+    CUtensorMapFloatOOBfill);
+
+DkdvTensorMapEncodeFn dkdv_tensor_map_encode_fn() {
+  static const DkdvTensorMapEncodeFn encode = [] {
+    void* symbol = nullptr;
+    cudaDriverEntryPointQueryResult query =
+        cudaDriverEntryPointSymbolNotFound;
+    const cudaError_t status = cudaGetDriverEntryPoint(
+        "cuTensorMapEncodeTiled", &symbol, cudaEnableDefault, &query);
+    TORCH_CHECK(
+        status == cudaSuccess && query == cudaDriverEntryPointSuccess &&
+            symbol != nullptr,
+        "cuTensorMapEncodeTiled is unavailable in this driver");
+    return reinterpret_cast<DkdvTensorMapEncodeFn>(symbol);
+  }();
+  return encode;
+}
+
+CUtensorMapSwizzle dkdv_swizzle_for(int head_dim) {
+  return head_dim == 16
+      ? CU_TENSOR_MAP_SWIZZLE_32B
+      : (head_dim == 32 ? CU_TENSOR_MAP_SWIZZLE_64B
+                        : CU_TENSOR_MAP_SWIZZLE_128B);
+}
+
+// q: internal [B, O, H, N, D] as [planes, N, D]; box one query tile.
+CUtensorMap dkdv_make_q_map(
+    const torch::Tensor& source, int head_dim, int sequence,
+    int64_t planes) {
+  CUtensorMap tensor_map;
+  const cuuint64_t global_dim[3] = {
+      static_cast<cuuint64_t>(head_dim),
+      static_cast<cuuint64_t>(sequence),
+      static_cast<cuuint64_t>(planes)};
+  const cuuint64_t global_stride[2] = {
+      static_cast<cuuint64_t>(head_dim) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(head_dim) * sequence * sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[3] = {
+      static_cast<cuuint32_t>(head_dim), kQueryTile, 1};
+  const cuuint32_t element_stride[3] = {1, 1, 1};
+  const CUresult result = dkdv_tensor_map_encode_fn()(
+      &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 3, source.data_ptr(),
+      global_dim, global_stride, box_dim, element_stride,
+      CU_TENSOR_MAP_INTERLEAVE_NONE, dkdv_swizzle_for(head_dim),
+      CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  TORCH_CHECK(result == CUDA_SUCCESS, "dkdv q map encode failed: ",
+              static_cast<int>(result));
+  return tensor_map;
+}
+
+// dO: public [B, O, N, H, D] as 4-D [B*O, N, H, D]; the box gathers one
+// head's H-strided rows into a compact tile.
+CUtensorMap dkdv_make_do_map(
+    const torch::Tensor& source, int head_dim, int sequence, int heads,
+    int64_t batch_outer) {
+  CUtensorMap tensor_map;
+  const cuuint64_t global_dim[4] = {
+      static_cast<cuuint64_t>(head_dim),
+      static_cast<cuuint64_t>(heads),
+      static_cast<cuuint64_t>(sequence),
+      static_cast<cuuint64_t>(batch_outer)};
+  const cuuint64_t global_stride[3] = {
+      static_cast<cuuint64_t>(head_dim) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(head_dim) * heads * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(head_dim) * heads * sequence *
+          sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[4] = {
+      static_cast<cuuint32_t>(head_dim), 1, kQueryTile, 1};
+  const cuuint32_t element_stride[4] = {1, 1, 1, 1};
+  const CUresult result = dkdv_tensor_map_encode_fn()(
+      &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 4, source.data_ptr(),
+      global_dim, global_stride, box_dim, element_stride,
+      CU_TENSOR_MAP_INTERLEAVE_NONE, dkdv_swizzle_for(head_dim),
+      CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  TORCH_CHECK(result == CUDA_SUCCESS, "dkdv dO map encode failed: ",
+              static_cast<int>(result));
+  return tensor_map;
+}
+
+template <int HeadDim, bool EmitDeltaTrue, bool TmaQdo>
 void dispatch_sequence(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -851,6 +1008,8 @@ void dispatch_sequence(
     torch::Tensor& out_dk,
     torch::Tensor& out_dv,
     float* delta_true_partials,
+    const CUtensorMap& q_map,
+    const CUtensorMap& do_map,
     int sequence,
     int outer_count,
     int heads,
@@ -863,26 +1022,26 @@ void dispatch_sequence(
   const bool outer_eq = outer_count == sequence;
   if (sequence % kKeyBlock == 0 && sequence % kQueryTile == 0) {
     if (outer_eq) {
-      launch<HeadDim, -1, EmitDeltaTrue, true>(
+      launch<HeadDim, -1, EmitDeltaTrue, true, TmaQdo>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
-          stream);
+          delta_true_partials, q_map, do_map, sequence, outer_count, heads,
+          batch, io_dim, stream);
     } else {
-      launch<HeadDim, -1, EmitDeltaTrue, false>(
+      launch<HeadDim, -1, EmitDeltaTrue, false, TmaQdo>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
-          stream);
+          delta_true_partials, q_map, do_map, sequence, outer_count, heads,
+          batch, io_dim, stream);
     }
   } else if (outer_eq) {
-    launch<HeadDim, 0, EmitDeltaTrue, true>(
+    launch<HeadDim, 0, EmitDeltaTrue, true, TmaQdo>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-        delta_true_partials, sequence, outer_count, heads, batch, io_dim,
-          stream);
+        delta_true_partials, q_map, do_map, sequence, outer_count, heads,
+          batch, io_dim, stream);
   } else {
-    launch<HeadDim, 0, EmitDeltaTrue, false>(
+    launch<HeadDim, 0, EmitDeltaTrue, false, TmaQdo>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-        delta_true_partials, sequence, outer_count, heads, batch, io_dim,
-          stream);
+        delta_true_partials, q_map, do_map, sequence, outer_count, heads,
+          batch, io_dim, stream);
   }
 }
 
@@ -970,35 +1129,74 @@ void run_dkdv(
   const int storage = head_dim <= 16
       ? 16
       : (head_dim <= 32 ? 32 : (head_dim <= 64 ? 64 : 128));
+  // TMA q/dO staging: io must equal the storage lane (compact tiles) and
+  // the plane coordinates must fit int32. Built from runtime dims only.
+  const int64_t planes_i64 = q.size(0) * q.size(1) * q.size(2);
+  const bool tma_qdo = io_dim == storage && storage <= 64 &&
+      planes_i64 <= 2147483647LL;
+  CUtensorMap q_map{};
+  CUtensorMap do_map{};
+  if (tma_qdo) {
+    q_map = dkdv_make_q_map(q, io_dim, sequence, planes_i64);
+    do_map = dkdv_make_do_map(
+        d_output, io_dim, sequence, heads, q.size(0) * q.size(1));
+  }
   switch (storage) {
     case 16:
-      dispatch_sequence<16, EmitDeltaTrue>(
-          q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
-          stream);
+      if (tma_qdo) {
+        dispatch_sequence<16, EmitDeltaTrue, true>(
+            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
+            out_dv, delta_true_partials, q_map, do_map, sequence,
+            outer_count, heads, batch, io_dim, stream);
+      } else {
+        dispatch_sequence<16, EmitDeltaTrue, false>(
+            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
+            out_dv, delta_true_partials, q_map, do_map, sequence,
+            outer_count, heads, batch, io_dim, stream);
+      }
       break;
     case 32:
-      dispatch_sequence<32, EmitDeltaTrue>(
-          q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
-          stream);
+      if (tma_qdo) {
+        dispatch_sequence<32, EmitDeltaTrue, true>(
+            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
+            out_dv, delta_true_partials, q_map, do_map, sequence,
+            outer_count, heads, batch, io_dim, stream);
+      } else {
+        dispatch_sequence<32, EmitDeltaTrue, false>(
+            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
+            out_dv, delta_true_partials, q_map, do_map, sequence,
+            outer_count, heads, batch, io_dim, stream);
+      }
       break;
     case 64:
-      dispatch_sequence<64, EmitDeltaTrue>(
-          q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
-          stream);
+      if (tma_qdo) {
+        dispatch_sequence<64, EmitDeltaTrue, true>(
+            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
+            out_dv, delta_true_partials, q_map, do_map, sequence,
+            outer_count, heads, batch, io_dim, stream);
+      } else {
+        dispatch_sequence<64, EmitDeltaTrue, false>(
+            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
+            out_dv, delta_true_partials, q_map, do_map, sequence,
+            outer_count, heads, batch, io_dim, stream);
+      }
       break;
     case 128:
-      dispatch_sequence<128, EmitDeltaTrue>(
+      dispatch_sequence<128, EmitDeltaTrue, false>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
-          stream);
+          delta_true_partials, q_map, do_map, sequence, outer_count, heads,
+          batch, io_dim, stream);
       break;
     default:
       TORCH_CHECK(false, "unsupported storage lane for StableFold dK/dV");
   }
-  TORCH_CHECK(cudaGetLastError() == cudaSuccess, "StableFold dK/dV launch failed");
+  {
+    const cudaError_t launch_status = cudaGetLastError();
+    TORCH_CHECK(
+        launch_status == cudaSuccess,
+        "StableFold dK/dV launch failed: ",
+        cudaGetErrorString(launch_status));
+  }
 }
 
 void stablefold_triangle_dkdv_out(
