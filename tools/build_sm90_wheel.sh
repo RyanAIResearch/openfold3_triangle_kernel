@@ -9,7 +9,7 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   exit 2
 fi
 
-export TORCH_CUDA_ARCH_LIST=9.0
+export TORCH_CUDA_ARCH_LIST=9.0a
 export PYTHONHASHSEED=0
 export LC_ALL=C
 export TZ=UTC
@@ -37,7 +37,7 @@ assert torch.__version__.split("+", 1)[0] == "2.10.0", torch.__version__
 assert torch.version.cuda == "12.9", torch.version.cuda
 PY
 
-BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openfold3-aot-sm90-build.XXXXXX")"
+BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openfold3-aot-sm90a-build.XXXXXX")"
 cleanup() {
   # The clean-install gate deliberately makes its target read-only. Restore
   # ownership permissions on this exact mktemp path before removing it.

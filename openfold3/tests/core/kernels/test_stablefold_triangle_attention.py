@@ -11,7 +11,7 @@ from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
 
 @unittest.skipUnless(
     torch.cuda.is_available() and torch.cuda.get_device_capability() == (9, 0),
-    "Hopper sm_90 CUDA is required",
+    "Hopper sm_90a CUDA is required",
 )
 class StableFoldTriangleAttentionSupportTest(unittest.TestCase):
     def setUp(self):
@@ -84,8 +84,8 @@ class StableFoldTriangleAttentionSupportTest(unittest.TestCase):
         supported, reason = self.support(q=q, k=q, v=q, bias=bias)
         self.assertTrue(supported, reason)
 
-    def test_accepts_all_production_head_dimensions(self):
-        for head_dim in (16, 32):
+    def test_accepts_all_representative_head_dimensions(self):
+        for head_dim in (1, 7, 8, 16, 24, 31, 32, 48, 64):
             with self.subTest(head_dim=head_dim):
                 shape = (1, 64, 2, 64, head_dim)
                 q = torch.empty(
@@ -111,8 +111,8 @@ class StableFoldTriangleAttentionSupportTest(unittest.TestCase):
         supported, reason = self.support(q=q, k=q, v=q, mask=mask, bias=bias)
         self.assertTrue(supported, reason)
 
-    def test_rejects_nonproduction_head_dimensions(self):
-        for head_dim in (24, 64, 128):
+    def test_rejects_head_dimensions_above_the_runtime_contract(self):
+        for head_dim in (65, 128):
             with self.subTest(head_dim=head_dim):
                 shape = (1, 384, 4, 384, head_dim)
                 q = torch.empty(
@@ -122,7 +122,7 @@ class StableFoldTriangleAttentionSupportTest(unittest.TestCase):
                 ).expand(shape)
                 supported, reason = self.support(q=q, k=q, v=q)
                 self.assertFalse(supported)
-                self.assertIn("production D in {16,32}", reason)
+                self.assertIn("D<=64", reason)
 
     def _ranked_prefix_case(self, prefix, bias_prefix):
         sequence, heads, head_dim = 1, 1, 16

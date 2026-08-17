@@ -24,9 +24,11 @@
 #include <cuda_runtime_api.h>
 #include <torch/extension.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace {
 
@@ -36,6 +38,53 @@ constexpr int kThreads = kWarpsPerBlock * kWarpSize;
 constexpr int kRowsPerWarp = 16;
 constexpr int kBlockM = kWarpsPerBlock * kRowsPerWarp;  // 64 query rows / CTA
 constexpr int kBlockN = 64;                             // keys per streamed tile
+
+// Repack the projection producer's physical [batch_outer, N, H, D] rows into
+// the attention kernels' contiguous [batch_outer, H, N, D] rows. The Python
+// facade passes flattened physical-order views, so this is one fused launch
+// for q/k/v with no runtime compiler dependency.
+__global__ void stablefold_pack_qkv_kernel(
+    const __nv_bfloat16* __restrict__ q,
+    const __nv_bfloat16* __restrict__ k,
+    const __nv_bfloat16* __restrict__ v,
+    __nv_bfloat16* __restrict__ out_q,
+    __nv_bfloat16* __restrict__ out_k,
+    __nv_bfloat16* __restrict__ out_v,
+    int64_t rows,
+    int heads,
+    int sequence,
+    int head_dim) {
+  const int64_t row =
+      static_cast<int64_t>(blockIdx.x) * blockDim.y + threadIdx.y;
+  if (row >= rows) {
+    return;
+  }
+  const int64_t batch_outer = row / (static_cast<int64_t>(heads) * sequence);
+  const int64_t remainder = row % (static_cast<int64_t>(heads) * sequence);
+  const int head = static_cast<int>(remainder / sequence);
+  const int query = static_cast<int>(remainder % sequence);
+  const int64_t source_row =
+      (batch_outer * sequence + query) * heads + head;
+  const __nv_bfloat162* sources[3] = {
+      reinterpret_cast<const __nv_bfloat162*>(
+          q + source_row * head_dim),
+      reinterpret_cast<const __nv_bfloat162*>(
+          k + source_row * head_dim),
+      reinterpret_cast<const __nv_bfloat162*>(
+          v + source_row * head_dim),
+  };
+  __nv_bfloat162* destinations[3] = {
+      reinterpret_cast<__nv_bfloat162*>(out_q + row * head_dim),
+      reinterpret_cast<__nv_bfloat162*>(out_k + row * head_dim),
+      reinterpret_cast<__nv_bfloat162*>(out_v + row * head_dim),
+  };
+  for (int tensor = 0; tensor < 3; ++tensor) {
+    for (int column = threadIdx.x; column < head_dim / 2;
+         column += blockDim.x) {
+      destinations[tensor][column] = sources[tensor][column];
+    }
+  }
+}
 
 __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
   const __nv_bfloat16 l = __float2bfloat16_rn(low);
@@ -1052,6 +1101,73 @@ void launch_forward(
 #undef LAUNCH_STABLEFOLD_FORWARD
 }
 
+std::vector<torch::Tensor> stablefold_pack_qkv(
+    const torch::Tensor& q_source,
+    const torch::Tensor& k_source,
+    const torch::Tensor& v_source,
+    int64_t batch_outer,
+    int64_t heads64,
+    int64_t sequence64,
+    int64_t head_dim64) {
+  TORCH_CHECK(
+      batch_outer > 0 && heads64 > 0 && heads64 <= 65535 &&
+          sequence64 > 0 && sequence64 <= std::numeric_limits<int>::max() &&
+          head_dim64 > 0 && head_dim64 <= 64 && head_dim64 % 2 == 0,
+      "StableFold pack requires positive batch_outer/N, H<=65535, and an "
+      "even D<=64");
+  TORCH_CHECK(
+      batch_outer <=
+          std::numeric_limits<int64_t>::max() / heads64 / sequence64 /
+              head_dim64,
+      "StableFold pack element count overflows int64");
+  const int64_t elements =
+      batch_outer * heads64 * sequence64 * head_dim64;
+  const auto check_source = [&](const torch::Tensor& tensor) {
+    TORCH_CHECK(
+        tensor.is_cuda() && tensor.device() == q_source.device() &&
+            tensor.dtype() == torch::kBFloat16 && tensor.is_contiguous() &&
+            tensor.numel() == elements,
+        "StableFold pack sources must be contiguous BF16 tensors with the "
+        "declared element count on one CUDA device");
+  };
+  check_source(q_source);
+  check_source(k_source);
+  check_source(v_source);
+
+  const int64_t rows = batch_outer * heads64 * sequence64;
+  const int64_t blocks = (rows + 7) / 8;
+  TORCH_CHECK(
+      blocks <= 2147483647LL,
+      "StableFold pack exceeds the CUDA grid-x contract");
+  const int heads = static_cast<int>(heads64);
+  const int sequence = static_cast<int>(sequence64);
+  const int head_dim = static_cast<int>(head_dim64);
+  const c10::cuda::CUDAGuard device_guard(q_source.device());
+  auto stream = at::cuda::getCurrentCUDAStream();
+  const auto options = q_source.options();
+  auto out_q = torch::empty(
+      {batch_outer, heads64, sequence64, head_dim64}, options);
+  auto out_k = torch::empty_like(out_q);
+  auto out_v = torch::empty_like(out_q);
+  const dim3 block(std::min(head_dim / 2, 32), 8);
+  const dim3 grid(static_cast<unsigned int>(blocks));
+  stablefold_pack_qkv_kernel<<<grid, block, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(q_source.data_ptr()),
+      reinterpret_cast<const __nv_bfloat16*>(k_source.data_ptr()),
+      reinterpret_cast<const __nv_bfloat16*>(v_source.data_ptr()),
+      reinterpret_cast<__nv_bfloat16*>(out_q.data_ptr()),
+      reinterpret_cast<__nv_bfloat16*>(out_k.data_ptr()),
+      reinterpret_cast<__nv_bfloat16*>(out_v.data_ptr()),
+      rows,
+      heads,
+      sequence,
+      head_dim);
+  TORCH_CHECK(
+      cudaGetLastError() == cudaSuccess,
+      "StableFold pack QKV launch failed");
+  return {out_q, out_k, out_v};
+}
+
 void stablefold_triangle_forward_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -1176,6 +1292,10 @@ void stablefold_triangle_forward_out(
 }  // namespace
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
+  module.def(
+      "stablefold_pack_qkv",
+      &stablefold_pack_qkv,
+      "StableFold fused physical [N,H,D] to logical [H,N,D] QKV pack");
   module.def(
       "stablefold_triangle_forward_out",
       &stablefold_triangle_forward_out,

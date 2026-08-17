@@ -27,10 +27,13 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         _EXTENSION = load_extension_module(
             module_key="stablefold_forward",
             aot_module=(
-                "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90"
+                "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a"
             ),
             source=Path(__file__).with_suffix(".cu"),
-            expected_symbols=("stablefold_triangle_forward_out",),
+            expected_symbols=(
+                "stablefold_triangle_forward_out",
+                "stablefold_pack_qkv",
+            ),
             verbose=bool(verbose),
         )
     return _EXTENSION

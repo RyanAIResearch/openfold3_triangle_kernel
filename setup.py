@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the ABI-locked StableFold Triangle Attention sm_90 wheel."""
+"""Build the ABI-locked StableFold Triangle Attention sm_90a wheel."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ CUDA_PACKAGE = ROOT / "openfold3/core/kernels/cuda"
 EXPECTED_PYTHON = (3, 14)
 EXPECTED_TORCH = "2.10.0"
 EXPECTED_TORCH_CUDA = "12.9"
-EXPECTED_ARCH_LIST = "9.0"
+EXPECTED_ARCH_LIST = "9.0a"
 CXX_FLAGS = ["-O3", "-std=c++17", "-fvisibility=hidden"]
 NVCC_FLAGS = [
     "-O3",
@@ -34,23 +34,29 @@ NVCC_FLAGS = [
 EXTENSION_SPECS = {
     "stablefold_forward": {
         "module": (
-            "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90"
+            "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a"
         ),
         "source": "stablefold_triangle_forward.cu",
-        "symbols": ["stablefold_triangle_forward_out"],
+        "symbols": [
+            "stablefold_triangle_forward_out",
+            "stablefold_pack_qkv",
+        ],
     },
     "stablefold_delta": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
         "source": "stablefold_triangle_delta.cu",
         "symbols": ["stablefold_triangle_delta_out"],
     },
     "stablefold_dkdv": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
         "source": "stablefold_triangle_dkdv.cu",
-        "symbols": ["stablefold_triangle_dkdv_out"],
+        "symbols": [
+            "stablefold_triangle_dkdv_out",
+            "stablefold_triangle_dkdv_delta_true_out",
+        ],
     },
     "stablefold_dq_dbias": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
         "source": "stablefold_triangle_dq_dbias.cu",
         "symbols": [
             "stablefold_triangle_dq_dbias_out",
@@ -81,30 +87,30 @@ def _command(*command: str) -> str:
 def _assert_build_contract() -> None:
     if sys.version_info[:2] != EXPECTED_PYTHON:
         raise RuntimeError(
-            f"sm_90 wheel requires Python {EXPECTED_PYTHON}, got "
+            f"sm_90a wheel requires Python {EXPECTED_PYTHON}, got "
             f"{sys.version_info[:2]}"
         )
     torch_base = torch.__version__.split("+", 1)[0]
     if torch_base != EXPECTED_TORCH:
         raise RuntimeError(
-            f"sm_90 wheel requires Torch {EXPECTED_TORCH}, got {torch.__version__}"
+            f"sm_90a wheel requires Torch {EXPECTED_TORCH}, got {torch.__version__}"
         )
     if torch.version.cuda != EXPECTED_TORCH_CUDA:
         raise RuntimeError(
-            f"sm_90 wheel requires Torch CUDA {EXPECTED_TORCH_CUDA}, got "
+            f"sm_90a wheel requires Torch CUDA {EXPECTED_TORCH_CUDA}, got "
             f"{torch.version.cuda}"
         )
     if os.environ.get("TORCH_CUDA_ARCH_LIST") != EXPECTED_ARCH_LIST:
         raise RuntimeError(
-            "set TORCH_CUDA_ARCH_LIST=9.0 exactly; PTX and sm_90a are not part "
-            "of this H100 artifact"
+            "set TORCH_CUDA_ARCH_LIST=9.0a exactly; the WGMMA/TMA kernels "
+            "require Hopper architecture-specific SASS and embed no PTX"
         )
     if CUDA_HOME is None:
         raise RuntimeError("CUDA_HOME is unavailable; build in the CUDA 12.9 image")
     nvcc_version = _command(str(Path(CUDA_HOME) / "bin/nvcc"), "--version")
     if "release 12.9" not in nvcc_version:
         raise RuntimeError(
-            f"sm_90 wheel requires nvcc 12.9, got:\n{nvcc_version}"
+            f"sm_90a wheel requires nvcc 12.9, got:\n{nvcc_version}"
         )
 
 
@@ -205,7 +211,7 @@ class AOTBuildExtension(_BaseBuildExtension):
             "source_date_epoch": os.environ.get("SOURCE_DATE_EPOCH"),
             "git": {"commit": git_commit, "dirty": git_dirty},
             "target": {
-                "cuda_arch": "sm_90",
+                "cuda_arch": "sm_90a",
                 "torch_cuda_arch_list": EXPECTED_ARCH_LIST,
                 "ptx_embedded": False,
             },

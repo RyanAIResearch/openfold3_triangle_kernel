@@ -15,10 +15,10 @@ LOADERS = (
     "stablefold_triangle_dq_dbias.py",
 )
 EXPECTED_MODULES = {
-    "_stablefold_forward_sm90",
-    "_stablefold_delta_sm90",
-    "_stablefold_dkdv_sm90",
-    "_stablefold_dq_dbias_sm90",
+    "_stablefold_forward_sm90a",
+    "_stablefold_delta_sm90a",
+    "_stablefold_dkdv_sm90a",
+    "_stablefold_dq_dbias_sm90a",
 }
 
 
@@ -62,7 +62,7 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         )
         self.assertIn("if not _development_jit_enabled():", text)
 
-    def test_setup_defines_four_unique_sm90_extensions(self):
+    def test_setup_defines_four_unique_sm90a_extensions(self):
         text = (REPOSITORY / "setup.py").read_text()
         discovered = {
             name for name in EXPECTED_MODULES if text.count(name) == 1
@@ -72,7 +72,9 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIn('EXPECTED_PYTHON = (3, 14)', text)
         self.assertIn('EXPECTED_TORCH = "2.10.0"', text)
         self.assertIn('EXPECTED_TORCH_CUDA = "12.9"', text)
-        self.assertIn('EXPECTED_ARCH_LIST = "9.0"', text)
+        self.assertIn('EXPECTED_ARCH_LIST = "9.0a"', text)
+        self.assertIn('"stablefold_pack_qkv"', text)
+        self.assertIn('"stablefold_triangle_dkdv_delta_true_out"', text)
         self.assertNotIn("--use_fast_math", text)
 
     def test_pyproject_pins_torch_family_and_ships_manifest(self):
@@ -107,15 +109,16 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
 
     def test_facade_metadata_contract_is_release_bounded(self):
         text = (CUDA_PACKAGE / "stablefold_triangle_attention.py").read_text()
-        self.assertIn("_SUPPORTED_HEAD_DIMS = frozenset((16, 32))", text)
+        self.assertIn("_PAD_HEAD_LANES = (16, 32, 64)", text)
         self.assertIn("_MAX_BROADCAST_PREFIX_RANK = 16", text)
         self.assertIn("if bias_requires_broadcast and len(prefix) >", text)
-        self.assertIn("production D in {16,32}", text)
+        self.assertIn("D<=64", text)
+        self.assertNotIn("stablefold_trimul", text)
 
     def test_build_entrypoint_is_abi_locked_and_nonisolated(self):
         text = (REPOSITORY / "tools/build_sm90_wheel.sh").read_text()
         for contract in (
-            "TORCH_CUDA_ARCH_LIST=9.0",
+            "TORCH_CUDA_ARCH_LIST=9.0a",
             "sys.version_info[:2] == (3, 14)",
             'torch.__version__.split("+", 1)[0] == "2.10.0"',
             'torch.version.cuda == "12.9"',
@@ -127,7 +130,7 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             "git clone --quiet --no-local --no-checkout",
             'git -C "$FRESH_SOURCE" checkout --quiet --detach',
             'git status --porcelain --untracked-files=all',
-            'mktemp -d "${TMPDIR:-/tmp}/openfold3-aot-sm90-build.XXXXXX"',
+            'mktemp -d "${TMPDIR:-/tmp}/openfold3-aot-sm90a-build.XXXXXX"',
             'chmod -R u+w -- "$BUILD_ROOT"',
             'rm -r -- "$BUILD_ROOT"',
             'SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"',
@@ -147,6 +150,8 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         self.assertNotIn('os.environ["TORCH_EXTENSIONS_DIR"]', text)
         self.assertIn("torch.autograd.grad", text)
         self.assertIn('"dBias": gradients[3]', text)
+        self.assertIn("prefix, sequence, heads, head_dim = 1, 64, 4, 32", text)
+        self.assertIn("non-contiguous fused pack differs", text)
         self.assertIn(
             "mask = torch.zeros(\n"
             "        prefix,\n"

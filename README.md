@@ -3,7 +3,7 @@
 This repository is a clean, runnable fork of
 [AQLab OpenFold3](https://github.com/aqlaboratory/openfold-3) containing the
 current RyanAIResearch StableFold Triangle Attention production path for
-NVIDIA H100 (`sm_90`). The upstream OpenFold3 model, PyTorch Lightning training
+NVIDIA H100 (`sm_90a`). The upstream OpenFold3 model, PyTorch Lightning training
 runner, data pipeline, and official recipe remain intact; the only model-level
 addition is a default-off Triangle Attention backend.
 
@@ -36,12 +36,13 @@ It provides:
   default) without changing the global dBias reduction order;
 - one CUDA batch for arbitrary positive input prefixes, including a fixed-order
   CUDA reduction when pair bias is broadcast;
-- runtime sequence length and head count, with production `D in {16, 32}`;
+- runtime sequence length and head count, with `1 <= D <= 64` (native I/O for
+  multiples of eight and zero-padding for the remaining dimensions);
 - explicit tail guards for non-tile-aligned sequence lengths;
 - defined zero-output/zero-gradient behavior for fully masked real `-inf` rows;
-- fail-closed routing: unsupported inputs raise instead of silently falling
-  back to PyTorch, AQLab Triton, or NVIDIA cuEquivariance;
-- four independently named, wheel-owned `sm_90` CUDA extensions and public
+- a fail-closed public facade plus an explicit model-level stock fallback for
+  blanket-coverage sites outside the facade contract;
+- four independently named, wheel-owned `sm_90a` CUDA extensions and public
   PyTorch autograd integration.
 
 The exact runtime closure and numerical contract are documented in
@@ -66,7 +67,7 @@ developer may explicitly opt into JIT with
 `OPENFOLD3_TRIANGLE_ALLOW_JIT=1`; that switch is not a production fallback.
 
 The canonical wheel is ABI-locked to CPython 3.14, Torch 2.10.0, Torch CUDA
-12.9, and H100 `sm_90` SASS (no embedded PTX). Build it only from a clean,
+12.9, and H100 `sm_90a` SASS (no embedded PTX). Build it only from a clean,
 committed checkout in the pinned H100 environment:
 
 ```bash
@@ -86,7 +87,8 @@ backward smoke, and copies the wheel plus hash receipts into `dist/`.
 - Tensor contract: BF16 Q/K/V and pair bias; FP32/BF16/FP16 additive mask.
 - Clean source snapshot imported from
   `RyanAIResearch/hammer_inference_engine@6db02ff4b31e87bfced98331b22613e96e8ced37`.
-- Formal operator shapes: `N={384,640,768}`, `H=4`, `D={16,32}`.
+- Main trunk operator shapes: `N={384,640,768}`, `H=4`, `D={16,32}`;
+  production sites also exercise native `D={8,24,48}` lanes.
 - Generic runtime paths exist for other positive `N/H` within CUDA grid and
   memory limits, but broad production qualification is still pending.
 - A broadcast pair bias is accepted only when the target prefix rank is at

@@ -19,10 +19,8 @@ from typing import Any
 
 import torch
 
-_SUPPORTED_HEAD_DIMS = frozenset((16, 32))   # exact lanes (bitwise-frozen)
 _PAD_HEAD_LANES = (16, 32, 64)               # any D pads up to the next lane
 _CAPABILITY_CACHE: dict = {}
-_SUPPORT_CACHE: dict = {}
 _MAX_GRID_X = 2_147_483_647
 _MAX_GRID_YZ = 65_535
 _SMALLEST_QUERY_BLOCK = 32
@@ -125,7 +123,7 @@ def _is_stablefold_supported_uncached(
         capability = torch.cuda.get_device_capability(q.device)
         _CAPABILITY_CACHE[q.device.index] = capability
     if capability != (9, 0):
-        return False, "StableFold Triangle Attention requires Hopper sm_90"
+        return False, "StableFold Triangle Attention requires Hopper sm_90a"
     if q.ndim < 5:
         return False, "q must have shape [*B,O,H,N,D]"
     prefix = tuple(q.shape[:-4])
@@ -188,25 +186,27 @@ def _is_stablefold_supported_uncached(
 
 
 class _PackQKV(torch.autograd.Function):
-    """Fused q/k/v gather into kernel layout; backward is the inverse gather.
+    """Fused q/k/v gather into kernel layout.
 
     Forward reads the [.., N, H, D]-major producer views in one launch and
-    emits three contiguous [.., H, N, D] tensors. Backward regathers the
-    contiguous grads back into the producer view layout (a pure permutation,
-    bitwise-preserving) in one launch.
+    emits three contiguous [.., H, N, D] tensors. The transpose before
+    flattening is essential: flattening the public [.., H, N, D] view directly
+    would materialize logical H-major order and then permute it a second time
+    in CUDA. Backward is the same logical identity as ``contiguous()``; the
+    producer transpose owns the inverse layout mapping.
     """
 
     @staticmethod
     def forward(ctx, q, k, v, bo, heads, seq, dim):
-        from openfold3.core.kernels.cuda.stablefold_trimul import (
-            _get_ext as _misc_ext,
-        )
-
-        ctx.dims = (bo, heads, seq, dim)
         ctx.view_shapes = (q.shape, k.shape, v.shape)
-        packed = _misc_ext().pack_rows3(
-            q.reshape(-1), k.reshape(-1), v.reshape(-1),
-            bo, heads, seq, dim, True,
+        packed = _forward_extension().stablefold_pack_qkv(
+            q.transpose(-2, -3).reshape(-1),
+            k.transpose(-2, -3).reshape(-1),
+            v.transpose(-2, -3).reshape(-1),
+            bo,
+            heads,
+            seq,
+            dim,
         )
         return packed[0], packed[1], packed[2]
 
@@ -276,9 +276,11 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
             # arithmetic contract as the StableFold forward. The older resident
             # fast lane reconstructs scores using an AQLab-style pre-scaled BF16 K
             # path, so it is intentionally not part of the production facade.
-            # Both head dims recover the mathematically consistent
-            # delta_true = sum_k P_k dP_k in the dK/dV pass and feed it to
-            # the dQ/dBias recompute: this removes the coherent row-constant
+            # Every head lane recomputes the probability-weighted row scalar
+            # delta_true = sum_k P_k dP_k in the dK/dV pass and feeds it to
+            # dQ/dBias. The implementation omits division by the recomputed
+            # probability sum under the measured Z ~= 1 contract; this removes
+            # the coherent row-constant
             # dQ bias of delta = dO . O_bf16 (dQ rel-L2 drops to the
             # perfect-delta oracle bound) and improves dBias as well, while
             # dK/dV bits stay identical to the classical path.
@@ -318,16 +320,7 @@ def stablefold_triangle_attention(
 ) -> torch.Tensor:
     """Run one StableFold Triangle Attention call (raw q; no fallback)."""
 
-    key = (
-        tuple(q.shape), tuple(res_mask.shape), tuple(pair_bias.shape),
-        q.dtype, res_mask.dtype, pair_bias.dtype, q.device.index,
-    )
-    cached = _SUPPORT_CACHE.get(key)
-    if cached is None:
-        cached = is_stablefold_supported(q, k, v, res_mask, pair_bias)
-        if len(_SUPPORT_CACHE) < 4096:
-            _SUPPORT_CACHE[key] = cached
-    supported, reason = cached
+    supported, reason = is_stablefold_supported(q, k, v, res_mask, pair_bias)
     if not supported:
         raise ValueError(f"unsupported StableFold case: {reason}")
     global _INVOCATIONS
