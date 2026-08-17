@@ -163,6 +163,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     int query_capacity,
     int leaf_base,
     int io_dim,
+    bool input_interleaved,
     float scale) {
   // StaticSequence == -1 is the production lane: sequence stays a pure
   // runtime parameter under the facade's pad-to-tile contract (every tile
@@ -234,7 +235,12 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
         static_cast<int64_t>(batch_index) * oc + outer_load;
     const int64_t row_stats_base =
         (plane * heads + head) * static_cast<int64_t>(sequence);
-    const int64_t tensor_base = row_stats_base * io_dim;
+    const int64_t tensor_base = input_interleaved
+        ? (plane * static_cast<int64_t>(sequence) * heads + head) * io_dim
+        : row_stats_base * io_dim;
+    const int64_t input_row_stride = input_interleaved
+        ? static_cast<int64_t>(heads) * io_dim
+        : io_dim;
     // d_output arrives in the public [B, O, N, H, io_dim] layout.
     const int64_t dout_plane_base =
         plane * static_cast<int64_t>(sequence) * heads * io_dim +
@@ -249,7 +255,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
           ? query_start + row
           : sequence - 1;
       const int64_t src = tensor_base +
-          static_cast<int64_t>(gq) * io_dim + col;
+          static_cast<int64_t>(gq) * input_row_stride + col;
       const int64_t dout_src = dout_plane_base +
           static_cast<int64_t>(gq) * heads * io_dim + col;
       my_q[row * kQStride + col] =
@@ -292,7 +298,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
             ? key_start + row
             : sequence - 1;
         const int64_t src = tensor_base +
-            static_cast<int64_t>(gk) * io_dim + col;
+            static_cast<int64_t>(gk) * input_row_stride + col;
         my_k[row * kKVStride + col] =
             col < io_dim ? k[src] : __float2bfloat16_rn(0.0F);
         my_v[row * kKVStride + col] =
@@ -456,7 +462,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
 
     // dQ epilogue for this warp's outer: scale once, store BF16.
     const int64_t dq_row_base = tensor_base +
-        static_cast<int64_t>(query_start) * io_dim;
+        static_cast<int64_t>(query_start) * input_row_stride;
     if (outer_valid) {
 #pragma unroll
       for (int sub = 0; sub < kQuerySubTiles; ++sub) {
@@ -472,10 +478,12 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
             if (column >= io_dim) {
               continue;
             }
-            out_dq[dq_row_base + static_cast<int64_t>(row) * io_dim +
+            out_dq[dq_row_base +
+                   static_cast<int64_t>(row) * input_row_stride +
                    column] =
                 __float2bfloat16_rn(dq_acc[sub][tile].v[half * 2] * scale);
-            out_dq[dq_row_base + static_cast<int64_t>(row) * io_dim +
+            out_dq[dq_row_base +
+                   static_cast<int64_t>(row) * input_row_stride +
                    column + 1] =
                 __float2bfloat16_rn(
                     dq_acc[sub][tile].v[half * 2 + 1] * scale);
@@ -629,6 +637,7 @@ void launch(
     int resident_leaves,
     int batch_chunk,
     int io_dim,
+    bool input_interleaved,
     cudaStream_t stream) {
   constexpr int kQStride = HeadDim + 8;
   constexpr int kKVStride = HeadDim + 8;
@@ -747,6 +756,7 @@ void launch(
           query_span,                                                     \
           leaf_base,                                                      \
           io_dim,                                                          \
+          input_interleaved,                                               \
           scale)
         if constexpr (StaticSequence == -1) {
           // The exact-tiles contract guarantees full query blocks; the
@@ -830,6 +840,7 @@ void dispatch_sequence(
     int resident_leaves,
     int batch_chunk,
     int io_dim,
+    bool input_interleaved,
     cudaStream_t stream) {
   // One lane for every length: the exact-tiles contract (sequence padded
   // to the tile quantum by the facade) folds all guards at compile time
@@ -839,12 +850,12 @@ void dispatch_sequence(
     launch<HeadDim, -1>(q, k, v, d_output, logsumexp, delta, mask, bias,
                         out_dq, out_dbias, workspace, sequence, outer_count,
                         heads, batch, query_span, resident_leaves,
-                        batch_chunk, io_dim, stream);
+                        batch_chunk, io_dim, input_interleaved, stream);
   } else {
     launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
                        out_dq, out_dbias, workspace, sequence, outer_count,
                        heads, batch, query_span, resident_leaves, batch_chunk,
-                       io_dim, stream);
+                       io_dim, input_interleaved, stream);
   }
 }
 
@@ -897,14 +908,28 @@ void stablefold_triangle_dq_dbias_out(
   const int query_span = static_cast<int>(query_span64);
   const int resident_leaves = static_cast<int>(resident_leaves64);
   const int batch_chunk = static_cast<int>(batch_chunk64);
-  TORCH_CHECK(q.is_contiguous());
+  const auto is_interleaved_qkv = [&](const torch::Tensor& tensor) {
+    return tensor.stride(4) == 1 && tensor.stride(2) == head_dim64 &&
+        tensor.stride(3) == heads64 * head_dim64 &&
+        (outer64 == 1 ||
+         tensor.stride(1) == sequence64 * heads64 * head_dim64) &&
+        (batch64 == 1 ||
+         tensor.stride(0) ==
+             outer64 * sequence64 * heads64 * head_dim64);
+  };
+  TORCH_CHECK(
+      q.is_contiguous() || is_interleaved_qkv(q),
+      "q must use dense logical H-N-D or producer N-H-D physical storage");
+  const bool input_interleaved = !q.is_contiguous();
   const auto check_q_like = [&](const torch::Tensor& tensor) {
     TORCH_CHECK(
         tensor.is_cuda() && tensor.device() == q.device() &&
             tensor.dtype() == torch::kBFloat16 &&
-            tensor.sizes() == q.sizes() && tensor.is_contiguous(),
-        "k/v/d_output/out_dq must be contiguous BF16 tensors matching q "
-        "on one device");
+            tensor.sizes() == q.sizes() &&
+            (input_interleaved ? is_interleaved_qkv(tensor)
+                               : tensor.is_contiguous()),
+        "k/v/out_dq must match q sizes and active physical strides on one "
+        "device");
   };
   check_q_like(k);
   check_q_like(v);
@@ -966,22 +991,26 @@ void stablefold_triangle_dq_dbias_out(
     case 16:
       dispatch_sequence<16>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                  out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, io_dim, stream);
+                 query_span, resident_leaves, batch_chunk, io_dim,
+                 input_interleaved, stream);
       break;
     case 32:
       dispatch_sequence<32>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                  out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, io_dim, stream);
+                 query_span, resident_leaves, batch_chunk, io_dim,
+                 input_interleaved, stream);
       break;
     case 64:
       dispatch_sequence<64>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                  out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, io_dim, stream);
+                 query_span, resident_leaves, batch_chunk, io_dim,
+                 input_interleaved, stream);
       break;
     default:
       dispatch_sequence<128>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                  out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, io_dim, stream);
+                 query_span, resident_leaves, batch_chunk, io_dim,
+                 input_interleaved, stream);
       break;
   }
   TORCH_CHECK(

@@ -207,16 +207,19 @@ __device__ __forceinline__ void mbarrier_wait_parity(
       "r"(parity));
 }
 
-__device__ __forceinline__ void tma_load_3d_slice(
+__device__ __forceinline__ void tma_load_5d_slice(
     const CUtensorMap* map, __nv_bfloat16* dst, uint64_t* bar,
-    int coord_key, int coord_plane) {
+    int coord_key, int coord_head, int coord_outer, int coord_batch) {
   asm volatile(
-      "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx"
-      "::bytes [%0], [%1, {%2, %3, %4}], [%5];\n" ::"r"(shared_u32(dst)),
+      "cp.async.bulk.tensor.5d.shared::cluster.global.mbarrier::complete_tx"
+      "::bytes [%0], [%1, {%2, %3, %4, %5, %6}], [%7];\n" ::"r"(
+          shared_u32(dst)),
       "l"(reinterpret_cast<uint64_t>(map)),
       "r"(0),
       "r"(coord_key),
-      "r"(coord_plane),
+      "r"(coord_head),
+      "r"(coord_outer),
+      "r"(coord_batch),
       "r"(shared_u32(bar)));
 }
 
@@ -315,6 +318,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     int heads,
     int batch,
     int io_dim,
+    bool input_interleaved,
     float scale) {
   constexpr int kKVStride = HeadDim + 8;
   static_assert(HeadDim % 16 == 0 && (kKVStride * 2) % 16 == 0);
@@ -353,7 +357,11 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t plane_row_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
-  const int64_t head_base = plane_row_base * io_dim;
+  const int64_t head_base = input_interleaved
+      ? (plane * static_cast<int64_t>(sequence) * heads + head) * io_dim
+      : plane_row_base * io_dim;
+  const int64_t input_row_stride =
+      input_interleaved ? static_cast<int64_t>(heads) * io_dim : io_dim;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
@@ -373,7 +381,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
         ? warp_query + row
         : 0;
     sq[row * kKVStride + col] = col < io_dim
-        ? q[head_base + static_cast<int64_t>(gq) * io_dim + col]
+        ? q[head_base + static_cast<int64_t>(gq) * input_row_stride + col]
         : __float2bfloat16_rn(0.0F);
   }
   __syncwarp();
@@ -414,7 +422,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
           : 0;
       if (col < io_dim) {
         const int64_t src =
-            head_base + static_cast<int64_t>(gk) * io_dim + col;
+            head_base + static_cast<int64_t>(gk) * input_row_stride + col;
         cp_async_16(bk + row * kKVStride + col, k + src);
         cp_async_16(bv + row * kKVStride + col, v + src);
       } else {
@@ -601,6 +609,7 @@ stablefold_triangle_forward_tma_kernel(
     int sequence,
     int outer_count,
     int heads,
+    bool input_interleaved,
     float scale) {
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
   constexpr int kQStride = HeadDim + 8;
@@ -629,7 +638,12 @@ stablefold_triangle_forward_tma_kernel(
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t plane_row_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
-  const int64_t head_base = plane_row_base * HeadDim;
+  const int64_t head_base = input_interleaved
+      ? (plane * static_cast<int64_t>(sequence) * heads + head) * HeadDim
+      : plane_row_base * HeadDim;
+  const int64_t input_row_stride = input_interleaved
+      ? static_cast<int64_t>(heads) * HeadDim
+      : HeadDim;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
@@ -639,9 +653,6 @@ stablefold_triangle_forward_tma_kernel(
   const int64_t out_plane_base =
       plane * static_cast<int64_t>(sequence) * heads * HeadDim +
       static_cast<int64_t>(head) * HeadDim;
-  // The launch contract guarantees batch*outer*heads fits int32.
-  const int tma_plane = static_cast<int>(plane * heads + head);
-
   if (threadIdx.x == 0) {
     mbarrier_init(&k_barriers[0], 1);
     mbarrier_init(&k_barriers[1], 1);
@@ -657,7 +668,7 @@ stablefold_triangle_forward_tma_kernel(
         ? warp_query + row
         : 0;
     sq[row * kQStride + col] =
-        q[head_base + static_cast<int64_t>(gq) * HeadDim + col];
+        q[head_base + static_cast<int64_t>(gq) * input_row_stride + col];
   }
   __syncthreads();  // covers mbarrier_init visibility too
 
@@ -681,9 +692,9 @@ stablefold_triangle_forward_tma_kernel(
       mbarrier_expect_tx(
           &k_barriers[buffer],
           kTileElements * static_cast<int>(sizeof(__nv_bfloat16)));
-      tma_load_3d_slice(
+      tma_load_5d_slice(
           &k_map, k_buffers + buffer * kTileElements, &k_barriers[buffer],
-          key_tile * kBlockN, tma_plane);
+          key_tile * kBlockN, head, outer, batch_index);
     }
   };
   const auto issue_v = [&](int key_tile, int buffer) {
@@ -691,9 +702,9 @@ stablefold_triangle_forward_tma_kernel(
       mbarrier_expect_tx(
           &v_barriers[buffer],
           kTileElements * static_cast<int>(sizeof(__nv_bfloat16)));
-      tma_load_3d_slice(
+      tma_load_5d_slice(
           &v_map, v_buffers + buffer * kTileElements, &v_barriers[buffer],
-          key_tile * kBlockN, tma_plane);
+          key_tile * kBlockN, head, outer, batch_index);
     }
   };
 
@@ -903,21 +914,27 @@ TensorMapEncodeFn tensor_map_encode_fn() {
   return encode;
 }
 
-// [planes, sequence, HeadDim] view of a contiguous [B, O, H, N, D] tensor,
-// boxed per key tile with the swizzle matching the row span.
+// Logical [B, O, H, N, D], encoded from its actual dense physical strides.
+// This admits both H-N-D contiguous storage and the producer's N-H-D storage
+// viewed through a logical H-N-D transpose, without a packing kernel.
 CUtensorMap make_kv_tensor_map(
-    const torch::Tensor& source, int head_dim, int sequence, int64_t planes) {
+    const torch::Tensor& source, int head_dim, int sequence, int heads,
+    int outer_count, int batch) {
   CUtensorMap tensor_map;
-  const cuuint64_t global_dim[3] = {
+  const cuuint64_t global_dim[5] = {
       static_cast<cuuint64_t>(head_dim),
       static_cast<cuuint64_t>(sequence),
-      static_cast<cuuint64_t>(planes)};
-  const cuuint64_t global_stride[2] = {
-      static_cast<cuuint64_t>(head_dim) * sizeof(__nv_bfloat16),
-      static_cast<cuuint64_t>(head_dim) * sequence * sizeof(__nv_bfloat16)};
-  const cuuint32_t box_dim[3] = {
-      static_cast<cuuint32_t>(head_dim), kBlockN, 1};
-  const cuuint32_t element_stride[3] = {1, 1, 1};
+      static_cast<cuuint64_t>(heads),
+      static_cast<cuuint64_t>(outer_count),
+      static_cast<cuuint64_t>(batch)};
+  const cuuint64_t global_stride[4] = {
+      static_cast<cuuint64_t>(source.stride(3)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(2)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(1)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(0)) * sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[5] = {
+      static_cast<cuuint32_t>(head_dim), kBlockN, 1, 1, 1};
+  const cuuint32_t element_stride[5] = {1, 1, 1, 1, 1};
   const CUtensorMapSwizzle swizzle = head_dim == 16
       ? CU_TENSOR_MAP_SWIZZLE_32B
       : (head_dim == 32 ? CU_TENSOR_MAP_SWIZZLE_64B
@@ -925,7 +942,7 @@ CUtensorMap make_kv_tensor_map(
   const CUresult result = tensor_map_encode_fn()(
       &tensor_map,
       CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
-      3,
+      5,
       source.data_ptr(),
       global_dim,
       global_stride,
@@ -955,12 +972,11 @@ void launch_forward_tma(
     int heads,
     int batch,
     cudaStream_t stream) {
-  const int64_t planes =
-      static_cast<int64_t>(batch) * outer_count * heads;
   const CUtensorMap k_map =
-      make_kv_tensor_map(k, HeadDim, sequence, planes);
+      make_kv_tensor_map(k, HeadDim, sequence, heads, outer_count, batch);
   const CUtensorMap v_map =
-      make_kv_tensor_map(v, HeadDim, sequence, planes);
+      make_kv_tensor_map(v, HeadDim, sequence, heads, outer_count, batch);
+  const bool input_interleaved = !q.is_contiguous();
   const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
   const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
   const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
@@ -1000,6 +1016,7 @@ void launch_forward_tma(
             sequence,                                                       \
             outer_count,                                                    \
             heads,                                                          \
+            input_interleaved,                                              \
             scale);                                                         \
   } while (false)
   const bool outer_eq = outer_count == sequence;
@@ -1039,6 +1056,7 @@ void launch_forward(
     int io_dim,
     cudaStream_t stream) {
   const float scale = 1.0F / std::sqrt(static_cast<float>(io_dim));
+  const bool input_interleaved = !q.is_contiguous();
   const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
   const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
   const bool tile_major_grid = outer_tasks <= 65535;
@@ -1078,6 +1096,7 @@ void launch_forward(
             heads,                                                         \
             batch,                                                         \
             io_dim,                                                        \
+            input_interleaved,                                             \
             scale);                                                        \
   } while (false)
   const bool outer_eq = outer_count == sequence;
@@ -1197,12 +1216,27 @@ void stablefold_triangle_forward_out(
   const int sequence = static_cast<int>(sequence64);
   const int heads = static_cast<int>(heads64);
   const int head_dim = static_cast<int>(head_dim64);
+  const auto is_interleaved_qkv = [&](const torch::Tensor& tensor) {
+    return tensor.stride(4) == 1 && tensor.stride(2) == head_dim64 &&
+        tensor.stride(3) == heads64 * head_dim64 &&
+        (outer64 == 1 ||
+         tensor.stride(1) == sequence64 * heads64 * head_dim64) &&
+        (batch64 == 1 ||
+         tensor.stride(0) ==
+             outer64 * sequence64 * heads64 * head_dim64);
+  };
+  TORCH_CHECK(
+      q.is_contiguous() || is_interleaved_qkv(q),
+      "q must use dense logical H-N-D or producer N-H-D physical storage");
+  const bool q_interleaved = !q.is_contiguous();
   const auto check_q_like = [&](const torch::Tensor& tensor) {
     TORCH_CHECK(
         tensor.is_cuda() && tensor.device() == q.device() &&
             tensor.dtype() == torch::kBFloat16 &&
-            tensor.sizes() == q.sizes() && tensor.is_contiguous(),
-        "k/v/out must be contiguous BF16 tensors matching q on one device");
+            tensor.sizes() == q.sizes() &&
+            (q_interleaved ? is_interleaved_qkv(tensor)
+                           : tensor.is_contiguous()),
+        "k/v must match q sizes and active physical strides on one device");
   };
   check_q_like(k);
   check_q_like(v);
@@ -1213,7 +1247,6 @@ void stablefold_triangle_forward_out(
               torch::IntArrayRef(
                   {batch, outer_count, sequence, heads, head_dim}),
       "out must be contiguous BF16 [B,O,N,H,D] on q.device");
-  TORCH_CHECK(q.is_contiguous());
   TORCH_CHECK(
       mask.is_cuda() && mask.device() == q.device() &&
           mask.dtype() == torch::kFloat32 && mask.is_contiguous() &&

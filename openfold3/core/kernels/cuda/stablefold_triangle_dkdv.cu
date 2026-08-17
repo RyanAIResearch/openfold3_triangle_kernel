@@ -137,14 +137,16 @@ __device__ __forceinline__ void dkdv_mbarrier_wait_parity(
       "r"(parity));
 }
 
-__device__ __forceinline__ void dkdv_tma_load_3d(
+__device__ __forceinline__ void dkdv_tma_load_5d(
     const CUtensorMap* map, __nv_bfloat16* dst, uint64_t* bar,
-    int coord_row, int coord_plane) {
+    int coord_row, int coord_head, int coord_outer, int coord_batch) {
   asm volatile(
-      "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx"
-      "::bytes [%0], [%1, {%2, %3, %4}], [%5];\n" ::"r"(shared_u32(dst)),
+      "cp.async.bulk.tensor.5d.shared::cluster.global.mbarrier::complete_tx"
+      "::bytes [%0], [%1, {%2, %3, %4, %5, %6}], [%7];\n" ::"r"(
+          shared_u32(dst)),
       "l"(reinterpret_cast<uint64_t>(map)),
-      "r"(0), "r"(coord_row), "r"(coord_plane),
+      "r"(0), "r"(coord_row), "r"(coord_head), "r"(coord_outer),
+      "r"(coord_batch),
       "r"(shared_u32(bar)));
 }
 
@@ -260,6 +262,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     int heads,
     int batch,
     int io_dim,
+    bool input_interleaved,
     float scale) {
   // StaticSequence == -1: the production exact-tiles lane -- sequence is
   // a pure runtime parameter under the facade's pad-to-tile contract, so
@@ -326,7 +329,12 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t stats_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
-  const int64_t head_base = stats_base * io_dim;
+  const int64_t head_base = input_interleaved
+      ? (plane * static_cast<int64_t>(sequence) * heads + head) * io_dim
+      : stats_base * io_dim;
+  const int64_t input_row_stride = input_interleaved
+      ? static_cast<int64_t>(heads) * io_dim
+      : io_dim;
   // d_output arrives in the public [B, O, N, H, io_dim] layout.
   const int64_t dout_plane_base =
       plane * static_cast<int64_t>(sequence) * heads * io_dim +
@@ -377,12 +385,12 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
           &kv_barrier,
           2 * kKeyBlock * HeadDim *
               static_cast<int>(sizeof(__nv_bfloat16)));
-      dkdv_tma_load_3d(
+      dkdv_tma_load_5d(
           k_map, k_tile, &kv_barrier, key_block_start,
-          static_cast<int>(plane * heads + head));
-      dkdv_tma_load_3d(
+          head, outer, batch_index);
+      dkdv_tma_load_5d(
           v_map, v_tile, &kv_barrier, key_block_start,
-          static_cast<int>(plane * heads + head));
+          head, outer, batch_index);
     }
     __syncthreads();
     dkdv_mbarrier_wait_parity(&kv_barrier, 0U);
@@ -397,7 +405,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       const int gk = kExact || warp_key + row < sequence ? warp_key + row
                                                           : sequence - 1;
       const int64_t src =
-          head_base + static_cast<int64_t>(gk) * io_dim + col;
+          head_base + static_cast<int64_t>(gk) * input_row_stride + col;
       sk[row * kStride + col] =
           col < io_dim ? k[src] : __float2bfloat16_rn(0.0F);
       sv[row * kStride + col] =
@@ -441,9 +449,9 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
             &qdo_barriers[buffer],
             2 * kQueryTile * HeadDim *
                 static_cast<int>(sizeof(__nv_bfloat16)));
-        dkdv_tma_load_3d(
+        dkdv_tma_load_5d(
             q_map, bq, &qdo_barriers[buffer], query_start,
-            static_cast<int>(plane * heads + head));
+            head, outer, batch_index);
         dkdv_tma_load_4d(
             do_map, bdo, &qdo_barriers[buffer], head, query_start,
             static_cast<int>(plane));
@@ -459,7 +467,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
           : sequence - 1;
       if (col < io_dim) {
         const int64_t src = head_base +
-            static_cast<int64_t>(gq) * io_dim + col;
+            static_cast<int64_t>(gq) * input_row_stride + col;
         const int64_t dout_src = dout_plane_base +
             static_cast<int64_t>(gq) * heads * io_dim + col;
         cp_async_16(bq + row * kStride + col, q + src);
@@ -724,7 +732,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
 
   // Epilogue: dK scaled once; both stored BF16, tail keys skipped.
   const int64_t out_base = head_base +
-      static_cast<int64_t>(warp_key) * io_dim;
+      static_cast<int64_t>(warp_key) * input_row_stride;
 #pragma unroll
   for (int tile = 0; tile < HeadDim / 8; ++tile) {
 #pragma unroll
@@ -737,13 +745,17 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       if (column >= io_dim) {
         continue;
       }
-      out_dv[out_base + static_cast<int64_t>(row) * io_dim + column] =
+      out_dv[out_base + static_cast<int64_t>(row) * input_row_stride +
+             column] =
           __float2bfloat16_rn(dv_acc[tile].v[half * 2]);
-      out_dv[out_base + static_cast<int64_t>(row) * io_dim + column + 1] =
+      out_dv[out_base + static_cast<int64_t>(row) * input_row_stride +
+             column + 1] =
           __float2bfloat16_rn(dv_acc[tile].v[half * 2 + 1]);
-      out_dk[out_base + static_cast<int64_t>(row) * io_dim + column] =
+      out_dk[out_base + static_cast<int64_t>(row) * input_row_stride +
+             column] =
           __float2bfloat16_rn(dk_acc[tile].v[half * 2] * scale);
-      out_dk[out_base + static_cast<int64_t>(row) * io_dim + column + 1] =
+      out_dk[out_base + static_cast<int64_t>(row) * input_row_stride +
+             column + 1] =
           __float2bfloat16_rn(dk_acc[tile].v[half * 2 + 1] * scale);
     }
   }
@@ -774,12 +786,13 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     int heads,
     int batch,
     int io_dim,
+    bool input_interleaved,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 false, OuterEqSeq, TmaQdo>(
       &q_map, &do_map, &k_map, &v_map, q, k, v, d_output, logsumexp,
       delta, mask, bias, out_dk, out_dv, nullptr, 0, runtime_sequence,
-      outer_count, heads, batch, io_dim, scale);
+      outer_count, heads, batch, io_dim, input_interleaved, scale);
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
@@ -807,12 +820,14 @@ void stablefold_triangle_dkdv_delta_true_kernel(
     int heads,
     int batch,
     int io_dim,
+    bool input_interleaved,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 true, OuterEqSeq, TmaQdo>(
       &q_map, &do_map, &k_map, &v_map, q, k, v, d_output, logsumexp,
       delta, mask, bias, out_dk, out_dv, delta_true_partials, key_blocks,
-      runtime_sequence, outer_count, heads, batch, io_dim, scale);
+      runtime_sequence, outer_count, heads, batch, io_dim,
+      input_interleaved, scale);
 }
 
 // Fixed ascending fold of the per-key-block row scalars into
@@ -868,6 +883,7 @@ void launch(
     int heads,
     int batch,
     int io_dim,
+    bool input_interleaved,
     cudaStream_t stream) {
   constexpr int kStride = HeadDim + 8;
   constexpr int kSharedBytes =
@@ -931,6 +947,7 @@ void launch(
               heads,
               batch,
               io_dim,
+              input_interleaved,
               scale);
     } else {
       stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
@@ -957,6 +974,7 @@ void launch(
               heads,
               batch,
               io_dim,
+              input_interleaved,
               scale);
     }
   } else {
@@ -998,6 +1016,7 @@ void launch(
               heads,
               batch,
               io_dim,
+              input_interleaved,
               scale);
     } else {
       stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, false,
@@ -1022,6 +1041,7 @@ void launch(
               heads,
               batch,
               io_dim,
+              input_interleaved,
               scale);
     }
   }
@@ -1058,23 +1078,28 @@ CUtensorMapSwizzle dkdv_swizzle_for(int head_dim) {
                         : CU_TENSOR_MAP_SWIZZLE_128B);
 }
 
-// q: internal [B, O, H, N, D] as [planes, N, D]; box one query tile.
+// Logical [B,O,H,N,D], using actual strides so both H-N-D contiguous and
+// producer N-H-D physical storage are legal; box one query tile.
 CUtensorMap dkdv_make_q_map(
     const torch::Tensor& source, int head_dim, int sequence,
-    int64_t planes) {
+    int heads, int outer_count, int batch) {
   CUtensorMap tensor_map;
-  const cuuint64_t global_dim[3] = {
+  const cuuint64_t global_dim[5] = {
       static_cast<cuuint64_t>(head_dim),
       static_cast<cuuint64_t>(sequence),
-      static_cast<cuuint64_t>(planes)};
-  const cuuint64_t global_stride[2] = {
-      static_cast<cuuint64_t>(head_dim) * sizeof(__nv_bfloat16),
-      static_cast<cuuint64_t>(head_dim) * sequence * sizeof(__nv_bfloat16)};
-  const cuuint32_t box_dim[3] = {
-      static_cast<cuuint32_t>(head_dim), kQueryTile, 1};
-  const cuuint32_t element_stride[3] = {1, 1, 1};
+      static_cast<cuuint64_t>(heads),
+      static_cast<cuuint64_t>(outer_count),
+      static_cast<cuuint64_t>(batch)};
+  const cuuint64_t global_stride[4] = {
+      static_cast<cuuint64_t>(source.stride(3)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(2)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(1)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(0)) * sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[5] = {
+      static_cast<cuuint32_t>(head_dim), kQueryTile, 1, 1, 1};
+  const cuuint32_t element_stride[5] = {1, 1, 1, 1, 1};
   const CUresult result = dkdv_tensor_map_encode_fn()(
-      &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 3, source.data_ptr(),
+      &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 5, source.data_ptr(),
       global_dim, global_stride, box_dim, element_stride,
       CU_TENSOR_MAP_INTERLEAVE_NONE, dkdv_swizzle_for(head_dim),
       CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
@@ -1112,23 +1137,27 @@ CUtensorMap dkdv_make_do_map(
   return tensor_map;
 }
 
-// K/V: internal layout, box = one whole key block [D x kKeyBlock rows].
+// K/V logical layout with actual physical strides; box one whole key block.
 CUtensorMap dkdv_make_kv_block_map(
     const torch::Tensor& source, int head_dim, int sequence,
-    int64_t planes) {
+    int heads, int outer_count, int batch) {
   CUtensorMap tensor_map;
-  const cuuint64_t global_dim[3] = {
+  const cuuint64_t global_dim[5] = {
       static_cast<cuuint64_t>(head_dim),
       static_cast<cuuint64_t>(sequence),
-      static_cast<cuuint64_t>(planes)};
-  const cuuint64_t global_stride[2] = {
-      static_cast<cuuint64_t>(head_dim) * sizeof(__nv_bfloat16),
-      static_cast<cuuint64_t>(head_dim) * sequence * sizeof(__nv_bfloat16)};
-  const cuuint32_t box_dim[3] = {
-      static_cast<cuuint32_t>(head_dim), kKeyBlock, 1};
-  const cuuint32_t element_stride[3] = {1, 1, 1};
+      static_cast<cuuint64_t>(heads),
+      static_cast<cuuint64_t>(outer_count),
+      static_cast<cuuint64_t>(batch)};
+  const cuuint64_t global_stride[4] = {
+      static_cast<cuuint64_t>(source.stride(3)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(2)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(1)) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(source.stride(0)) * sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[5] = {
+      static_cast<cuuint32_t>(head_dim), kKeyBlock, 1, 1, 1};
+  const cuuint32_t element_stride[5] = {1, 1, 1, 1, 1};
   const CUresult result = dkdv_tensor_map_encode_fn()(
-      &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 3, source.data_ptr(),
+      &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 5, source.data_ptr(),
       global_dim, global_stride, box_dim, element_stride,
       CU_TENSOR_MAP_INTERLEAVE_NONE, dkdv_swizzle_for(head_dim),
       CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
@@ -1159,6 +1188,7 @@ void dispatch_sequence(
     int heads,
     int batch,
     int io_dim,
+    bool input_interleaved,
     cudaStream_t stream) {
   // One lane for every length: the exact-tiles contract (sequence padded
   // to the tile quantum by the facade) folds all guards at compile time
@@ -1169,23 +1199,23 @@ void dispatch_sequence(
       launch<HeadDim, -1, EmitDeltaTrue, true, TmaQdo>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
           delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, stream);
+          outer_count, heads, batch, io_dim, input_interleaved, stream);
     } else {
       launch<HeadDim, -1, EmitDeltaTrue, false, TmaQdo>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
           delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, stream);
+          outer_count, heads, batch, io_dim, input_interleaved, stream);
     }
   } else if (outer_eq) {
     launch<HeadDim, 0, EmitDeltaTrue, true, TmaQdo>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
         delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, stream);
+          outer_count, heads, batch, io_dim, input_interleaved, stream);
   } else {
     launch<HeadDim, 0, EmitDeltaTrue, false, TmaQdo>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
         delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, stream);
+          outer_count, heads, batch, io_dim, input_interleaved, stream);
   }
 }
 
@@ -1223,14 +1253,28 @@ void run_dkdv(
   const int sequence = static_cast<int>(sequence64);
   const int heads = static_cast<int>(heads64);
   const int head_dim = static_cast<int>(head_dim64);
-  TORCH_CHECK(q.is_contiguous());
+  const auto is_interleaved_qkv = [&](const torch::Tensor& tensor) {
+    return tensor.stride(4) == 1 && tensor.stride(2) == head_dim64 &&
+        tensor.stride(3) == heads64 * head_dim64 &&
+        (outer64 == 1 ||
+         tensor.stride(1) == sequence64 * heads64 * head_dim64) &&
+        (batch64 == 1 ||
+         tensor.stride(0) ==
+             outer64 * sequence64 * heads64 * head_dim64);
+  };
+  TORCH_CHECK(
+      q.is_contiguous() || is_interleaved_qkv(q),
+      "q must use dense logical H-N-D or producer N-H-D physical storage");
+  const bool input_interleaved = !q.is_contiguous();
   const auto check_q_like = [&](const torch::Tensor& tensor) {
     TORCH_CHECK(
         tensor.is_cuda() && tensor.device() == q.device() &&
             tensor.dtype() == torch::kBFloat16 &&
-            tensor.sizes() == q.sizes() && tensor.is_contiguous(),
-        "k/v/d_output/out_dk/out_dv must be contiguous BF16 tensors "
-        "matching q on one device");
+            tensor.sizes() == q.sizes() &&
+            (input_interleaved ? is_interleaved_qkv(tensor)
+                               : tensor.is_contiguous()),
+        "k/v/out_dk/out_dv must match q sizes and active physical strides "
+        "on one device");
   };
   check_q_like(k);
   check_q_like(v);
@@ -1283,11 +1327,14 @@ void run_dkdv(
   CUtensorMap k_map{};
   CUtensorMap v_map{};
   if (tma_qdo) {
-    q_map = dkdv_make_q_map(q, io_dim, sequence, planes_i64);
+    q_map = dkdv_make_q_map(
+        q, io_dim, sequence, heads, outer_count, batch);
     do_map = dkdv_make_do_map(
         d_output, io_dim, sequence, heads, q.size(0) * q.size(1));
-    k_map = dkdv_make_kv_block_map(k, io_dim, sequence, planes_i64);
-    v_map = dkdv_make_kv_block_map(v, io_dim, sequence, planes_i64);
+    k_map = dkdv_make_kv_block_map(
+        k, io_dim, sequence, heads, outer_count, batch);
+    v_map = dkdv_make_kv_block_map(
+        v, io_dim, sequence, heads, outer_count, batch);
   }
   switch (storage) {
     case 16:
@@ -1295,12 +1342,14 @@ void run_dkdv(
         dispatch_sequence<16, EmitDeltaTrue, true>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
             out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim, stream);
+            sequence, outer_count, heads, batch, io_dim,
+            input_interleaved, stream);
       } else {
         dispatch_sequence<16, EmitDeltaTrue, false>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
             out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim, stream);
+            sequence, outer_count, heads, batch, io_dim,
+            input_interleaved, stream);
       }
       break;
     case 32:
@@ -1308,12 +1357,14 @@ void run_dkdv(
         dispatch_sequence<32, EmitDeltaTrue, true>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
             out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim, stream);
+            sequence, outer_count, heads, batch, io_dim,
+            input_interleaved, stream);
       } else {
         dispatch_sequence<32, EmitDeltaTrue, false>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
             out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim, stream);
+            sequence, outer_count, heads, batch, io_dim,
+            input_interleaved, stream);
       }
       break;
     case 64:
@@ -1321,19 +1372,21 @@ void run_dkdv(
         dispatch_sequence<64, EmitDeltaTrue, true>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
             out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim, stream);
+            sequence, outer_count, heads, batch, io_dim,
+            input_interleaved, stream);
       } else {
         dispatch_sequence<64, EmitDeltaTrue, false>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
             out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim, stream);
+            sequence, outer_count, heads, batch, io_dim,
+            input_interleaved, stream);
       }
       break;
     case 128:
       dispatch_sequence<128, EmitDeltaTrue, false>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
           delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, stream);
+          outer_count, heads, batch, io_dim, input_interleaved, stream);
       break;
     default:
       TORCH_CHECK(false, "unsupported storage lane for StableFold dK/dV");
