@@ -19,7 +19,9 @@
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <cuda.h>
 #include <cuda_bf16.h>
+#include <cuda_runtime_api.h>
 #include <torch/extension.h>
 
 #include <cmath>
@@ -110,6 +112,120 @@ __device__ __forceinline__ void ldmatrix_b_keytrans(
     uint32_t (&frag)[2]) {
   const int key = key_start + (lane & 15);
   const uint32_t addr = shared_u32(tile + key * ld + dim_start);
+  asm volatile(
+      "ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n"
+      : "=r"(frag[0]), "=r"(frag[1])
+      : "r"(addr));
+}
+
+
+// ---------------------------------------------------------------------------
+// TMA + WGMMA lane (HeadDim <= 64). K and V arrive by TMA bulk copies into
+// swizzled shared boxes; QK^T is one wide m64n64k16 warpgroup MMA per
+// 16-dim chain (probe-verified descriptor: LBO=64, SBO=HeadDim in 16-byte
+// units = the 8-key group stride, mode by swizzle span); PV keeps the
+// mma.sync path with ldmatrix applying the swizzle XOR in its address.
+// Bitwise equal to the legacy lane (wgmma == chained mma.sync, gated).
+// ---------------------------------------------------------------------------
+
+__device__ __forceinline__ void proxy_fence() {
+  asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void mbarrier_init(uint64_t* bar, int count) {
+  asm volatile(
+      "mbarrier.init.shared::cta.b64 [%0], %1;\n" ::"r"(shared_u32(bar)),
+      "r"(count));
+}
+
+__device__ __forceinline__ void mbarrier_expect_tx(
+    uint64_t* bar, uint32_t bytes) {
+  asm volatile(
+      "mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;\n" ::"r"(
+          shared_u32(bar)),
+      "r"(bytes));
+}
+
+__device__ __forceinline__ void mbarrier_wait_parity(
+    uint64_t* bar, uint32_t parity) {
+  asm volatile(
+      "{\n"
+      "  .reg .pred done;\n"
+      "  wait:\n"
+      "  mbarrier.try_wait.parity.shared::cta.b64 done, [%0], %1;\n"
+      "  @!done bra wait;\n"
+      "}\n" ::"r"(shared_u32(bar)),
+      "r"(parity));
+}
+
+__device__ __forceinline__ void tma_load_3d_slice(
+    const CUtensorMap* map, __nv_bfloat16* dst, uint64_t* bar,
+    int coord_key, int coord_plane) {
+  asm volatile(
+      "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx"
+      "::bytes [%0], [%1, {%2, %3, %4}], [%5];\n" ::"r"(shared_u32(dst)),
+      "l"(reinterpret_cast<uint64_t>(map)),
+      "r"(0),
+      "r"(coord_key),
+      "r"(coord_plane),
+      "r"(shared_u32(bar)));
+}
+
+__device__ __forceinline__ void wgmma_fence() {
+  asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void wgmma_commit() {
+  asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void wgmma_wait_zero() {
+  asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+}
+
+// One wide QK atom over all eight key groups; operand order score[0].v[0..3]
+// ... score[7].v[0..3] matches the accumulator layout d[group*4+quad]
+// (probe-verified against the chained-n8 reference).
+__device__ __forceinline__ void wgmma_m64n64k16(
+    Acc (&score)[8], const uint32_t (&a)[4], uint64_t descriptor_b,
+    int accumulate) {
+  asm volatile(
+      "{\n"
+      "  .reg .pred use_acc;\n"
+      "  setp.ne.b32 use_acc, %37, 0;\n"
+      "  wgmma.mma_async.sync.aligned.m64n64k16.f32.bf16.bf16 "
+      "  {%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15,"
+      "   %16,%17,%18,%19,%20,%21,%22,%23,%24,%25,%26,%27,%28,%29,%30,%31},"
+      "  {%32,%33,%34,%35}, %36, use_acc, 1, 1, 0;\n"
+      "}\n"
+      : "+f"(score[0].v[0]), "+f"(score[0].v[1]), "+f"(score[0].v[2]),
+        "+f"(score[0].v[3]), "+f"(score[1].v[0]), "+f"(score[1].v[1]),
+        "+f"(score[1].v[2]), "+f"(score[1].v[3]), "+f"(score[2].v[0]),
+        "+f"(score[2].v[1]), "+f"(score[2].v[2]), "+f"(score[2].v[3]),
+        "+f"(score[3].v[0]), "+f"(score[3].v[1]), "+f"(score[3].v[2]),
+        "+f"(score[3].v[3]), "+f"(score[4].v[0]), "+f"(score[4].v[1]),
+        "+f"(score[4].v[2]), "+f"(score[4].v[3]), "+f"(score[5].v[0]),
+        "+f"(score[5].v[1]), "+f"(score[5].v[2]), "+f"(score[5].v[3]),
+        "+f"(score[6].v[0]), "+f"(score[6].v[1]), "+f"(score[6].v[2]),
+        "+f"(score[6].v[3]), "+f"(score[7].v[0]), "+f"(score[7].v[1]),
+        "+f"(score[7].v[2]), "+f"(score[7].v[3])
+      : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "l"(descriptor_b),
+        "r"(accumulate));
+}
+
+// Keytrans ldmatrix over a TMA-swizzled tile: each key row spans
+// HeadDim/8 16-byte atoms and the swizzle XOR advances once per 128
+// BYTES of tile offset (dump-probe verified for SW32/SW64/SW128), so the
+// atom permutation is chunk XOR ((key*HeadDim) >> 6, masked to the row).
+template <int HeadDim>
+__device__ __forceinline__ void ldmatrix_b_keytrans_sw(
+    const __nv_bfloat16* tile, int key_start, int dim_start, int lane,
+    uint32_t (&frag)[2]) {
+  constexpr int kAtoms = HeadDim / 8;
+  const int key = key_start + (lane & 15);
+  const int atom =
+      (dim_start >> 3) ^ (((key * HeadDim) >> 6) & (kAtoms - 1));
+  const uint32_t addr = shared_u32(tile + key * HeadDim + atom * 8);
   asm volatile(
       "ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n"
       : "=r"(frag[0]), "=r"(frag[1])
@@ -397,10 +513,438 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
   }
 }
 
+
+// TMA + WGMMA production lane (HeadDim <= 64): identical math and reduction
+// order to the legacy kernel (wgmma proved bitwise equal to the chained
+// mma.sync; the swizzled keytrans reads the same bytes), with K and V
+// staged by the bulk tensor engine instead of per-thread cp.async.
+template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq>
+__global__ __launch_bounds__(kThreads) void
+stablefold_triangle_forward_tma_kernel(
+    const __grid_constant__ CUtensorMap k_map,
+    const __grid_constant__ CUtensorMap v_map,
+    const __nv_bfloat16* __restrict__ q,
+    const float* __restrict__ mask,
+    const __nv_bfloat16* __restrict__ bias,
+    __nv_bfloat16* __restrict__ out,
+    float* __restrict__ lse,
+    int sequence,
+    int outer_count,
+    int heads,
+    float scale) {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+  constexpr int kQStride = HeadDim + 8;
+  constexpr int kTileElements = kBlockN * HeadDim;  // TMA box, swizzled
+  const int lane = threadIdx.x & (kWarpSize - 1);
+  const int warp = threadIdx.x / kWarpSize;
+  const int oc = OuterEqSeq ? sequence : outer_count;
+  const int outer_task = TileMajorGrid ? blockIdx.z : blockIdx.x;
+  const int batch_index = outer_task / oc;
+  const int outer = outer_task - batch_index * oc;
+  const int query_block =
+      (TileMajorGrid ? blockIdx.x : blockIdx.z) * kBlockM;
+  const int head = blockIdx.y;
+  const int warp_query = query_block + warp * kRowsPerWarp;
+
+  extern __shared__ __align__(1024) unsigned char smem_raw[];
+  __nv_bfloat16* sq = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
+      warp * kRowsPerWarp * kQStride;
+  __nv_bfloat16* k_buffers = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
+      kBlockM * kQStride;
+  __nv_bfloat16* v_buffers = k_buffers + 2 * kTileElements;
+  __shared__ __align__(8) uint64_t k_barriers[2];
+  __shared__ __align__(8) uint64_t v_barriers[2];
+
+  const int64_t plane =
+      static_cast<int64_t>(batch_index) * oc + outer;
+  const int64_t plane_row_base =
+      (plane * heads + head) * static_cast<int64_t>(sequence);
+  const int64_t head_base = plane_row_base * HeadDim;
+  const int64_t bias_base =
+      (static_cast<int64_t>(batch_index) * heads + head) *
+      static_cast<int64_t>(sequence) * sequence;
+  const int64_t mask_base = plane * sequence;
+  // The launch contract guarantees batch*outer*heads fits int32.
+  const int tma_plane = static_cast<int>(plane * heads + head);
+
+  if (threadIdx.x == 0) {
+    mbarrier_init(&k_barriers[0], 1);
+    mbarrier_init(&k_barriers[1], 1);
+    mbarrier_init(&v_barriers[0], 1);
+    mbarrier_init(&v_barriers[1], 1);
+  }
+
+  for (int element = lane; element < kRowsPerWarp * HeadDim;
+       element += kWarpSize) {
+    const int row = element / HeadDim;
+    const int col = element - row * HeadDim;
+    const int gq = ExactTiles || warp_query + row < sequence
+        ? warp_query + row
+        : 0;
+    sq[row * kQStride + col] =
+        q[head_base + static_cast<int64_t>(gq) * HeadDim + col];
+  }
+  __syncthreads();  // covers mbarrier_init visibility too
+
+  uint32_t q_frags[HeadDim / 16][4];
+#pragma unroll
+  for (int chain = 0; chain < HeadDim / 16; ++chain) {
+    ldmatrix_a16x16(sq, kQStride, chain * 16, lane, q_frags[chain]);
+  }
+
+  float m_state[2] = {-std::numeric_limits<float>::infinity(),
+                      -std::numeric_limits<float>::infinity()};
+  float l_state[2] = {0.0F, 0.0F};
+  Acc o_acc[HeadDim / 8];
+#pragma unroll
+  for (int tile = 0; tile < HeadDim / 8; ++tile) {
+    o_acc[tile] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+  }
+
+  const auto issue_k = [&](int key_tile, int buffer) {
+    if (threadIdx.x == 0) {
+      mbarrier_expect_tx(
+          &k_barriers[buffer],
+          kTileElements * static_cast<int>(sizeof(__nv_bfloat16)));
+      tma_load_3d_slice(
+          &k_map, k_buffers + buffer * kTileElements, &k_barriers[buffer],
+          key_tile * kBlockN, tma_plane);
+    }
+  };
+  const auto issue_v = [&](int key_tile, int buffer) {
+    if (threadIdx.x == 0) {
+      mbarrier_expect_tx(
+          &v_barriers[buffer],
+          kTileElements * static_cast<int>(sizeof(__nv_bfloat16)));
+      tma_load_3d_slice(
+          &v_map, v_buffers + buffer * kTileElements, &v_barriers[buffer],
+          key_tile * kBlockN, tma_plane);
+    }
+  };
+
+  const int key_tiles = (sequence + kBlockN - 1) / kBlockN;
+  issue_k(0, 0);
+  issue_v(0, 0);
+#pragma unroll 1
+  for (int key_tile = 0; key_tile < key_tiles; ++key_tile) {
+    const int key_start = key_tile * kBlockN;
+    const int buffer = key_tile & 1;
+    const uint32_t parity = (key_tile >> 1) & 1;
+    __nv_bfloat16* sb_k = k_buffers + buffer * kTileElements;
+    __nv_bfloat16* sv = v_buffers + buffer * kTileElements;
+
+    // QK only needs K; V's completion wait is deferred to just before PV.
+    mbarrier_wait_parity(&k_barriers[buffer], parity);
+    proxy_fence();
+
+    // One wide m64n64k16 per 16-dim chain over the swizzled K box.
+    // Descriptor: LBO=64, SBO=HeadDim (in 16B units: 8 keys * HeadDim*2B
+    // per row / 16), mode by swizzle span, chain offset 32B.
+    constexpr uint64_t kMode = HeadDim == 16 ? 3 : (HeadDim == 32 ? 2 : 1);
+    constexpr uint64_t kWideLbo = 64;
+    constexpr uint64_t kWideSbo = HeadDim;
+    Acc score[kBlockN / 8];
+#pragma unroll
+    for (int column = 0; column < kBlockN / 8; ++column) {
+      score[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+    }
+    wgmma_fence();
+#pragma unroll
+    for (int chain = 0; chain < HeadDim / 16; ++chain) {
+      const uint64_t descriptor =
+          ((static_cast<uint64_t>(shared_u32(sb_k)) + chain * 32) >> 4) |
+          (kWideLbo << 16) | (kWideSbo << 32) | (kMode << 62);
+      wgmma_m64n64k16(score, q_frags[chain], descriptor, chain != 0);
+    }
+    wgmma_commit();
+    // Overlap window: stage the NEXT tile's K and V while the QK MMAs run.
+    if (key_tile + 1 < key_tiles) {
+      issue_k(key_tile + 1, buffer ^ 1);
+      issue_v(key_tile + 1, buffer ^ 1);
+    }
+    wgmma_wait_zero();
+
+    float tile_max[2] = {-std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity()};
+    const int group = lane >> 2;
+    const int thread_in_group = lane & 3;
+#pragma unroll
+    for (int column = 0; column < kBlockN / 8; ++column) {
+#pragma unroll
+      for (int half = 0; half < 2; ++half) {
+        const int row = warp_query + group + half * 8;
+#pragma unroll
+        for (int pair = 0; pair < 2; ++pair) {
+          const int key = key_start + column * 8 + thread_in_group * 2 + pair;
+          float value = score[column].v[half * 2 + pair];
+          if (ExactTiles || (key < sequence && row < sequence)) {
+            value = value * scale + mask[mask_base + key] +
+                __bfloat162float(
+                    bias[bias_base +
+                         static_cast<int64_t>(row) * sequence + key]);
+          } else {
+            value = -std::numeric_limits<float>::infinity();
+          }
+          score[column].v[half * 2 + pair] = value;
+          tile_max[half] = fmaxf(tile_max[half], value);
+        }
+      }
+    }
+#pragma unroll
+    for (int half = 0; half < 2; ++half) {
+      tile_max[half] = quad_max(tile_max[half]);
+    }
+
+    float rescale[2];
+#pragma unroll
+    for (int half = 0; half < 2; ++half) {
+      const float m_new = fmaxf(m_state[half], tile_max[half]);
+      rescale[half] =
+          m_state[half] == -std::numeric_limits<float>::infinity()
+          ? 0.0F
+          : __expf(m_state[half] - m_new);
+      m_state[half] = m_new;
+      l_state[half] *= rescale[half];
+    }
+#pragma unroll
+    for (int tile = 0; tile < HeadDim / 8; ++tile) {
+#pragma unroll
+      for (int half = 0; half < 2; ++half) {
+        o_acc[tile].v[half * 2] *= rescale[half];
+        o_acc[tile].v[half * 2 + 1] *= rescale[half];
+      }
+    }
+
+    float row_sum[2] = {0.0F, 0.0F};
+#pragma unroll
+    for (int column = 0; column < kBlockN / 8; ++column) {
+#pragma unroll
+      for (int half = 0; half < 2; ++half) {
+        float p0 = score[column].v[half * 2];
+        float p1 = score[column].v[half * 2 + 1];
+        p0 = p0 == -std::numeric_limits<float>::infinity()
+            ? 0.0F
+            : __expf(p0 - m_state[half]);
+        p1 = p1 == -std::numeric_limits<float>::infinity()
+            ? 0.0F
+            : __expf(p1 - m_state[half]);
+        row_sum[half] += p0 + p1;
+        score[column].v[half * 2] = p0;
+        score[column].v[half * 2 + 1] = p1;
+      }
+    }
+#pragma unroll
+    for (int half = 0; half < 2; ++half) {
+      l_state[half] += quad_sum(row_sum[half]);
+    }
+
+    // V's TMA completion, then the async->generic proxy fence so ldmatrix
+    // sees the tile; PV keeps the proven mma.sync path over the swizzled
+    // layout.
+    mbarrier_wait_parity(&v_barriers[buffer], parity);
+    proxy_fence();
+#pragma unroll
+    for (int chunk = 0; chunk < kBlockN / 16; ++chunk) {
+      uint32_t p_frag[4];
+      p_frag[0] = pack_bf16_pair(
+          score[chunk * 2].v[0], score[chunk * 2].v[1]);
+      p_frag[1] = pack_bf16_pair(
+          score[chunk * 2].v[2], score[chunk * 2].v[3]);
+      p_frag[2] = pack_bf16_pair(
+          score[chunk * 2 + 1].v[0], score[chunk * 2 + 1].v[1]);
+      p_frag[3] = pack_bf16_pair(
+          score[chunk * 2 + 1].v[2], score[chunk * 2 + 1].v[3]);
+#pragma unroll
+      for (int tile = 0; tile < HeadDim / 8; ++tile) {
+        uint32_t v_frag[2];
+        ldmatrix_b_keytrans_sw<HeadDim>(
+            sv, chunk * 16, tile * 8, lane, v_frag);
+        mma_m16n8k16(o_acc[tile], p_frag, v_frag);
+      }
+    }
+    __syncthreads();  // all reads of this buffer done before its reuse
+  }
+
+  const int group = lane >> 2;
+  const int thread_in_group = lane & 3;
+#pragma unroll
+  for (int half = 0; half < 2; ++half) {
+    const int row = warp_query + group + half * 8;
+    if (!ExactTiles && row >= sequence) {
+      continue;
+    }
+    const float inv_l = l_state[half] == 0.0F ? 0.0F : 1.0F / l_state[half];
+#pragma unroll
+    for (int tile = 0; tile < HeadDim / 8; ++tile) {
+#pragma unroll
+      for (int pair = 0; pair < 2; ++pair) {
+        const int dim = tile * 8 + thread_in_group * 2 + pair;
+        out[head_base + static_cast<int64_t>(row) * HeadDim + dim] =
+            __float2bfloat16_rn(o_acc[tile].v[half * 2 + pair] * inv_l);
+      }
+    }
+    if (thread_in_group == 0) {
+      lse[plane_row_base + row] =
+          m_state[half] + __logf(l_state[half]);
+    }
+  }
+#endif
+}
+
 template <int HeadDim>
 constexpr int shared_bytes() {
   return (kBlockM * (HeadDim + 8) + 4 * kBlockN * (HeadDim + 8)) *
       static_cast<int>(sizeof(__nv_bfloat16));
+}
+
+template <int HeadDim>
+constexpr int shared_bytes_tma() {
+  return (kBlockM * (HeadDim + 8) + 4 * kBlockN * HeadDim) *
+      static_cast<int>(sizeof(__nv_bfloat16));
+}
+
+// cuTensorMapEncodeTiled resolved through the runtime so the extension
+// never links libcuda directly.
+using TensorMapEncodeFn = CUresult (*)(
+    CUtensorMap*, CUtensorMapDataType, cuuint32_t, void*, const cuuint64_t*,
+    const cuuint64_t*, const cuuint32_t*, const cuuint32_t*,
+    CUtensorMapInterleave, CUtensorMapSwizzle, CUtensorMapL2promotion,
+    CUtensorMapFloatOOBfill);
+
+TensorMapEncodeFn tensor_map_encode_fn() {
+  static const TensorMapEncodeFn encode = [] {
+    void* symbol = nullptr;
+    cudaDriverEntryPointQueryResult query =
+        cudaDriverEntryPointSymbolNotFound;
+    const cudaError_t status = cudaGetDriverEntryPoint(
+        "cuTensorMapEncodeTiled", &symbol, cudaEnableDefault, &query);
+    TORCH_CHECK(
+        status == cudaSuccess && query == cudaDriverEntryPointSuccess &&
+            symbol != nullptr,
+        "cuTensorMapEncodeTiled is unavailable in this driver");
+    return reinterpret_cast<TensorMapEncodeFn>(symbol);
+  }();
+  return encode;
+}
+
+// [planes, sequence, HeadDim] view of a contiguous [B, O, H, N, D] tensor,
+// boxed per key tile with the swizzle matching the row span.
+CUtensorMap make_kv_tensor_map(
+    const torch::Tensor& source, int head_dim, int sequence, int64_t planes) {
+  CUtensorMap tensor_map;
+  const cuuint64_t global_dim[3] = {
+      static_cast<cuuint64_t>(head_dim),
+      static_cast<cuuint64_t>(sequence),
+      static_cast<cuuint64_t>(planes)};
+  const cuuint64_t global_stride[2] = {
+      static_cast<cuuint64_t>(head_dim) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(head_dim) * sequence * sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[3] = {
+      static_cast<cuuint32_t>(head_dim), kBlockN, 1};
+  const cuuint32_t element_stride[3] = {1, 1, 1};
+  const CUtensorMapSwizzle swizzle = head_dim == 16
+      ? CU_TENSOR_MAP_SWIZZLE_32B
+      : (head_dim == 32 ? CU_TENSOR_MAP_SWIZZLE_64B
+                        : CU_TENSOR_MAP_SWIZZLE_128B);
+  const CUresult result = tensor_map_encode_fn()(
+      &tensor_map,
+      CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
+      3,
+      source.data_ptr(),
+      global_dim,
+      global_stride,
+      box_dim,
+      element_stride,
+      CU_TENSOR_MAP_INTERLEAVE_NONE,
+      swizzle,
+      CU_TENSOR_MAP_L2_PROMOTION_NONE,
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  TORCH_CHECK(
+      result == CUDA_SUCCESS,
+      "cuTensorMapEncodeTiled failed: ", static_cast<int>(result));
+  return tensor_map;
+}
+
+template <int HeadDim>
+void launch_forward_tma(
+    const torch::Tensor& q,
+    const torch::Tensor& k,
+    const torch::Tensor& v,
+    const torch::Tensor& mask,
+    const torch::Tensor& bias,
+    torch::Tensor& out,
+    torch::Tensor& lse,
+    int sequence,
+    int outer_count,
+    int heads,
+    int batch,
+    cudaStream_t stream) {
+  const int64_t planes =
+      static_cast<int64_t>(batch) * outer_count * heads;
+  const CUtensorMap k_map =
+      make_kv_tensor_map(k, HeadDim, sequence, planes);
+  const CUtensorMap v_map =
+      make_kv_tensor_map(v, HeadDim, sequence, planes);
+  const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
+  const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
+  const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
+  const bool tile_major_grid = outer_tasks <= 65535;
+  const dim3 grid = tile_major_grid
+      ? dim3(
+            static_cast<unsigned int>(query_blocks),
+            static_cast<unsigned int>(heads),
+            static_cast<unsigned int>(outer_tasks))
+      : dim3(
+            static_cast<unsigned int>(outer_tasks),
+            static_cast<unsigned int>(heads),
+            static_cast<unsigned int>(query_blocks));
+  const bool exact_tiles =
+      sequence % kBlockM == 0 && sequence % kBlockN == 0;
+#define LAUNCH_STABLEFOLD_FORWARD_TMA(TileMajor, Exact, OuterEq)            \
+  do {                                                                      \
+    const cudaError_t status = cudaFuncSetAttribute(                        \
+        stablefold_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,   \
+                                               OuterEq>,                    \
+        cudaFuncAttributeMaxDynamicSharedMemorySize,                        \
+        shared_bytes_tma<HeadDim>());                                       \
+    TORCH_CHECK(                                                            \
+        status == cudaSuccess,                                              \
+        "failed to opt in StableFold TMA forward shared memory: ",          \
+        cudaGetErrorString(status));                                        \
+    stablefold_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,       \
+                                           OuterEq>                         \
+        <<<grid, kThreads, shared_bytes_tma<HeadDim>(), stream>>>(          \
+            k_map,                                                          \
+            v_map,                                                          \
+            reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
+            mask.data_ptr<float>(),                                         \
+            reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),        \
+            reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),               \
+            lse.data_ptr<float>(),                                          \
+            sequence,                                                       \
+            outer_count,                                                    \
+            heads,                                                          \
+            scale);                                                         \
+  } while (false)
+  const bool outer_eq = outer_count == sequence;
+  if (tile_major_grid) {
+    if (exact_tiles) {
+      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD_TMA(true, true, true);
+      else LAUNCH_STABLEFOLD_FORWARD_TMA(true, true, false);
+    } else {
+      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD_TMA(true, false, true);
+      else LAUNCH_STABLEFOLD_FORWARD_TMA(true, false, false);
+    }
+  } else {
+    if (exact_tiles) {
+      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD_TMA(false, true, true);
+      else LAUNCH_STABLEFOLD_FORWARD_TMA(false, true, false);
+    } else {
+      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD_TMA(false, false, true);
+      else LAUNCH_STABLEFOLD_FORWARD_TMA(false, false, false);
+    }
+  }
+#undef LAUNCH_STABLEFOLD_FORWARD_TMA
 }
 
 template <int HeadDim>
@@ -540,21 +1084,42 @@ void stablefold_triangle_forward_out(
 
   const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
+  // TMA lanes need the flattened (batch, outer, head) plane coordinate to
+  // fit the tensor map's int32 contract; the legacy lane covers the rest.
+  const bool tma_planes_ok = batch64 * outer64 * heads64 <= 2147483647LL;
   switch (head_dim) {
     case 16:
-      launch_forward<16>(
-          q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch,
-          stream);
+      if (tma_planes_ok) {
+        launch_forward_tma<16>(
+            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
+            batch, stream);
+      } else {
+        launch_forward<16>(
+            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
+            batch, stream);
+      }
       break;
     case 32:
-      launch_forward<32>(
-          q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch,
-          stream);
+      if (tma_planes_ok) {
+        launch_forward_tma<32>(
+            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
+            batch, stream);
+      } else {
+        launch_forward<32>(
+            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
+            batch, stream);
+      }
       break;
     case 64:
-      launch_forward<64>(
-          q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch,
-          stream);
+      if (tma_planes_ok) {
+        launch_forward_tma<64>(
+            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
+            batch, stream);
+      } else {
+        launch_forward<64>(
+            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
+            batch, stream);
+      }
       break;
     case 128:
       launch_forward<128>(
