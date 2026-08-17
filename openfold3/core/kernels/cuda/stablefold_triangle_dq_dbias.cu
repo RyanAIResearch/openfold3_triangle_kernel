@@ -124,7 +124,8 @@ template <
     int HeadDim,
     int StaticSequence,
     bool FullQueryTiles,
-    bool TaskInGridZ>
+    bool TaskInGridZ,
+    bool OuterEqSeq>
 __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
@@ -202,24 +203,23 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
 
 #pragma unroll 1
   for (int pass = 0; pass < passes; ++pass) {
+    const int oc = OuterEqSeq ? sequence : outer_count;
     const int outer = leaf * outer_leaf + pass * kWarpsPerBlock + warp;
     // Outer is a pure plane count (decoupled from sequence); its tail guard
     // must stay a runtime compare in every lane -- values are unchanged when
     // outer_count is a leaf multiple, and arbitrary outer stays in bounds.
-    const bool outer_valid = outer < outer_count;
-    const int outer_load = outer_valid ? outer : outer_count - 1;
-    const int64_t tensor_base =
-        ((static_cast<int64_t>(batch_index) * outer_count + outer_load) *
-             heads +
-         head) *
-        static_cast<int64_t>(sequence) * HeadDim;
+    const bool outer_valid = outer < oc;
+    // Multiplier form keeps the hot-loop condition compile-foldable on the
+    // exact lanes: valid outers multiply by 1.0f (bitwise identity), tail
+    // outers zero their (finite, clamped-load) contributions exactly.
+    const float outer_mult = outer_valid ? 1.0F : 0.0F;
+    const int outer_load = outer_valid ? outer : oc - 1;
+    const int64_t plane =
+        static_cast<int64_t>(batch_index) * oc + outer_load;
     const int64_t row_stats_base =
-        ((static_cast<int64_t>(batch_index) * outer_count + outer_load) *
-             heads +
-         head) * sequence;
-    const int64_t mask_base =
-        (static_cast<int64_t>(batch_index) * outer_count + outer_load) *
-        sequence;
+        (plane * heads + head) * static_cast<int64_t>(sequence);
+    const int64_t tensor_base = row_stats_base * HeadDim;
+    const int64_t mask_base = plane * sequence;
 
     for (int element = lane; element < kQueryBlock * HeadDim;
          element += kWarpSize) {
@@ -321,7 +321,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
                   query_start + sub * kQueryTile + group + half * 8;
               const int index = half * 2 + pair;
               float d_score = 0.0F;
-              if ((outer_valid && (kSequenceExact || key < sequence)) &&
+              if ((kSequenceExact || key < sequence) &&
                   (FullQueryTiles || qrow < query_end)) {
                 const float value = score[column].v[index] * scale +
                     mask[mask_base + key] +
@@ -336,6 +336,11 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
                     ? 0.0F
                     : __expf(value - lse);
                 d_score = probability * (dp[column].v[index] - dlt);
+              }
+              if constexpr (!(OuterEqSeq && kSequenceExact)) {
+                // Exact-tiles + outer==sequence lane covers every outer:
+                // the tail multiplier is compile-time dead there.
+                d_score *= outer_mult;
               }
               score[column].v[index] = d_score;
               my_bias_tile[(sub * kQueryTile + group + half * 8) * kKeyTile +
@@ -580,6 +585,7 @@ void launch(
           static_cast<int>(sizeof(float));
   const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
   const int leaves = (outer_count + kOuterLeaf - 1) / kOuterLeaf;
+  const bool outer_eq = outer_count == sequence;
   TORCH_CHECK(
       query_span > 0 && query_span <= std::numeric_limits<int>::max() &&
           resident_leaves > 0 && resident_leaves <= leaves &&
@@ -600,13 +606,17 @@ void launch(
   do {                                                                     \
     const cudaError_t status = cudaFuncSetAttribute(                       \
         stablefold_dq_dbias_leaf_kernel<                                    \
-            HeadDim, StaticSequence, FullTiles, TaskInZ>,                  \
+            HeadDim, StaticSequence, FullTiles, TaskInZ, true>,            \
+        cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
+        kSharedBytes);                                                     \
+    const cudaError_t status_g = cudaFuncSetAttribute(                     \
+        stablefold_dq_dbias_leaf_kernel<                                    \
+            HeadDim, StaticSequence, FullTiles, TaskInZ, false>,           \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytes);                                                     \
     TORCH_CHECK(                                                           \
-        status == cudaSuccess,                                             \
-        "failed to opt in StableFold dQ/dBias shared memory: ",           \
-        cudaGetErrorString(status));                                       \
+        status == cudaSuccess && status_g == cudaSuccess,                  \
+        "failed to opt in StableFold dQ/dBias shared memory");             \
   } while (false)
   SET_DQ_DBIAS_SMEM_ATTRIBUTE(true, true);
   SET_DQ_DBIAS_SMEM_ATTRIBUTE(true, false);
@@ -657,9 +667,9 @@ void launch(
                   static_cast<unsigned int>(leaf_tasks),
                   static_cast<unsigned int>(heads),
                   static_cast<unsigned int>(query_blocks));
-#define LAUNCH_DQ_DBIAS_LEAF(FullTiles, TaskInZ)                           \
+#define LAUNCH_DQ_DBIAS_LEAF(FullTiles, TaskInZ, OuterEq)                  \
   stablefold_dq_dbias_leaf_kernel<                                          \
-      HeadDim, StaticSequence, FullTiles, TaskInZ>                         \
+      HeadDim, StaticSequence, FullTiles, TaskInZ, OuterEq>                \
       <<<grid, kThreads, kSharedBytes, stream>>>(                          \
           reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
           reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),           \
@@ -689,22 +699,22 @@ void launch(
               query_rows % kQueryBlock == 0,
               "exact-tiles lane requires query rows in full blocks");
           if (task_in_grid_z) {
-            LAUNCH_DQ_DBIAS_LEAF(true, true);
+            if (outer_eq) { LAUNCH_DQ_DBIAS_LEAF(true, true, true); } else { LAUNCH_DQ_DBIAS_LEAF(true, true, false); }
           } else {
-            LAUNCH_DQ_DBIAS_LEAF(true, false);
+            if (outer_eq) { LAUNCH_DQ_DBIAS_LEAF(true, false, true); } else { LAUNCH_DQ_DBIAS_LEAF(true, false, false); }
           }
         } else {
           if (query_rows % kQueryBlock == 0) {
             if (task_in_grid_z) {
-              LAUNCH_DQ_DBIAS_LEAF(true, true);
+              if (outer_eq) { LAUNCH_DQ_DBIAS_LEAF(true, true, true); } else { LAUNCH_DQ_DBIAS_LEAF(true, true, false); }
             } else {
-              LAUNCH_DQ_DBIAS_LEAF(true, false);
+              if (outer_eq) { LAUNCH_DQ_DBIAS_LEAF(true, false, true); } else { LAUNCH_DQ_DBIAS_LEAF(true, false, false); }
             }
           } else {
             if (task_in_grid_z) {
-              LAUNCH_DQ_DBIAS_LEAF(false, true);
+              if (outer_eq) { LAUNCH_DQ_DBIAS_LEAF(false, true, true); } else { LAUNCH_DQ_DBIAS_LEAF(false, true, false); }
             } else {
-              LAUNCH_DQ_DBIAS_LEAF(false, false);
+              if (outer_eq) { LAUNCH_DQ_DBIAS_LEAF(false, false, true); } else { LAUNCH_DQ_DBIAS_LEAF(false, false, false); }
             }
           }
         }

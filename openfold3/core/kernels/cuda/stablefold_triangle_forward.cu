@@ -132,7 +132,7 @@ __device__ __forceinline__ float quad_sum(float value) {
 // ExactTiles is the production lane: under the facade's pad-to-tile
 // contract every tile divides the sequence exactly, so all tail guards
 // fold away at compile time with sequence still a runtime parameter.
-template <int HeadDim, bool TileMajorGrid, bool ExactTiles>
+template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq>
 __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
@@ -155,9 +155,12 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
   // original single-prefix kernel, generalized to every batch/sequence that
   // fits the hardware grid.  The alternate layout is a functional fallback
   // for larger B*N; both execute the same tiles and reduction order.
+  // Dual-lane: outer == sequence (triangle) folds back to the original
+  // single-variable index math; decoupled shapes take the general lane.
+  const int oc = OuterEqSeq ? sequence : outer_count;
   const int outer_task = TileMajorGrid ? blockIdx.z : blockIdx.x;
-  const int batch_index = outer_task / outer_count;
-  const int outer = outer_task - batch_index * outer_count;
+  const int batch_index = outer_task / oc;
+  const int outer = outer_task - batch_index * oc;
   const int query_block =
       (TileMajorGrid ? blockIdx.x : blockIdx.z) * kBlockM;
   const int head = blockIdx.y;
@@ -174,15 +177,17 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
   __nv_bfloat16* kv_buffers = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
       kBlockM * kKVStride;
 
-  const int64_t head_base =
-      ((static_cast<int64_t>(batch_index) * outer_count + outer) * heads +
-       head) *
-      static_cast<int64_t>(sequence) * HeadDim;
+  // One shared plane index: keeps the three bases on a single CSE chain so
+  // ptxas never rematerializes the 64-bit products inside the hot loops.
+  const int64_t plane =
+      static_cast<int64_t>(batch_index) * oc + outer;
+  const int64_t plane_row_base =
+      (plane * heads + head) * static_cast<int64_t>(sequence);
+  const int64_t head_base = plane_row_base * HeadDim;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
-  const int64_t mask_base =
-      (static_cast<int64_t>(batch_index) * outer_count + outer) * sequence;
+  const int64_t mask_base = plane * sequence;
 
   // Stage this warp's Q rows (guarded rows load row 0; their stores are
   // guarded at the epilogue, and their softmax state is discarded).
@@ -386,8 +391,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
       }
     }
     if (thread_in_group == 0) {
-      lse[((static_cast<int64_t>(batch_index) * outer_count + outer) * heads +
-           head) * sequence + row] =
+      lse[plane_row_base + row] =
           m_state[half] + __logf(l_state[half]);
     }
   }
@@ -428,17 +432,18 @@ void launch_forward(
             static_cast<unsigned int>(query_blocks));
   const bool exact_tiles =
       sequence % kBlockM == 0 && sequence % kBlockN == 0;
-#define LAUNCH_STABLEFOLD_FORWARD(TileMajor, Exact)                         \
+#define LAUNCH_STABLEFOLD_FORWARD(TileMajor, Exact, OuterEq)                \
   do {                                                                      \
     const cudaError_t status = cudaFuncSetAttribute(                        \
-        stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact>,      \
+        stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact,       \
+                                           OuterEq>,                        \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                        \
         shared_bytes<HeadDim>());                                           \
     TORCH_CHECK(                                                            \
         status == cudaSuccess,                                              \
         "failed to opt in StableFold forward shared memory: ",              \
         cudaGetErrorString(status));                                        \
-    stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact>           \
+    stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact, OuterEq>  \
         <<<grid, kThreads, shared_bytes<HeadDim>(), stream>>>(              \
             reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),          \
             reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),          \
@@ -453,17 +458,22 @@ void launch_forward(
             batch,                                                         \
             scale);                                                        \
   } while (false)
+  const bool outer_eq = outer_count == sequence;
   if (tile_major_grid) {
     if (exact_tiles) {
-      LAUNCH_STABLEFOLD_FORWARD(true, true);
+      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD(true, true, true);
+      else LAUNCH_STABLEFOLD_FORWARD(true, true, false);
     } else {
-      LAUNCH_STABLEFOLD_FORWARD(true, false);
+      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD(true, false, true);
+      else LAUNCH_STABLEFOLD_FORWARD(true, false, false);
     }
   } else {
     if (exact_tiles) {
-      LAUNCH_STABLEFOLD_FORWARD(false, true);
+      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD(false, true, true);
+      else LAUNCH_STABLEFOLD_FORWARD(false, true, false);
     } else {
-      LAUNCH_STABLEFOLD_FORWARD(false, false);
+      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD(false, false, true);
+      else LAUNCH_STABLEFOLD_FORWARD(false, false, false);
     }
   }
 #undef LAUNCH_STABLEFOLD_FORWARD

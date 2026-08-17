@@ -340,7 +340,6 @@ class PairBlock(nn.Module):
             inplace_safe=inplace_safe,
             _add_with_inplace=True,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
-            use_stable_triangle_attention=use_stable_triangle_attention,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
         )
@@ -360,7 +359,6 @@ class PairBlock(nn.Module):
             inplace_safe=inplace_safe,
             _add_with_inplace=True,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
-            use_stable_triangle_attention=use_stable_triangle_attention,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
         )
@@ -481,7 +479,6 @@ class PairBlock(nn.Module):
             pair_mask=pair_mask,
             inplace_safe=inplace_safe,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
-            use_stable_triangle_attention=use_stable_triangle_attention,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
         )

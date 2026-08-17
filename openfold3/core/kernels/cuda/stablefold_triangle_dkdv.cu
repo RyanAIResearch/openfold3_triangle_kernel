@@ -107,7 +107,7 @@ __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
-          bool EmitDeltaTrue>
+          bool EmitDeltaTrue, bool OuterEqSeq>
 __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
@@ -143,9 +143,10 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
   // task.  This preserves the cache-friendly legacy ordering for all normal
   // shapes while retaining an outer-major fallback for larger B*N.  The two
   // layouts run identical tiles and reductions.
+  const int oc = OuterEqSeq ? sequence : outer_count;
   const int outer_task = TileMajorGrid ? blockIdx.z : blockIdx.x;
-  const int batch_index = outer_task / outer_count;
-  const int outer = outer_task - batch_index * outer_count;
+  const int batch_index = outer_task / oc;
+  const int outer = outer_task - batch_index * oc;
   const int key_block_start =
       (TileMajorGrid ? blockIdx.x : blockIdx.z) * kKeyBlock;
   const int head = blockIdx.y;
@@ -173,16 +174,12 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
   float* delta_scratch = reinterpret_cast<float*>(
       q_buffers + 2 * kQBufferElements);
 
-  const int64_t head_base =
-      ((static_cast<int64_t>(batch_index) * outer_count + outer) * heads +
-       head) *
-      static_cast<int64_t>(sequence) * HeadDim;
+  const int64_t plane =
+      static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t stats_base =
-      ((static_cast<int64_t>(batch_index) * outer_count + outer) * heads +
-       head) *
-      sequence;
-  const int64_t mask_base =
-      (static_cast<int64_t>(batch_index) * outer_count + outer) * sequence;
+      (plane * heads + head) * static_cast<int64_t>(sequence);
+  const int64_t head_base = stats_base * HeadDim;
+  const int64_t mask_base = plane * sequence;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
@@ -479,7 +476,8 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
 // The plain kernel keeps the exact historical signature, attributes, and
 // codegen (the EmitDeltaTrue=false body folds every delta-true statement
 // away and the dead nullptr/0 arguments vanish under inlining).
-template <int HeadDim, int StaticSequence, bool TileMajorGrid>
+template <int HeadDim, int StaticSequence, bool TileMajorGrid,
+          bool OuterEqSeq>
 __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
@@ -497,12 +495,13 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     int batch,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
-                                false>(
+                                false, OuterEqSeq>(
       q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
       nullptr, 0, runtime_sequence, outer_count, heads, batch, scale);
 }
 
-template <int HeadDim, int StaticSequence, bool TileMajorGrid>
+template <int HeadDim, int StaticSequence, bool TileMajorGrid,
+          bool OuterEqSeq>
 __global__ __launch_bounds__(kThreads)
 void stablefold_triangle_dkdv_delta_true_kernel(
     const __nv_bfloat16* __restrict__ q,
@@ -523,7 +522,7 @@ void stablefold_triangle_dkdv_delta_true_kernel(
     int batch,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
-                                true>(
+                                true, OuterEqSeq>(
       q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
       delta_true_partials, key_blocks, runtime_sequence, outer_count, heads,
       batch, scale);
@@ -559,7 +558,8 @@ __global__ void stablefold_delta_true_reduce_kernel(
   delta_true[row] = weighted_dp;
 }
 
-template <int HeadDim, int StaticSequence, bool EmitDeltaTrue>
+template <int HeadDim, int StaticSequence, bool EmitDeltaTrue,
+          bool OuterEqSeq>
 void launch(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -602,12 +602,12 @@ void launch(
     const cudaError_t attribute_status = tile_major_grid
         ? cudaFuncSetAttribute(
               stablefold_triangle_dkdv_delta_true_kernel<
-                  HeadDim, StaticSequence, true>,
+                  HeadDim, StaticSequence, true, OuterEqSeq>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes)
         : cudaFuncSetAttribute(
               stablefold_triangle_dkdv_delta_true_kernel<
-                  HeadDim, StaticSequence, false>,
+                  HeadDim, StaticSequence, false, OuterEqSeq>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes);
     TORCH_CHECK(
@@ -616,7 +616,7 @@ void launch(
         cudaGetErrorString(attribute_status));
     if (tile_major_grid) {
       stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
-                                                 true>
+                                                 true, OuterEqSeq>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
@@ -637,7 +637,7 @@ void launch(
               scale);
     } else {
       stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
-                                                 false>
+                                                 false, OuterEqSeq>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
@@ -661,12 +661,12 @@ void launch(
     const cudaError_t attribute_status = tile_major_grid
         ? cudaFuncSetAttribute(
               stablefold_triangle_dkdv_kernel<
-                  HeadDim, StaticSequence, true>,
+                  HeadDim, StaticSequence, true, OuterEqSeq>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes)
         : cudaFuncSetAttribute(
               stablefold_triangle_dkdv_kernel<
-                  HeadDim, StaticSequence, false>,
+                  HeadDim, StaticSequence, false, OuterEqSeq>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes);
     TORCH_CHECK(
@@ -674,7 +674,8 @@ void launch(
         "failed to opt in StableFold dK/dV shared memory: ",
         cudaGetErrorString(attribute_status));
     if (tile_major_grid) {
-      stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, true>
+      stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, true,
+                                      OuterEqSeq>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
@@ -692,7 +693,8 @@ void launch(
               batch,
               scale);
     } else {
-      stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, false>
+      stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, false,
+                                      OuterEqSeq>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
@@ -734,12 +736,23 @@ void dispatch_sequence(
   // One lane for every length: the exact-tiles contract (sequence padded
   // to the tile quantum by the facade) folds all guards at compile time
   // with sequence still runtime. Unpadded lengths take the guarded lane.
+  const bool outer_eq = outer_count == sequence;
   if (sequence % kKeyBlock == 0 && sequence % kQueryTile == 0) {
-    launch<HeadDim, -1, EmitDeltaTrue>(
+    if (outer_eq) {
+      launch<HeadDim, -1, EmitDeltaTrue, true>(
+          q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
+          delta_true_partials, sequence, outer_count, heads, batch, stream);
+    } else {
+      launch<HeadDim, -1, EmitDeltaTrue, false>(
+          q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
+          delta_true_partials, sequence, outer_count, heads, batch, stream);
+    }
+  } else if (outer_eq) {
+    launch<HeadDim, 0, EmitDeltaTrue, true>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
         delta_true_partials, sequence, outer_count, heads, batch, stream);
   } else {
-    launch<HeadDim, 0, EmitDeltaTrue>(
+    launch<HeadDim, 0, EmitDeltaTrue, false>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
         delta_true_partials, sequence, outer_count, heads, batch, stream);
   }
