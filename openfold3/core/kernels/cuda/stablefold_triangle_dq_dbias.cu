@@ -147,6 +147,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     int query_rows,
     int query_capacity,
     int leaf_base,
+    int io_dim,
     float scale) {
   // StaticSequence == -1 is the production lane: sequence stays a pure
   // runtime parameter under the facade's pad-to-tile contract (every tile
@@ -218,11 +219,11 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
         static_cast<int64_t>(batch_index) * oc + outer_load;
     const int64_t row_stats_base =
         (plane * heads + head) * static_cast<int64_t>(sequence);
-    const int64_t tensor_base = row_stats_base * HeadDim;
-    // d_output arrives in the public [B, O, N, H, D] layout.
+    const int64_t tensor_base = row_stats_base * io_dim;
+    // d_output arrives in the public [B, O, N, H, io_dim] layout.
     const int64_t dout_plane_base =
-        plane * static_cast<int64_t>(sequence) * heads * HeadDim +
-        static_cast<int64_t>(head) * HeadDim;
+        plane * static_cast<int64_t>(sequence) * heads * io_dim +
+        static_cast<int64_t>(head) * io_dim;
     const int64_t mask_base = plane * sequence;
 
     for (int element = lane; element < kQueryBlock * HeadDim;
@@ -233,11 +234,13 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
           ? query_start + row
           : sequence - 1;
       const int64_t src = tensor_base +
-          static_cast<int64_t>(gq) * HeadDim + col;
+          static_cast<int64_t>(gq) * io_dim + col;
       const int64_t dout_src = dout_plane_base +
-          static_cast<int64_t>(gq) * heads * HeadDim + col;
-      my_q[row * kQStride + col] = q[src];
-      my_do[row * kQStride + col] = d_output[dout_src];
+          static_cast<int64_t>(gq) * heads * io_dim + col;
+      my_q[row * kQStride + col] =
+          col < io_dim ? q[src] : __float2bfloat16_rn(0.0F);
+      my_do[row * kQStride + col] =
+          col < io_dim ? d_output[dout_src] : __float2bfloat16_rn(0.0F);
     }
     __syncwarp();
 
@@ -275,9 +278,11 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
             ? key_start + row
             : sequence - 1;
         const int64_t src = tensor_base +
-            static_cast<int64_t>(gk) * HeadDim + col;
-        my_k[row * kKVStride + col] = k[src];
-        my_v[row * kKVStride + col] = v[src];
+            static_cast<int64_t>(gk) * io_dim + col;
+        my_k[row * kKVStride + col] =
+            col < io_dim ? k[src] : __float2bfloat16_rn(0.0F);
+        my_v[row * kKVStride + col] =
+            col < io_dim ? v[src] : __float2bfloat16_rn(0.0F);
       }
       __syncwarp();
 
@@ -411,7 +416,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
 
     // dQ epilogue for this warp's outer: scale once, store BF16.
     const int64_t dq_row_base = tensor_base +
-        static_cast<int64_t>(query_start) * HeadDim;
+        static_cast<int64_t>(query_start) * io_dim;
     if (outer_valid) {
 #pragma unroll
       for (int sub = 0; sub < kQuerySubTiles; ++sub) {
@@ -424,10 +429,13 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
               continue;
             }
             const int column = tile * 8 + thread_in_group * 2;
-            out_dq[dq_row_base + static_cast<int64_t>(row) * HeadDim +
+            if (column >= io_dim) {
+              continue;
+            }
+            out_dq[dq_row_base + static_cast<int64_t>(row) * io_dim +
                    column] =
                 __float2bfloat16_rn(dq_acc[sub][tile].v[half * 2] * scale);
-            out_dq[dq_row_base + static_cast<int64_t>(row) * HeadDim +
+            out_dq[dq_row_base + static_cast<int64_t>(row) * io_dim +
                    column + 1] =
                 __float2bfloat16_rn(
                     dq_acc[sub][tile].v[half * 2 + 1] * scale);
@@ -580,6 +588,7 @@ void launch(
     int query_span,
     int resident_leaves,
     int batch_chunk,
+    int io_dim,
     cudaStream_t stream) {
   constexpr int kQStride = HeadDim + 8;
   constexpr int kKVStride = HeadDim + 8;
@@ -589,7 +598,7 @@ void launch(
           static_cast<int>(sizeof(__nv_bfloat16)) +
       kWarpsPerBlock * kQueryBlock * kKeyTile *
           static_cast<int>(sizeof(float));
-  const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
+  const float scale = 1.0F / std::sqrt(static_cast<float>(io_dim));
   const int leaves = (outer_count + kOuterLeaf - 1) / kOuterLeaf;
   const bool outer_eq = outer_count == sequence;
   TORCH_CHECK(
@@ -697,6 +706,7 @@ void launch(
           query_rows,                                                     \
           query_span,                                                     \
           leaf_base,                                                      \
+          io_dim,                                                          \
           scale)
         if constexpr (StaticSequence == -1) {
           // The exact-tiles contract guarantees full query blocks; the
@@ -779,6 +789,7 @@ void dispatch_sequence(
     int query_span,
     int resident_leaves,
     int batch_chunk,
+    int io_dim,
     cudaStream_t stream) {
   // One lane for every length: the exact-tiles contract (sequence padded
   // to the tile quantum by the facade) folds all guards at compile time
@@ -788,12 +799,12 @@ void dispatch_sequence(
     launch<HeadDim, -1>(q, k, v, d_output, logsumexp, delta, mask, bias,
                         out_dq, out_dbias, workspace, sequence, outer_count,
                         heads, batch, query_span, resident_leaves,
-                        batch_chunk, stream);
+                        batch_chunk, io_dim, stream);
   } else {
     launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
                        out_dq, out_dbias, workspace, sequence, outer_count,
                        heads, batch, query_span, resident_leaves, batch_chunk,
-                       stream);
+                       io_dim, stream);
   }
 }
 
@@ -904,29 +915,34 @@ void stablefold_triangle_dq_dbias_out(
 
   const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
-  switch (head_dim) {
+  const int io_dim = head_dim;
+  TORCH_CHECK(
+      head_dim % 8 == 0 && head_dim <= 128,
+      "head_dim must be a multiple of 8 and <= 128, got ", head_dim);
+  const int storage = head_dim <= 16
+      ? 16
+      : (head_dim <= 32 ? 32 : (head_dim <= 64 ? 64 : 128));
+  switch (storage) {
     case 16:
       dispatch_sequence<16>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                  out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, stream);
+                 query_span, resident_leaves, batch_chunk, io_dim, stream);
       break;
     case 32:
       dispatch_sequence<32>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                  out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, stream);
+                 query_span, resident_leaves, batch_chunk, io_dim, stream);
       break;
     case 64:
       dispatch_sequence<64>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                  out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, stream);
-      break;
-    case 128:
-      dispatch_sequence<128>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, stream);
+                 query_span, resident_leaves, batch_chunk, io_dim, stream);
       break;
     default:
-      TORCH_CHECK(false, "unsupported head_dim for StableFold dQ/dBias: ", head_dim);
+      dispatch_sequence<128>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
+                 out_dbias, workspace, sequence, outer_count, heads, batch,
+                 query_span, resident_leaves, batch_chunk, io_dim, stream);
+      break;
   }
   TORCH_CHECK(
       cudaGetLastError() == cudaSuccess, "StableFold dQ/dBias launch failed");

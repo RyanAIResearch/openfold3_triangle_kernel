@@ -125,6 +125,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     int outer_count,
     int heads,
     int batch,
+    int io_dim,
     float scale) {
   // StaticSequence == -1: the production exact-tiles lane -- sequence is
   // a pure runtime parameter under the facade's pad-to-tile contract, so
@@ -178,11 +179,11 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t stats_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
-  const int64_t head_base = stats_base * HeadDim;
-  // d_output arrives in the public [B, O, N, H, D] layout.
+  const int64_t head_base = stats_base * io_dim;
+  // d_output arrives in the public [B, O, N, H, io_dim] layout.
   const int64_t dout_plane_base =
-      plane * static_cast<int64_t>(sequence) * heads * HeadDim +
-      static_cast<int64_t>(head) * HeadDim;
+      plane * static_cast<int64_t>(sequence) * heads * io_dim +
+      static_cast<int64_t>(head) * io_dim;
   const int64_t mask_base = plane * sequence;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
@@ -227,9 +228,11 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     const int col = element - row * HeadDim;
     const int gk = kExact || warp_key + row < sequence ? warp_key + row
                                                         : sequence - 1;
-    const int64_t src = head_base + static_cast<int64_t>(gk) * HeadDim + col;
-    sk[row * kStride + col] = k[src];
-    sv[row * kStride + col] = v[src];
+    const int64_t src = head_base + static_cast<int64_t>(gk) * io_dim + col;
+    sk[row * kStride + col] =
+        col < io_dim ? k[src] : __float2bfloat16_rn(0.0F);
+    sv[row * kStride + col] =
+        col < io_dim ? v[src] : __float2bfloat16_rn(0.0F);
   }
   __syncwarp();
 
@@ -265,12 +268,19 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       const int gq = kExact || query_start + row < sequence
           ? query_start + row
           : sequence - 1;
-      const int64_t src = head_base + static_cast<int64_t>(gq) * HeadDim +
-          col;
-      const int64_t dout_src = dout_plane_base +
-          static_cast<int64_t>(gq) * heads * HeadDim + col;
-      cp_async_16(bq + row * kStride + col, q + src);
-      cp_async_16(bdo + row * kStride + col, d_output + dout_src);
+      if (col < io_dim) {
+        const int64_t src = head_base +
+            static_cast<int64_t>(gq) * io_dim + col;
+        const int64_t dout_src = dout_plane_base +
+            static_cast<int64_t>(gq) * heads * io_dim + col;
+        cp_async_16(bq + row * kStride + col, q + src);
+        cp_async_16(bdo + row * kStride + col, d_output + dout_src);
+      } else {
+        *reinterpret_cast<uint4*>(bq + row * kStride + col) =
+            uint4{0U, 0U, 0U, 0U};
+        *reinterpret_cast<uint4*>(bdo + row * kStride + col) =
+            uint4{0U, 0U, 0U, 0U};
+      }
     }
     cp_async_commit_group();
   };
@@ -457,7 +467,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
 
   // Epilogue: dK scaled once; both stored BF16, tail keys skipped.
   const int64_t out_base = head_base +
-      static_cast<int64_t>(warp_key) * HeadDim;
+      static_cast<int64_t>(warp_key) * io_dim;
 #pragma unroll
   for (int tile = 0; tile < HeadDim / 8; ++tile) {
 #pragma unroll
@@ -467,13 +477,16 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
         continue;
       }
       const int column = tile * 8 + thread_in_group * 2;
-      out_dv[out_base + static_cast<int64_t>(row) * HeadDim + column] =
+      if (column >= io_dim) {
+        continue;
+      }
+      out_dv[out_base + static_cast<int64_t>(row) * io_dim + column] =
           __float2bfloat16_rn(dv_acc[tile].v[half * 2]);
-      out_dv[out_base + static_cast<int64_t>(row) * HeadDim + column + 1] =
+      out_dv[out_base + static_cast<int64_t>(row) * io_dim + column + 1] =
           __float2bfloat16_rn(dv_acc[tile].v[half * 2 + 1]);
-      out_dk[out_base + static_cast<int64_t>(row) * HeadDim + column] =
+      out_dk[out_base + static_cast<int64_t>(row) * io_dim + column] =
           __float2bfloat16_rn(dk_acc[tile].v[half * 2] * scale);
-      out_dk[out_base + static_cast<int64_t>(row) * HeadDim + column + 1] =
+      out_dk[out_base + static_cast<int64_t>(row) * io_dim + column + 1] =
           __float2bfloat16_rn(dk_acc[tile].v[half * 2 + 1] * scale);
     }
   }
@@ -499,11 +512,13 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     int outer_count,
     int heads,
     int batch,
+    int io_dim,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 false, OuterEqSeq>(
       q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-      nullptr, 0, runtime_sequence, outer_count, heads, batch, scale);
+      nullptr, 0, runtime_sequence, outer_count, heads, batch, io_dim,
+      scale);
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
@@ -526,12 +541,13 @@ void stablefold_triangle_dkdv_delta_true_kernel(
     int outer_count,
     int heads,
     int batch,
+    int io_dim,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 true, OuterEqSeq>(
       q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
       delta_true_partials, key_blocks, runtime_sequence, outer_count, heads,
-      batch, scale);
+      batch, io_dim, scale);
 }
 
 // Fixed ascending fold of the per-key-block row scalars into
@@ -582,6 +598,7 @@ void launch(
     int outer_count,
     int heads,
     int batch,
+    int io_dim,
     cudaStream_t stream) {
   constexpr int kStride = HeadDim + 8;
   constexpr int kSharedBytes =
@@ -591,7 +608,7 @@ void launch(
            ? 2 * kWarpsPerBlock * kQueryTile * 9 *
                  static_cast<int>(sizeof(float))
            : 0);
-  const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
+  const float scale = 1.0F / std::sqrt(static_cast<float>(io_dim));
   const int key_blocks = (sequence + kKeyBlock - 1) / kKeyBlock;
   const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
   const bool tile_major_grid = outer_tasks <= 65535;
@@ -640,6 +657,7 @@ void launch(
               outer_count,
               heads,
               batch,
+              io_dim,
               scale);
     } else {
       stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
@@ -661,6 +679,7 @@ void launch(
               outer_count,
               heads,
               batch,
+              io_dim,
               scale);
     }
   } else {
@@ -697,6 +716,7 @@ void launch(
               outer_count,
               heads,
               batch,
+              io_dim,
               scale);
     } else {
       stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, false,
@@ -716,6 +736,7 @@ void launch(
               outer_count,
               heads,
               batch,
+              io_dim,
               scale);
     }
   }
@@ -738,6 +759,7 @@ void dispatch_sequence(
     int outer_count,
     int heads,
     int batch,
+    int io_dim,
     cudaStream_t stream) {
   // One lane for every length: the exact-tiles contract (sequence padded
   // to the tile quantum by the facade) folds all guards at compile time
@@ -747,20 +769,24 @@ void dispatch_sequence(
     if (outer_eq) {
       launch<HeadDim, -1, EmitDeltaTrue, true>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
+          stream);
     } else {
       launch<HeadDim, -1, EmitDeltaTrue, false>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
+          stream);
     }
   } else if (outer_eq) {
     launch<HeadDim, 0, EmitDeltaTrue, true>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-        delta_true_partials, sequence, outer_count, heads, batch, stream);
+        delta_true_partials, sequence, outer_count, heads, batch, io_dim,
+          stream);
   } else {
     launch<HeadDim, 0, EmitDeltaTrue, false>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-        delta_true_partials, sequence, outer_count, heads, batch, stream);
+        delta_true_partials, sequence, outer_count, heads, batch, io_dim,
+          stream);
   }
 }
 
@@ -841,29 +867,40 @@ void run_dkdv(
       "bias must be contiguous BF16 [B,1,H,N,N] on q.device");
   const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
-  switch (head_dim) {
+  const int io_dim = head_dim;
+  TORCH_CHECK(
+      head_dim % 8 == 0 && head_dim <= 128,
+      "head_dim must be a multiple of 8 and <= 128, got ", head_dim);
+  const int storage = head_dim <= 16
+      ? 16
+      : (head_dim <= 32 ? 32 : (head_dim <= 64 ? 64 : 128));
+  switch (storage) {
     case 16:
       dispatch_sequence<16, EmitDeltaTrue>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
+          stream);
       break;
     case 32:
       dispatch_sequence<32, EmitDeltaTrue>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
+          stream);
       break;
     case 64:
       dispatch_sequence<64, EmitDeltaTrue>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
+          stream);
       break;
     case 128:
       dispatch_sequence<128, EmitDeltaTrue>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, outer_count, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, io_dim,
+          stream);
       break;
     default:
-      TORCH_CHECK(false, "unsupported head_dim for StableFold dK/dV: ", head_dim);
+      TORCH_CHECK(false, "unsupported storage lane for StableFold dK/dV");
   }
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "StableFold dK/dV launch failed");
 }
