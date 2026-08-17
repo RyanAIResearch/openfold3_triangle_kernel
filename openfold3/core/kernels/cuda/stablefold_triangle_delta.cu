@@ -23,6 +23,8 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_delta_kernel(
     const __nv_bfloat16* __restrict__ output,
     float* __restrict__ delta,
     int64_t rows,
+    int sequence,
+    int heads,
     int head_dim) {
   const int64_t row =
       static_cast<int64_t>(blockIdx.x) * kWarpsPerBlock +
@@ -31,11 +33,20 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_delta_kernel(
     return;
   }
   const int lane = threadIdx.x & (kWarpSize - 1);
+  // delta rows follow the [B, O, H, N] stats order while d_output/output
+  // arrive in the public [B, O, N, H, D] layout: decompose the row once.
+  const int64_t hn = static_cast<int64_t>(heads) * sequence;
+  const int64_t plane = row / hn;
+  const int64_t rem = row - plane * hn;
+  const int64_t head = rem / sequence;
+  const int64_t token = rem - head * sequence;
+  const int64_t row_base =
+      ((plane * sequence + token) * heads + head) * head_dim;
   // Any head_dim: each lane accumulates its strided slice serially (fixed
   // ascending order), then the fixed XOR tree combines the 32 lane sums.
   float value = 0.0F;
   for (int dim = lane; dim < head_dim; dim += kWarpSize) {
-    const int64_t base = row * head_dim + dim;
+    const int64_t base = row_base + dim;
     value += __bfloat162float(d_output[base]) *
         __bfloat162float(output[base]);
   }
@@ -53,7 +64,8 @@ void stablefold_triangle_delta_out(
     const torch::Tensor& output,
     torch::Tensor& delta) {
   TORCH_CHECK(d_output.is_cuda() && d_output.dtype() == torch::kBFloat16);
-  TORCH_CHECK(d_output.dim() >= 1 && d_output.size(-1) > 0);
+  // Public layout [B, O, N, H, D]: sequence and heads come from the shape.
+  TORCH_CHECK(d_output.dim() == 5 && d_output.size(-1) > 0);
   TORCH_CHECK(
       output.is_cuda() && output.device() == d_output.device() &&
           output.dtype() == torch::kBFloat16 &&
@@ -63,6 +75,8 @@ void stablefold_triangle_delta_out(
       d_output.size(-1) <= std::numeric_limits<int>::max(),
       "head dimension exceeds the CUDA int indexing contract");
   const int head_dim = static_cast<int>(d_output.size(-1));
+  const int sequence = static_cast<int>(d_output.size(2));
+  const int heads = static_cast<int>(d_output.size(3));
   TORCH_CHECK(
       delta.is_cuda() && delta.device() == d_output.device() &&
           delta.dtype() == torch::kFloat32 && delta.is_contiguous());
@@ -95,6 +109,8 @@ void stablefold_triangle_delta_out(
       reinterpret_cast<const __nv_bfloat16*>(output.data_ptr()),
       delta.data_ptr<float>(),
       rows,
+      sequence,
+      heads,
       head_dim);
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "launch failed");
 }

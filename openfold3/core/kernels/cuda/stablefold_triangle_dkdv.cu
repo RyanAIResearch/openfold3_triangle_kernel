@@ -179,6 +179,10 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
   const int64_t stats_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
   const int64_t head_base = stats_base * HeadDim;
+  // d_output arrives in the public [B, O, N, H, D] layout.
+  const int64_t dout_plane_base =
+      plane * static_cast<int64_t>(sequence) * heads * HeadDim +
+      static_cast<int64_t>(head) * HeadDim;
   const int64_t mask_base = plane * sequence;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
@@ -263,8 +267,10 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
           : sequence - 1;
       const int64_t src = head_base + static_cast<int64_t>(gq) * HeadDim +
           col;
+      const int64_t dout_src = dout_plane_base +
+          static_cast<int64_t>(gq) * heads * HeadDim + col;
       cp_async_16(bq + row * kStride + col, q + src);
-      cp_async_16(bdo + row * kStride + col, d_output + src);
+      cp_async_16(bdo + row * kStride + col, d_output + dout_src);
     }
     cp_async_commit_group();
   };
@@ -803,7 +809,13 @@ void run_dkdv(
   };
   check_q_like(k);
   check_q_like(v);
-  check_q_like(d_output);
+  TORCH_CHECK(
+      d_output.is_cuda() && d_output.device() == q.device() &&
+          d_output.dtype() == torch::kBFloat16 && d_output.is_contiguous() &&
+          d_output.dim() == 5 && d_output.size(0) == q.size(0) &&
+          d_output.size(1) == q.size(1) && d_output.size(2) == q.size(3) &&
+          d_output.size(3) == q.size(2) && d_output.size(4) == q.size(4),
+      "d_output must be contiguous BF16 [B,O,N,H,D] on q.device");
   check_q_like(out_dk);
   check_q_like(out_dv);
   const auto check_row_tensor = [&](const torch::Tensor& tensor) {
