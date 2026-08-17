@@ -195,6 +195,40 @@ __device__ __forceinline__ void ldmatrix_b_rowtrans_sw(
       : "r"(addr));
 }
 
+// Backward ss atom: m64n32k16 with both operands from SW-compact-tile
+// descriptors; one universal encoding (LBO=64, SBO=HeadDim/16B, trans=0)
+// serves the A-m and B-k16n interpretations (probe: bitwise vs the
+// mma.sync chain).
+__device__ __forceinline__ void dkdv_ss_wgmma_m64n32k16(
+    Acc (&o)[4], uint64_t descriptor_a, uint64_t descriptor_b,
+    int accumulate) {
+  asm volatile(
+      "{\n"
+      "  .reg .pred use_acc;\n"
+      "  setp.ne.b32 use_acc, %18, 0;\n"
+      "  wgmma.mma_async.sync.aligned.m64n32k16.f32.bf16.bf16 "
+      "  {%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15},"
+      "  %16, %17, use_acc, 1, 1, 0, 0;\n"
+      "}\n"
+      : "+f"(o[0].v[0]), "+f"(o[0].v[1]), "+f"(o[0].v[2]), "+f"(o[0].v[3]),
+        "+f"(o[1].v[0]), "+f"(o[1].v[1]), "+f"(o[1].v[2]), "+f"(o[1].v[3]),
+        "+f"(o[2].v[0]), "+f"(o[2].v[1]), "+f"(o[2].v[2]), "+f"(o[2].v[3]),
+        "+f"(o[3].v[0]), "+f"(o[3].v[1]), "+f"(o[3].v[2]), "+f"(o[3].v[3])
+      : "l"(descriptor_a), "l"(descriptor_b), "r"(accumulate));
+}
+
+__device__ __forceinline__ void dkdv_wgmma_fence() {
+  asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void dkdv_wgmma_commit() {
+  asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void dkdv_wgmma_wait_zero() {
+  asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+}
+
 __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
   const __nv_bfloat16 l = __float2bfloat16_rn(low);
   const __nv_bfloat16 h = __float2bfloat16_rn(high);
@@ -207,6 +241,8 @@ template <int HeadDim, int StaticSequence, bool TileMajorGrid,
 __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     const CUtensorMap* q_map,
     const CUtensorMap* do_map,
+    const CUtensorMap* k_map,
+    const CUtensorMap* v_map,
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -255,14 +291,23 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
   const int warp_key = key_block_start + warp * kKeyRowsPerWarp;
 
   extern __shared__ __align__(1024) unsigned char smem_raw[];
-  // Per-warp K and V slices [16 x D]; shared Q and dO tiles [32 x D].
-  __nv_bfloat16* sk = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
-      warp * kKeyRowsPerWarp * kStride;
-  __nv_bfloat16* sv = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
-      kKeyBlock * kStride + warp * kKeyRowsPerWarp * kStride;
+  // TMA lane: shared COMPACT swizzled K/V tiles [64 x D] (whole key
+  // block, loaded once). cp.async lane: per-warp padded K/V slices.
+  constexpr int kKvStrideLane = TmaQdo ? HeadDim : kStride;
+  __nv_bfloat16* k_tile = reinterpret_cast<__nv_bfloat16*>(smem_raw);
+  __nv_bfloat16* v_tile = k_tile + kKeyBlock * kKvStrideLane;
+  __nv_bfloat16* sk = TmaQdo
+      ? k_tile + warp * kKeyRowsPerWarp * HeadDim
+      : reinterpret_cast<__nv_bfloat16*>(smem_raw) +
+          warp * kKeyRowsPerWarp * kStride;
+  __nv_bfloat16* sv = TmaQdo
+      ? v_tile + warp * kKeyRowsPerWarp * HeadDim
+      : reinterpret_cast<__nv_bfloat16*>(smem_raw) +
+          kKeyBlock * kStride + warp * kKeyRowsPerWarp * kStride;
   __shared__ __align__(8) uint64_t qdo_barriers[2];
+  __shared__ __align__(8) uint64_t kv_barrier;
   __nv_bfloat16* q_buffers = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
-      2 * kKeyBlock * kStride;
+      2 * kKeyBlock * kKvStrideLane;
   constexpr int kQBufferElements = 2 * kQueryTile * kQdoStride;  // q + do
   // Parity-double-buffered [warp][query][group] staging for the delta-true
   // row scalar T = sum_k w_k * dP_k. The Z = sum_k w_k plane is dropped:
@@ -323,27 +368,54 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     }
   };
 
-  // Stage this warp's 16 K rows (clamped tails; contributions zeroed later).
-  for (int element = lane; element < kKeyRowsPerWarp * HeadDim;
-       element += kWarpSize) {
-    const int row = element / HeadDim;
-    const int col = element - row * HeadDim;
-    const int gk = kExact || warp_key + row < sequence ? warp_key + row
-                                                        : sequence - 1;
-    const int64_t src = head_base + static_cast<int64_t>(gk) * io_dim + col;
-    sk[row * kStride + col] =
-        col < io_dim ? k[src] : __float2bfloat16_rn(0.0F);
-    sv[row * kStride + col] =
-        col < io_dim ? v[src] : __float2bfloat16_rn(0.0F);
+  if constexpr (TmaQdo) {
+    // Whole-key-block K/V arrive by two bulk loads (OOB rows zero-fill;
+    // guards keep them inert exactly like the clamped loads).
+    if (tid == 0) {
+      dkdv_mbarrier_init(&kv_barrier, 1);
+      dkdv_mbarrier_expect_tx(
+          &kv_barrier,
+          2 * kKeyBlock * HeadDim *
+              static_cast<int>(sizeof(__nv_bfloat16)));
+      dkdv_tma_load_3d(
+          k_map, k_tile, &kv_barrier, key_block_start,
+          static_cast<int>(plane * heads + head));
+      dkdv_tma_load_3d(
+          v_map, v_tile, &kv_barrier, key_block_start,
+          static_cast<int>(plane * heads + head));
+    }
+    __syncthreads();
+    dkdv_mbarrier_wait_parity(&kv_barrier, 0U);
+    dkdv_proxy_fence();
+  } else {
+    // Stage this warp's 16 K rows (clamped tails; contributions zeroed
+    // later).
+    for (int element = lane; element < kKeyRowsPerWarp * HeadDim;
+         element += kWarpSize) {
+      const int row = element / HeadDim;
+      const int col = element - row * HeadDim;
+      const int gk = kExact || warp_key + row < sequence ? warp_key + row
+                                                          : sequence - 1;
+      const int64_t src =
+          head_base + static_cast<int64_t>(gk) * io_dim + col;
+      sk[row * kStride + col] =
+          col < io_dim ? k[src] : __float2bfloat16_rn(0.0F);
+      sv[row * kStride + col] =
+          col < io_dim ? v[src] : __float2bfloat16_rn(0.0F);
+    }
+    __syncwarp();
   }
-  __syncwarp();
 
-  uint32_t k_frags[HeadDim / 16][4];
-  uint32_t v_frags[HeadDim / 16][4];
+  // cp.async lane keeps register A-fragments; the TMA lane feeds the
+  // warpgroup MMA straight from the K/V descriptors.
+  uint32_t k_frags[TmaQdo ? 1 : HeadDim / 16][4];
+  uint32_t v_frags[TmaQdo ? 1 : HeadDim / 16][4];
+  if constexpr (!TmaQdo) {
 #pragma unroll
-  for (int chain = 0; chain < HeadDim / 16; ++chain) {
-    ldmatrix_a16x16(sk, kStride, chain * 16, lane, k_frags[chain]);
-    ldmatrix_a16x16(sv, kStride, chain * 16, lane, v_frags[chain]);
+    for (int chain = 0; chain < HeadDim / 16; ++chain) {
+      ldmatrix_a16x16(sk, kStride, chain * 16, lane, k_frags[chain]);
+      ldmatrix_a16x16(sv, kStride, chain * 16, lane, v_frags[chain]);
+    }
   }
 
   Acc dv_acc[HeadDim / 8];
@@ -453,29 +525,61 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
         t_tile[column][1] = 0.0F;
       }
     }
+    if constexpr (TmaQdo) {
+      // S^T and dP as chained ss m64n32k16: A = whole-block K/V tiles,
+      // B = this query tile — all operands via descriptors with the
+      // universal (LBO=64, SBO=HeadDim/16B, trans=0) encoding. The
+      // accumulator layout equals the per-warp m16n8 fragments, so the
+      // elementwise recompute below is untouched.
+      constexpr uint64_t kSsMode =
+          HeadDim == 16 ? 3 : (HeadDim == 32 ? 2 : 1);
+      constexpr uint64_t kSsLbo = 64;
+      constexpr uint64_t kSsSbo = HeadDim;
 #pragma unroll
-    for (int column = 0; column < kQueryTile / 8; ++column) {
-      score[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
-      dp[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+      for (int column = 0; column < kQueryTile / 8; ++column) {
+        score[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+        dp[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+      }
+      dkdv_wgmma_fence();
 #pragma unroll
       for (int chain = 0; chain < HeadDim / 16; ++chain) {
-        uint32_t b_frag[2];
-        if constexpr (TmaQdo) {
-          ldmatrix_b_dimpair_sw<HeadDim>(
-              sq, column * 8, chain * 16, lane, b_frag);
-        } else {
+        const uint64_t chain_off = static_cast<uint64_t>(chain) * 32;
+        const uint64_t desc_k =
+            ((static_cast<uint64_t>(shared_u32(k_tile)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        const uint64_t desc_q =
+            ((static_cast<uint64_t>(shared_u32(sq)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        dkdv_ss_wgmma_m64n32k16(score, desc_k, desc_q, chain != 0);
+      }
+#pragma unroll
+      for (int chain = 0; chain < HeadDim / 16; ++chain) {
+        const uint64_t chain_off = static_cast<uint64_t>(chain) * 32;
+        const uint64_t desc_v =
+            ((static_cast<uint64_t>(shared_u32(v_tile)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        const uint64_t desc_do =
+            ((static_cast<uint64_t>(shared_u32(sdo)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        dkdv_ss_wgmma_m64n32k16(dp, desc_v, desc_do, chain != 0);
+      }
+      dkdv_wgmma_commit();
+      dkdv_wgmma_wait_zero();
+    } else {
+#pragma unroll
+      for (int column = 0; column < kQueryTile / 8; ++column) {
+        score[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+        dp[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+#pragma unroll
+        for (int chain = 0; chain < HeadDim / 16; ++chain) {
+          uint32_t b_frag[2];
           ldmatrix_b_dimpair(
               sq, kStride, column * 8, chain * 16, lane, b_frag);
-        }
-        mma_m16n8k16(score[column], k_frags[chain], b_frag);
-        if constexpr (TmaQdo) {
-          ldmatrix_b_dimpair_sw<HeadDim>(
-              sdo, column * 8, chain * 16, lane, b_frag);
-        } else {
+          mma_m16n8k16(score[column], k_frags[chain], b_frag);
           ldmatrix_b_dimpair(
               sdo, kStride, column * 8, chain * 16, lane, b_frag);
+          mma_m16n8k16(dp[column], v_frags[chain], b_frag);
         }
-        mma_m16n8k16(dp[column], v_frags[chain], b_frag);
       }
     }
 
@@ -653,6 +757,8 @@ template <int HeadDim, int StaticSequence, bool TileMajorGrid,
 __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     const __grid_constant__ CUtensorMap q_map,
     const __grid_constant__ CUtensorMap do_map,
+    const __grid_constant__ CUtensorMap k_map,
+    const __grid_constant__ CUtensorMap v_map,
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -671,9 +777,9 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 false, OuterEqSeq, TmaQdo>(
-      &q_map, &do_map, q, k, v, d_output, logsumexp, delta, mask, bias,
-      out_dk, out_dv, nullptr, 0, runtime_sequence, outer_count, heads,
-      batch, io_dim, scale);
+      &q_map, &do_map, &k_map, &v_map, q, k, v, d_output, logsumexp,
+      delta, mask, bias, out_dk, out_dv, nullptr, 0, runtime_sequence,
+      outer_count, heads, batch, io_dim, scale);
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
@@ -682,6 +788,8 @@ __global__ __launch_bounds__(kThreads)
 void stablefold_triangle_dkdv_delta_true_kernel(
     const __grid_constant__ CUtensorMap q_map,
     const __grid_constant__ CUtensorMap do_map,
+    const __grid_constant__ CUtensorMap k_map,
+    const __grid_constant__ CUtensorMap v_map,
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -702,9 +810,9 @@ void stablefold_triangle_dkdv_delta_true_kernel(
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 true, OuterEqSeq, TmaQdo>(
-      &q_map, &do_map, q, k, v, d_output, logsumexp, delta, mask, bias,
-      out_dk, out_dv, delta_true_partials, key_blocks, runtime_sequence,
-      outer_count, heads, batch, io_dim, scale);
+      &q_map, &do_map, &k_map, &v_map, q, k, v, d_output, logsumexp,
+      delta, mask, bias, out_dk, out_dv, delta_true_partials, key_blocks,
+      runtime_sequence, outer_count, heads, batch, io_dim, scale);
 }
 
 // Fixed ascending fold of the per-key-block row scalars into
@@ -753,6 +861,8 @@ void launch(
     float* delta_true_partials,
     const CUtensorMap& q_map,
     const CUtensorMap& do_map,
+    const CUtensorMap& k_map,
+    const CUtensorMap& v_map,
     int sequence,
     int outer_count,
     int heads,
@@ -761,8 +871,7 @@ void launch(
     cudaStream_t stream) {
   constexpr int kStride = HeadDim + 8;
   constexpr int kSharedBytes =
-      (2 * kKeyBlock * kStride +
-       4 * kQueryTile * (TmaQdo ? HeadDim : kStride)) *
+      ((2 * kKeyBlock + 4 * kQueryTile) * (TmaQdo ? HeadDim : kStride)) *
           static_cast<int>(sizeof(__nv_bfloat16)) +
       (EmitDeltaTrue
            ? 2 * kWarpsPerBlock * kQueryTile * 9 *
@@ -803,6 +912,8 @@ void launch(
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
               do_map,
+              k_map,
+              v_map,
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
@@ -827,6 +938,8 @@ void launch(
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
               do_map,
+              k_map,
+              v_map,
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
@@ -868,6 +981,8 @@ void launch(
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
               do_map,
+              k_map,
+              v_map,
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
@@ -890,6 +1005,8 @@ void launch(
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
               do_map,
+              k_map,
+              v_map,
               reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
               reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
@@ -995,6 +1112,31 @@ CUtensorMap dkdv_make_do_map(
   return tensor_map;
 }
 
+// K/V: internal layout, box = one whole key block [D x kKeyBlock rows].
+CUtensorMap dkdv_make_kv_block_map(
+    const torch::Tensor& source, int head_dim, int sequence,
+    int64_t planes) {
+  CUtensorMap tensor_map;
+  const cuuint64_t global_dim[3] = {
+      static_cast<cuuint64_t>(head_dim),
+      static_cast<cuuint64_t>(sequence),
+      static_cast<cuuint64_t>(planes)};
+  const cuuint64_t global_stride[2] = {
+      static_cast<cuuint64_t>(head_dim) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(head_dim) * sequence * sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[3] = {
+      static_cast<cuuint32_t>(head_dim), kKeyBlock, 1};
+  const cuuint32_t element_stride[3] = {1, 1, 1};
+  const CUresult result = dkdv_tensor_map_encode_fn()(
+      &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 3, source.data_ptr(),
+      global_dim, global_stride, box_dim, element_stride,
+      CU_TENSOR_MAP_INTERLEAVE_NONE, dkdv_swizzle_for(head_dim),
+      CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  TORCH_CHECK(result == CUDA_SUCCESS, "dkdv kv map encode failed: ",
+              static_cast<int>(result));
+  return tensor_map;
+}
+
 template <int HeadDim, bool EmitDeltaTrue, bool TmaQdo>
 void dispatch_sequence(
     const torch::Tensor& q,
@@ -1010,6 +1152,8 @@ void dispatch_sequence(
     float* delta_true_partials,
     const CUtensorMap& q_map,
     const CUtensorMap& do_map,
+    const CUtensorMap& k_map,
+    const CUtensorMap& v_map,
     int sequence,
     int outer_count,
     int heads,
@@ -1024,24 +1168,24 @@ void dispatch_sequence(
     if (outer_eq) {
       launch<HeadDim, -1, EmitDeltaTrue, true, TmaQdo>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, q_map, do_map, sequence, outer_count, heads,
-          batch, io_dim, stream);
+          delta_true_partials, q_map, do_map, k_map, v_map, sequence,
+          outer_count, heads, batch, io_dim, stream);
     } else {
       launch<HeadDim, -1, EmitDeltaTrue, false, TmaQdo>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, q_map, do_map, sequence, outer_count, heads,
-          batch, io_dim, stream);
+          delta_true_partials, q_map, do_map, k_map, v_map, sequence,
+          outer_count, heads, batch, io_dim, stream);
     }
   } else if (outer_eq) {
     launch<HeadDim, 0, EmitDeltaTrue, true, TmaQdo>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-        delta_true_partials, q_map, do_map, sequence, outer_count, heads,
-          batch, io_dim, stream);
+        delta_true_partials, q_map, do_map, k_map, v_map, sequence,
+          outer_count, heads, batch, io_dim, stream);
   } else {
     launch<HeadDim, 0, EmitDeltaTrue, false, TmaQdo>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-        delta_true_partials, q_map, do_map, sequence, outer_count, heads,
-          batch, io_dim, stream);
+        delta_true_partials, q_map, do_map, k_map, v_map, sequence,
+          outer_count, heads, batch, io_dim, stream);
   }
 }
 
@@ -1136,56 +1280,60 @@ void run_dkdv(
       planes_i64 <= 2147483647LL;
   CUtensorMap q_map{};
   CUtensorMap do_map{};
+  CUtensorMap k_map{};
+  CUtensorMap v_map{};
   if (tma_qdo) {
     q_map = dkdv_make_q_map(q, io_dim, sequence, planes_i64);
     do_map = dkdv_make_do_map(
         d_output, io_dim, sequence, heads, q.size(0) * q.size(1));
+    k_map = dkdv_make_kv_block_map(k, io_dim, sequence, planes_i64);
+    v_map = dkdv_make_kv_block_map(v, io_dim, sequence, planes_i64);
   }
   switch (storage) {
     case 16:
       if (tma_qdo) {
         dispatch_sequence<16, EmitDeltaTrue, true>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, sequence,
-            outer_count, heads, batch, io_dim, stream);
+            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
+            sequence, outer_count, heads, batch, io_dim, stream);
       } else {
         dispatch_sequence<16, EmitDeltaTrue, false>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, sequence,
-            outer_count, heads, batch, io_dim, stream);
+            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
+            sequence, outer_count, heads, batch, io_dim, stream);
       }
       break;
     case 32:
       if (tma_qdo) {
         dispatch_sequence<32, EmitDeltaTrue, true>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, sequence,
-            outer_count, heads, batch, io_dim, stream);
+            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
+            sequence, outer_count, heads, batch, io_dim, stream);
       } else {
         dispatch_sequence<32, EmitDeltaTrue, false>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, sequence,
-            outer_count, heads, batch, io_dim, stream);
+            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
+            sequence, outer_count, heads, batch, io_dim, stream);
       }
       break;
     case 64:
       if (tma_qdo) {
         dispatch_sequence<64, EmitDeltaTrue, true>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, sequence,
-            outer_count, heads, batch, io_dim, stream);
+            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
+            sequence, outer_count, heads, batch, io_dim, stream);
       } else {
         dispatch_sequence<64, EmitDeltaTrue, false>(
             q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, sequence,
-            outer_count, heads, batch, io_dim, stream);
+            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
+            sequence, outer_count, heads, batch, io_dim, stream);
       }
       break;
     case 128:
       dispatch_sequence<128, EmitDeltaTrue, false>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, q_map, do_map, sequence, outer_count, heads,
-          batch, io_dim, stream);
+          delta_true_partials, q_map, do_map, k_map, v_map, sequence,
+          outer_count, heads, batch, io_dim, stream);
       break;
     default:
       TORCH_CHECK(false, "unsupported storage lane for StableFold dK/dV");
