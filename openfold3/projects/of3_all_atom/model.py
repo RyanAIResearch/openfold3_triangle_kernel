@@ -449,6 +449,7 @@ class OpenFold3(nn.Module):
                 use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                 use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                 use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_lma=mode_mem_settings.use_lma,
                 _mask_trans=True,
             )
@@ -476,6 +477,7 @@ class OpenFold3(nn.Module):
                     use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                     use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                     use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
+                    use_stable_triangle_attention=use_stable_triangle_attention,
                     use_lma=mode_mem_settings.use_lma,
                     inplace_safe=inplace_safe,
                     offload_inference=offload_confidence_heads,

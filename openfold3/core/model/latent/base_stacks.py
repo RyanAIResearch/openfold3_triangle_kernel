@@ -185,6 +185,7 @@ class MSAStack(nn.Module, ABC):
         transition_ckpt_chunk_size: int | None = None,
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_triton_triangle_kernels: bool = False,
         use_lma: bool = False,
         _mask_trans: bool = True,

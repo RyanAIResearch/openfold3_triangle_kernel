@@ -23,6 +23,7 @@ Optimizations such as LMA and DeepSpeed EvoformerAttention are included.
 """
 
 import importlib
+import logging
 import math
 import warnings
 
@@ -77,6 +78,8 @@ if cueq_is_installed:
                 return True
         return False
 
+
+_STABLEFOLD_FALLBACK_LOGGED: set = set()
 
 DEFAULT_LMA_Q_CHUNK_SIZE = 1024
 DEFAULT_LMA_KV_CHUNK_SIZE = 4096
@@ -436,6 +439,33 @@ class Attention(nn.Module):
         if biases is None:
             biases = []
 
+        if use_stable_triangle_attention:
+            # Blanket-coverage soft gate, mirroring the cuEq fallback
+            # contract: shapes outside the StableFold facade fall back to the
+            # stock path (identical math, never a silent wrong result).
+            # Mask-only sites (e.g. MSA column attention) get the cached zero
+            # pair bias so the two-bias facade contract holds.
+            hidden_dim = q_x.shape[-1] // self.no_heads
+            if len(biases) == 1 and q_x.ndim >= 4:
+                heads_l = self.no_heads
+                n_res = q_x.shape[-2]
+                lead = int(biases[0].shape[0]) if biases[0].ndim >= 1 else 1
+                zero_pb = _get_zero_pair_bias(
+                    q_x.device, torch.bfloat16, lead, heads_l, n_res
+                )
+                target = biases[0].ndim
+                while zero_pb.ndim < target:
+                    zero_pb = zero_pb.unsqueeze(1)
+                biases = biases + [zero_pb]
+            if (
+                len(biases) != 2
+                or not q_x.is_cuda
+                or hidden_dim > 64
+                or q_x.shape[-2] < 2
+                or torch.cuda.get_device_capability(q_x.device) != (9, 0)
+            ):
+                use_stable_triangle_attention = False
+
         if use_stable_triangle_attention and len(biases) != 2:
             raise ValueError(
                 "stable Triangle Attention requires exactly two biases in "
@@ -463,13 +493,49 @@ class Attention(nn.Module):
             # The facade validates (memoized) and raises on unsupported cases,
             # so no separate pre-check runs on this hot path.
             from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E501
+                is_stablefold_supported,
                 stablefold_triangle_attention,
             )
 
             # Deterministic StableFold backend: raw q, internal scaling,
-            # replay-bitwise vs itself, zero FP atomics. Explicit selection is
-            # fail-closed and never silently substitutes the aligned backend.
-            o = stablefold_triangle_attention(q, k, v, biases[0], biases[1])
+            # replay-bitwise vs itself, zero FP atomics. Triangle-site shapes
+            # always validate; blanket-coverage sites with residual shape
+            # mismatches fall back to stock math (correct, logged once).
+            # fp32 call sites (e.g. aux heads under the training-time fp32
+            # autocast) are served by a bf16 cast, mirroring the Triton path;
+            # native bf16 sites pass through untouched.
+            orig_dtype = q.dtype
+            if orig_dtype != torch.bfloat16:
+                q_s, k_s, v_s = (
+                    q.to(torch.bfloat16), k.to(torch.bfloat16),
+                    v.to(torch.bfloat16),
+                )
+                bias_s = [biases[0], biases[1].to(torch.bfloat16)]
+            else:
+                q_s, k_s, v_s = q, k, v
+                bias_s = biases
+            supported, reason = is_stablefold_supported(
+                q_s, k_s, v_s, bias_s[0], bias_s[1]
+            )
+            if supported:
+                o = stablefold_triangle_attention(
+                    q_s, k_s, v_s, bias_s[0], bias_s[1]
+                )
+                if orig_dtype != torch.bfloat16:
+                    o = o.to(orig_dtype)
+            else:
+                global _STABLEFOLD_FALLBACK_LOGGED
+                key = (reason, tuple(q.shape))
+                if key not in _STABLEFOLD_FALLBACK_LOGGED:
+                    _STABLEFOLD_FALLBACK_LOGGED.add(key)
+                    logging.getLogger(__name__).warning(
+                        "stablefold fallback to stock at shape %s: %s",
+                        tuple(q.shape), reason,
+                    )
+                o = _attention(
+                    q * (1.0 / math.sqrt(self.c_hidden)), k, v, biases
+                )
+                o = o.transpose(-2, -3)
         # cuequivariance kernel takes precedence over use_deepspeed_evo_attention.
         # NOTE: this chain must stay exclusive with the stable branch above —
         # a plain `if` here silently overwrites the stable result with stock
