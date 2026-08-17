@@ -40,11 +40,15 @@ def load_extension(*, verbose: bool | None = None) -> Any:
 _KEY_BLOCK = 64
 
 
-def delta_true_partial_elements(sequence: int, heads: int, batch: int) -> int:
+def delta_true_partial_elements(
+    sequence: int, heads: int, batch: int, outer: int | None = None
+) -> int:
     """FP32 element count of the [rows, key_blocks] T-partial workspace."""
 
+    if outer is None:
+        outer = sequence
     key_blocks = (sequence + _KEY_BLOCK - 1) // _KEY_BLOCK
-    return batch * sequence * heads * sequence * key_blocks
+    return batch * outer * heads * sequence * key_blocks
 
 
 def stablefold_triangle_dkdv(
@@ -94,8 +98,9 @@ def stablefold_triangle_dkdv(
                 out_dv,
             )
         return out_dk, out_dv
-    batch, sequence, heads = int(q.shape[0]), int(q.shape[1]), int(q.shape[2])
-    required = delta_true_partial_elements(sequence, heads, batch)
+    batch, outer, heads = int(q.shape[0]), int(q.shape[1]), int(q.shape[2])
+    sequence = int(q.shape[3])
+    required = delta_true_partial_elements(sequence, heads, batch, outer=outer)
     if delta_true_partials is None:
         delta_true_partials = torch.empty(
             required, device=q.device, dtype=torch.float32

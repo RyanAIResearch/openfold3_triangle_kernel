@@ -137,6 +137,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     __nv_bfloat16* __restrict__ out_dq,
     __nv_bfloat16* __restrict__ workspace,
     int runtime_sequence,
+    int outer_count,
     int heads,
     int batch_base,
     int active_batch,
@@ -202,17 +203,23 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
 #pragma unroll 1
   for (int pass = 0; pass < passes; ++pass) {
     const int outer = leaf * outer_leaf + pass * kWarpsPerBlock + warp;
-    const bool outer_valid = kSequenceExact || outer < sequence;
-    const int outer_load = outer_valid ? outer : sequence - 1;
+    // Outer is a pure plane count (decoupled from sequence); its tail guard
+    // must stay a runtime compare in every lane -- values are unchanged when
+    // outer_count is a leaf multiple, and arbitrary outer stays in bounds.
+    const bool outer_valid = outer < outer_count;
+    const int outer_load = outer_valid ? outer : outer_count - 1;
     const int64_t tensor_base =
-        ((static_cast<int64_t>(batch_index) * sequence + outer_load) * heads +
+        ((static_cast<int64_t>(batch_index) * outer_count + outer_load) *
+             heads +
          head) *
         static_cast<int64_t>(sequence) * HeadDim;
     const int64_t row_stats_base =
-        ((static_cast<int64_t>(batch_index) * sequence + outer_load) * heads +
+        ((static_cast<int64_t>(batch_index) * outer_count + outer_load) *
+             heads +
          head) * sequence;
     const int64_t mask_base =
-        (static_cast<int64_t>(batch_index) * sequence + outer_load) * sequence;
+        (static_cast<int64_t>(batch_index) * outer_count + outer_load) *
+        sequence;
 
     for (int element = lane; element < kQueryBlock * HeadDim;
          element += kWarpSize) {
@@ -314,7 +321,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
                   query_start + sub * kQueryTile + group + half * 8;
               const int index = half * 2 + pair;
               float d_score = 0.0F;
-              if ((kSequenceExact || (outer_valid && key < sequence)) &&
+              if ((outer_valid && (kSequenceExact || key < sequence)) &&
                   (FullQueryTiles || qrow < query_end)) {
                 const float value = score[column].v[index] * scale +
                     mask[mask_base + key] +
@@ -394,7 +401,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     // dQ epilogue for this warp's outer: scale once, store BF16.
     const int64_t dq_row_base = tensor_base +
         static_cast<int64_t>(query_start) * HeadDim;
-    if (kSequenceExact || outer_valid) {
+    if (outer_valid) {
 #pragma unroll
       for (int sub = 0; sub < kQuerySubTiles; ++sub) {
 #pragma unroll
@@ -556,6 +563,7 @@ void launch(
     torch::Tensor& out_dbias,
     torch::Tensor& workspace,
     int sequence,
+    int outer_count,
     int heads,
     int batch,
     int query_span,
@@ -571,7 +579,7 @@ void launch(
       kWarpsPerBlock * kQueryBlock * kKeyTile *
           static_cast<int>(sizeof(float));
   const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
-  const int leaves = (sequence + kOuterLeaf - 1) / kOuterLeaf;
+  const int leaves = (outer_count + kOuterLeaf - 1) / kOuterLeaf;
   TORCH_CHECK(
       query_span > 0 && query_span <= std::numeric_limits<int>::max() &&
           resident_leaves > 0 && resident_leaves <= leaves &&
@@ -664,6 +672,7 @@ void launch(
           reinterpret_cast<__nv_bfloat16*>(out_dq.data_ptr()),            \
           reinterpret_cast<__nv_bfloat16*>(workspace.data_ptr()),         \
           sequence,                                                       \
+          outer_count,                                                    \
           heads,                                                          \
           batch_base,                                                     \
           active_batch,                                                   \
@@ -748,6 +757,7 @@ void dispatch_sequence(
     torch::Tensor& out_dbias,
     torch::Tensor& workspace,
     int sequence,
+    int outer_count,
     int heads,
     int batch,
     int query_span,
@@ -760,13 +770,14 @@ void dispatch_sequence(
   // ABI callers take the guarded fallback.
   if (sequence % kQueryBlock == 0 && sequence % kOuterLeaf == 0) {
     launch<HeadDim, -1>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                        out_dq, out_dbias, workspace, sequence, heads,
-                        batch, query_span, resident_leaves, batch_chunk,
-                        stream);
+                        out_dq, out_dbias, workspace, sequence, outer_count,
+                        heads, batch, query_span, resident_leaves,
+                        batch_chunk, stream);
   } else {
     launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                       out_dq, out_dbias, workspace, sequence, heads, batch,
-                       query_span, resident_leaves, batch_chunk, stream);
+                       out_dq, out_dbias, workspace, sequence, outer_count,
+                       heads, batch, query_span, resident_leaves, batch_chunk,
+                       stream);
   }
 }
 
@@ -788,23 +799,26 @@ void stablefold_triangle_dq_dbias_out(
   TORCH_CHECK(q.is_cuda() && q.dtype() == torch::kBFloat16);
   TORCH_CHECK(q.dim() == 5 && q.size(2) >= 1);
   const int64_t batch64 = q.size(0);
-  const int64_t sequence64 = q.size(1);
+  const int64_t outer64 = q.size(1);
   const int64_t heads64 = q.size(2);
+  const int64_t sequence64 = q.size(3);
   const int64_t head_dim64 = q.size(4);
   TORCH_CHECK(
       batch64 > 0 && batch64 <= std::numeric_limits<int>::max() &&
+          outer64 > 0 && outer64 <= std::numeric_limits<int>::max() &&
           sequence64 > 0 && sequence64 <= std::numeric_limits<int>::max() &&
           heads64 > 0 && heads64 <= 65535 && head_dim64 > 0 &&
           head_dim64 <= std::numeric_limits<int>::max() &&
-          batch64 * sequence64 <= 2147483647LL &&
+          batch64 * outer64 <= 2147483647LL &&
           (sequence64 + kQueryBlock - 1) / kQueryBlock <= 65535,
-      "batch/sequence/head count exceeds the CUDA grid contract");
+      "batch/outer/sequence/head count exceeds the CUDA grid contract");
   const int batch = static_cast<int>(batch64);
+  const int outer_count = static_cast<int>(outer64);
   const int sequence = static_cast<int>(sequence64);
   const int heads = static_cast<int>(heads64);
   const int head_dim = static_cast<int>(head_dim64);
   const int64_t leaves64 =
-      (sequence64 + kOuterLeaf - 1) / kOuterLeaf;
+      (outer64 + kOuterLeaf - 1) / kOuterLeaf;
   TORCH_CHECK(
       query_span64 > 0 &&
           query_span64 <= std::numeric_limits<int>::max() &&
@@ -816,7 +830,7 @@ void stablefold_triangle_dq_dbias_out(
   const int query_span = static_cast<int>(query_span64);
   const int resident_leaves = static_cast<int>(resident_leaves64);
   const int batch_chunk = static_cast<int>(batch_chunk64);
-  TORCH_CHECK(q.size(3) == sequence && q.is_contiguous());
+  TORCH_CHECK(q.is_contiguous());
   const auto check_q_like = [&](const torch::Tensor& tensor) {
     TORCH_CHECK(
         tensor.is_cuda() && tensor.device() == q.device() &&
@@ -841,7 +855,7 @@ void stablefold_triangle_dq_dbias_out(
       mask.is_cuda() && mask.device() == q.device() &&
           mask.dtype() == torch::kFloat32 && mask.is_contiguous() &&
           mask.sizes() ==
-              torch::IntArrayRef({batch, sequence, 1, 1, sequence}));
+              torch::IntArrayRef({batch, outer_count, 1, 1, sequence}));
   TORCH_CHECK(
       bias.is_cuda() && bias.device() == q.device() &&
           bias.dtype() == torch::kBFloat16 && bias.is_contiguous() &&
@@ -871,23 +885,23 @@ void stablefold_triangle_dq_dbias_out(
   switch (head_dim) {
     case 16:
       dispatch_sequence<16>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, heads, batch, query_span,
-                 resident_leaves, batch_chunk, stream);
+                 out_dbias, workspace, sequence, outer_count, heads, batch,
+                 query_span, resident_leaves, batch_chunk, stream);
       break;
     case 32:
       dispatch_sequence<32>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, heads, batch, query_span,
-                 resident_leaves, batch_chunk, stream);
+                 out_dbias, workspace, sequence, outer_count, heads, batch,
+                 query_span, resident_leaves, batch_chunk, stream);
       break;
     case 64:
       dispatch_sequence<64>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, heads, batch, query_span,
-                 resident_leaves, batch_chunk, stream);
+                 out_dbias, workspace, sequence, outer_count, heads, batch,
+                 query_span, resident_leaves, batch_chunk, stream);
       break;
     case 128:
       dispatch_sequence<128>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, heads, batch, query_span,
-                 resident_leaves, batch_chunk, stream);
+                 out_dbias, workspace, sequence, outer_count, heads, batch,
+                 query_span, resident_leaves, batch_chunk, stream);
       break;
     default:
       TORCH_CHECK(false, "unsupported head_dim for StableFold dQ/dBias: ", head_dim);

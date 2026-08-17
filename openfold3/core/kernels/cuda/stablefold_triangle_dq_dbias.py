@@ -123,6 +123,7 @@ def workspace_plan(
     sequence: int,
     heads: int,
     *,
+    outer: int | None = None,
     batch: int = 1,
     workspace_budget_bytes: int = _DEFAULT_WORKSPACE_BUDGET_BYTES,
     query_span: int | None = None,
@@ -143,13 +144,16 @@ def workspace_plan(
     ``O(B*H*N^2)``.
     """
 
-    if sequence <= 0 or heads <= 0 or batch <= 0:
-        raise ValueError("sequence, heads, and batch must be positive")
+    if outer is None:
+        outer = sequence
+    if sequence <= 0 or heads <= 0 or batch <= 0 or outer <= 0:
+        raise ValueError("sequence, outer, heads, and batch must be positive")
     if (
         sequence > _MAX_INT32
         or heads > _MAX_GRID_YZ
         or batch > _MAX_INT32
         or batch * sequence > _MAX_INT32
+        or batch * outer > _MAX_INT32
         or _ceil_div(sequence, _QUERY_BLOCK) > _MAX_GRID_YZ
     ):
         raise ValueError("batch/sequence/head count exceeds the CUDA grid contract")
@@ -168,7 +172,7 @@ def workspace_plan(
             "debug_full_plane cannot be combined with a forced slab shape"
         )
 
-    leaves = _ceil_div(sequence, outer_leaf_for(sequence))
+    leaves = _ceil_div(outer, outer_leaf_for(outer))
     budget_elements = workspace_budget_bytes // 2  # BF16 elements
 
     if debug_full_plane:
@@ -357,12 +361,14 @@ def stablefold_triangle_dq_dbias(
     out_dq: torch.Tensor | None = None,
     out_dbias: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    sequence = int(q.shape[1])
+    outer = int(q.shape[1])
     heads = int(q.shape[2])
+    sequence = int(q.shape[3])
     batch = int(q.shape[0])
     plan = workspace_plan(
         sequence,
         heads,
+        outer=outer,
         batch=batch,
         workspace_budget_bytes=workspace_budget_bytes,
         query_span=query_span,

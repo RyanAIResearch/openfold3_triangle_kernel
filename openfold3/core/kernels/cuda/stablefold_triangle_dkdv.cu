@@ -122,6 +122,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     float* __restrict__ delta_true_partials,
     int key_blocks,
     int runtime_sequence,
+    int outer_count,
     int heads,
     int batch,
     float scale) {
@@ -143,8 +144,8 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
   // shapes while retaining an outer-major fallback for larger B*N.  The two
   // layouts run identical tiles and reductions.
   const int outer_task = TileMajorGrid ? blockIdx.z : blockIdx.x;
-  const int batch_index = outer_task / sequence;
-  const int outer = outer_task - batch_index * sequence;
+  const int batch_index = outer_task / outer_count;
+  const int outer = outer_task - batch_index * outer_count;
   const int key_block_start =
       (TileMajorGrid ? blockIdx.x : blockIdx.z) * kKeyBlock;
   const int head = blockIdx.y;
@@ -173,13 +174,15 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       q_buffers + 2 * kQBufferElements);
 
   const int64_t head_base =
-      ((static_cast<int64_t>(batch_index) * sequence + outer) * heads + head) *
+      ((static_cast<int64_t>(batch_index) * outer_count + outer) * heads +
+       head) *
       static_cast<int64_t>(sequence) * HeadDim;
   const int64_t stats_base =
-      ((static_cast<int64_t>(batch_index) * sequence + outer) * heads + head) *
+      ((static_cast<int64_t>(batch_index) * outer_count + outer) * heads +
+       head) *
       sequence;
   const int64_t mask_base =
-      (static_cast<int64_t>(batch_index) * sequence + outer) * sequence;
+      (static_cast<int64_t>(batch_index) * outer_count + outer) * sequence;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
@@ -489,13 +492,14 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     __nv_bfloat16* __restrict__ out_dk,
     __nv_bfloat16* __restrict__ out_dv,
     int runtime_sequence,
+    int outer_count,
     int heads,
     int batch,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 false>(
       q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-      nullptr, 0, runtime_sequence, heads, batch, scale);
+      nullptr, 0, runtime_sequence, outer_count, heads, batch, scale);
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid>
@@ -514,14 +518,15 @@ void stablefold_triangle_dkdv_delta_true_kernel(
     float* __restrict__ delta_true_partials,
     int key_blocks,
     int runtime_sequence,
+    int outer_count,
     int heads,
     int batch,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 true>(
       q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-      delta_true_partials, key_blocks, runtime_sequence, heads, batch,
-      scale);
+      delta_true_partials, key_blocks, runtime_sequence, outer_count, heads,
+      batch, scale);
 }
 
 // Fixed ascending fold of the per-key-block row scalars into
@@ -568,6 +573,7 @@ void launch(
     torch::Tensor& out_dv,
     float* delta_true_partials,
     int sequence,
+    int outer_count,
     int heads,
     int batch,
     cudaStream_t stream) {
@@ -581,7 +587,7 @@ void launch(
            : 0);
   const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
   const int key_blocks = (sequence + kKeyBlock - 1) / kKeyBlock;
-  const int64_t outer_tasks = static_cast<int64_t>(batch) * sequence;
+  const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
   const bool tile_major_grid = outer_tasks <= 65535;
   const dim3 grid = tile_major_grid
       ? dim3(
@@ -625,6 +631,7 @@ void launch(
               delta_true_partials,
               key_blocks,
               sequence,
+              outer_count,
               heads,
               batch,
               scale);
@@ -645,6 +652,7 @@ void launch(
               delta_true_partials,
               key_blocks,
               sequence,
+              outer_count,
               heads,
               batch,
               scale);
@@ -679,6 +687,7 @@ void launch(
               reinterpret_cast<__nv_bfloat16*>(out_dk.data_ptr()),
               reinterpret_cast<__nv_bfloat16*>(out_dv.data_ptr()),
               sequence,
+              outer_count,
               heads,
               batch,
               scale);
@@ -696,6 +705,7 @@ void launch(
               reinterpret_cast<__nv_bfloat16*>(out_dk.data_ptr()),
               reinterpret_cast<__nv_bfloat16*>(out_dv.data_ptr()),
               sequence,
+              outer_count,
               heads,
               batch,
               scale);
@@ -717,6 +727,7 @@ void dispatch_sequence(
     torch::Tensor& out_dv,
     float* delta_true_partials,
     int sequence,
+    int outer_count,
     int heads,
     int batch,
     cudaStream_t stream) {
@@ -726,11 +737,11 @@ void dispatch_sequence(
   if (sequence % kKeyBlock == 0 && sequence % kQueryTile == 0) {
     launch<HeadDim, -1, EmitDeltaTrue>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-        delta_true_partials, sequence, heads, batch, stream);
+        delta_true_partials, sequence, outer_count, heads, batch, stream);
   } else {
     launch<HeadDim, 0, EmitDeltaTrue>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-        delta_true_partials, sequence, heads, batch, stream);
+        delta_true_partials, sequence, outer_count, heads, batch, stream);
   }
 }
 
@@ -750,22 +761,25 @@ void run_dkdv(
   TORCH_CHECK(q.is_cuda() && q.dtype() == torch::kBFloat16);
   TORCH_CHECK(q.dim() == 5 && q.size(2) >= 1);
   const int64_t batch64 = q.size(0);
-  const int64_t sequence64 = q.size(1);
+  const int64_t outer64 = q.size(1);
   const int64_t heads64 = q.size(2);
+  const int64_t sequence64 = q.size(3);
   const int64_t head_dim64 = q.size(4);
   TORCH_CHECK(
       batch64 > 0 && batch64 <= std::numeric_limits<int>::max() &&
+          outer64 > 0 && outer64 <= std::numeric_limits<int>::max() &&
           sequence64 > 0 && sequence64 <= std::numeric_limits<int>::max() &&
           heads64 > 0 && heads64 <= 65535 && head_dim64 > 0 &&
           head_dim64 <= std::numeric_limits<int>::max() &&
-          batch64 * sequence64 <= 2147483647LL &&
+          batch64 * outer64 <= 2147483647LL &&
           (sequence64 + kKeyBlock - 1) / kKeyBlock <= 65535,
-      "batch/sequence/head count exceeds the CUDA grid contract");
+      "batch/outer/sequence/head count exceeds the CUDA grid contract");
   const int batch = static_cast<int>(batch64);
+  const int outer_count = static_cast<int>(outer64);
   const int sequence = static_cast<int>(sequence64);
   const int heads = static_cast<int>(heads64);
   const int head_dim = static_cast<int>(head_dim64);
-  TORCH_CHECK(q.size(3) == sequence && q.is_contiguous());
+  TORCH_CHECK(q.is_contiguous());
   const auto check_q_like = [&](const torch::Tensor& tensor) {
     TORCH_CHECK(
         tensor.is_cuda() && tensor.device() == q.device() &&
@@ -792,7 +806,7 @@ void run_dkdv(
       mask.is_cuda() && mask.device() == q.device() &&
           mask.dtype() == torch::kFloat32 && mask.is_contiguous() &&
           mask.sizes() ==
-              torch::IntArrayRef({batch, sequence, 1, 1, sequence}),
+              torch::IntArrayRef({batch, outer_count, 1, 1, sequence}),
       "mask must be contiguous FP32 [B,N,1,1,N] on q.device");
   TORCH_CHECK(
       bias.is_cuda() && bias.device() == q.device() &&
@@ -806,22 +820,22 @@ void run_dkdv(
     case 16:
       dispatch_sequence<16, EmitDeltaTrue>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, stream);
       break;
     case 32:
       dispatch_sequence<32, EmitDeltaTrue>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, stream);
       break;
     case 64:
       dispatch_sequence<64, EmitDeltaTrue>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, stream);
       break;
     case 128:
       dispatch_sequence<128, EmitDeltaTrue>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, sequence, heads, batch, stream);
+          delta_true_partials, sequence, outer_count, heads, batch, stream);
       break;
     default:
       TORCH_CHECK(false, "unsupported head_dim for StableFold dK/dV: ", head_dim);
@@ -858,7 +872,7 @@ void stablefold_triangle_dkdv_delta_true_out(
     torch::Tensor& out_dv,
     torch::Tensor& delta_true_partials,
     torch::Tensor& out_delta_true) {
-  const int64_t sequence = q.size(1);
+  const int64_t sequence = q.size(3);
   const int64_t rows = q.numel() / q.size(4);
   const int64_t key_blocks = (sequence + kKeyBlock - 1) / kKeyBlock;
   const int64_t required_partials = rows * key_blocks;
