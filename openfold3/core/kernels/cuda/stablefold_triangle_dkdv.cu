@@ -14,7 +14,9 @@
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <cuda.h>
 #include <cuda_bf16.h>
+#include <cuda_runtime_api.h>
 #include <torch/extension.h>
 
 #include <cmath>
@@ -97,6 +99,100 @@ __device__ __forceinline__ void cp_async_commit_group() {
 
 __device__ __forceinline__ void cp_async_wait_all() {
   asm volatile("cp.async.wait_group 0;\n");
+}
+
+
+// ---- TMA staging lane (io_dim == HeadDim): swizzle-aware consumers ----
+// The universal swizzle law (dump-probe verified): the 16B-atom XOR
+// advances once per 128 bytes of tile offset. Compact tiles have
+// stride == HeadDim elements per row.
+
+__device__ __forceinline__ void dkdv_proxy_fence() {
+  asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void dkdv_mbarrier_init(uint64_t* bar, int count) {
+  asm volatile(
+      "mbarrier.init.shared::cta.b64 [%0], %1;\n" ::"r"(shared_u32(bar)),
+      "r"(count));
+}
+
+__device__ __forceinline__ void dkdv_mbarrier_expect_tx(
+    uint64_t* bar, uint32_t bytes) {
+  asm volatile(
+      "mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;\n" ::"r"(
+          shared_u32(bar)),
+      "r"(bytes));
+}
+
+__device__ __forceinline__ void dkdv_mbarrier_wait_parity(
+    uint64_t* bar, uint32_t parity) {
+  asm volatile(
+      "{\n"
+      "  .reg .pred done;\n"
+      "  wait:\n"
+      "  mbarrier.try_wait.parity.shared::cta.b64 done, [%0], %1;\n"
+      "  @!done bra wait;\n"
+      "}\n" ::"r"(shared_u32(bar)),
+      "r"(parity));
+}
+
+__device__ __forceinline__ void dkdv_tma_load_3d(
+    const CUtensorMap* map, __nv_bfloat16* dst, uint64_t* bar,
+    int coord_row, int coord_plane) {
+  asm volatile(
+      "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx"
+      "::bytes [%0], [%1, {%2, %3, %4}], [%5];\n" ::"r"(shared_u32(dst)),
+      "l"(reinterpret_cast<uint64_t>(map)),
+      "r"(0), "r"(coord_row), "r"(coord_plane),
+      "r"(shared_u32(bar)));
+}
+
+__device__ __forceinline__ void dkdv_tma_load_4d(
+    const CUtensorMap* map, __nv_bfloat16* dst, uint64_t* bar,
+    int coord_head, int coord_row, int coord_plane) {
+  asm volatile(
+      "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier::complete_tx"
+      "::bytes [%0], [%1, {%2, %3, %4, %5}], [%6];\n" ::"r"(shared_u32(dst)),
+      "l"(reinterpret_cast<uint64_t>(map)),
+      "r"(0), "r"(coord_head), "r"(coord_row), "r"(coord_plane),
+      "r"(shared_u32(bar)));
+}
+
+// A/B-operand fragment loads over a COMPACT swizzled tile (stride ==
+// HeadDim elements). Atom XOR = ((row*HeadDim) >> 6) & (HeadDim/8 - 1).
+template <int HeadDim>
+__device__ __forceinline__ int dkdv_swz_col(int row, int col) {
+  constexpr int kAtoms = HeadDim / 8;
+  const int atom = (col >> 3) ^ (((row * HeadDim) >> 6) & (kAtoms - 1));
+  return atom * 8 + (col & 7);
+}
+
+template <int HeadDim>
+__device__ __forceinline__ void ldmatrix_b_dimpair_sw(
+    const __nv_bfloat16* tile, int key_start, int dim_start, int lane,
+    uint32_t (&frag)[2]) {
+  const int key = key_start + (lane & 7);
+  const int col = dim_start + (((lane >> 3) & 1) << 3);
+  const uint32_t addr = shared_u32(
+      tile + key * HeadDim + dkdv_swz_col<HeadDim>(key, col));
+  asm volatile(
+      "ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n"
+      : "=r"(frag[0]), "=r"(frag[1])
+      : "r"(addr));
+}
+
+template <int HeadDim>
+__device__ __forceinline__ void ldmatrix_b_rowtrans_sw(
+    const __nv_bfloat16* tile, int row_start, int dim_start, int lane,
+    uint32_t (&frag)[2]) {
+  const int row = row_start + (lane & 15);
+  const uint32_t addr = shared_u32(
+      tile + row * HeadDim + dkdv_swz_col<HeadDim>(row, dim_start));
+  asm volatile(
+      "ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n"
+      : "=r"(frag[0]), "=r"(frag[1])
+      : "r"(addr));
 }
 
 __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
