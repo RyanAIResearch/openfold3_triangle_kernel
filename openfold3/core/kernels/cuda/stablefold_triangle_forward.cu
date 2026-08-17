@@ -304,7 +304,8 @@ __device__ __forceinline__ float quad_sum(float value) {
 // zero-extends them to the HeadDim compute lane at staging time (padded dot
 // terms are +0.0 — exact) and reads/writes global memory at io_dim strides.
 // io_dim == HeadDim is the plain lane; the ternaries stay out of hot loops.
-template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq>
+template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq,
+          bool InputInterleaved>
 __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
@@ -318,7 +319,6 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     int heads,
     int batch,
     int io_dim,
-    bool input_interleaved,
     float scale) {
   constexpr int kKVStride = HeadDim + 8;
   static_assert(HeadDim % 16 == 0 && (kKVStride * 2) % 16 == 0);
@@ -357,11 +357,11 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t plane_row_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
-  const int64_t head_base = input_interleaved
+  const int64_t head_base = InputInterleaved
       ? (plane * static_cast<int64_t>(sequence) * heads + head) * io_dim
       : plane_row_base * io_dim;
   const int64_t input_row_stride =
-      input_interleaved ? static_cast<int64_t>(heads) * io_dim : io_dim;
+      InputInterleaved ? static_cast<int64_t>(heads) * io_dim : io_dim;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
@@ -596,7 +596,8 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
 // order to the legacy kernel (wgmma proved bitwise equal to the chained
 // mma.sync; the swizzled keytrans reads the same bytes), with K and V
 // staged by the bulk tensor engine instead of per-thread cp.async.
-template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq>
+template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq,
+          bool InputInterleaved>
 __global__ __launch_bounds__(kThreads) void
 stablefold_triangle_forward_tma_kernel(
     const __grid_constant__ CUtensorMap k_map,
@@ -609,7 +610,6 @@ stablefold_triangle_forward_tma_kernel(
     int sequence,
     int outer_count,
     int heads,
-    bool input_interleaved,
     float scale) {
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
   constexpr int kQStride = HeadDim + 8;
@@ -638,10 +638,10 @@ stablefold_triangle_forward_tma_kernel(
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t plane_row_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
-  const int64_t head_base = input_interleaved
+  const int64_t head_base = InputInterleaved
       ? (plane * static_cast<int64_t>(sequence) * heads + head) * HeadDim
       : plane_row_base * HeadDim;
-  const int64_t input_row_stride = input_interleaved
+  const int64_t input_row_stride = InputInterleaved
       ? static_cast<int64_t>(heads) * HeadDim
       : HeadDim;
   const int64_t bias_base =
@@ -958,7 +958,7 @@ CUtensorMap make_kv_tensor_map(
   return tensor_map;
 }
 
-template <int HeadDim>
+template <int HeadDim, bool InputInterleaved>
 void launch_forward_tma(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -976,7 +976,6 @@ void launch_forward_tma(
       make_kv_tensor_map(k, HeadDim, sequence, heads, outer_count, batch);
   const CUtensorMap v_map =
       make_kv_tensor_map(v, HeadDim, sequence, heads, outer_count, batch);
-  const bool input_interleaved = !q.is_contiguous();
   const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
   const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
   const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
@@ -996,7 +995,7 @@ void launch_forward_tma(
   do {                                                                      \
     const cudaError_t status = cudaFuncSetAttribute(                        \
         stablefold_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,   \
-                                               OuterEq>,                    \
+                                               OuterEq, InputInterleaved>,  \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                        \
         shared_bytes_tma<HeadDim>());                                       \
     TORCH_CHECK(                                                            \
@@ -1004,7 +1003,7 @@ void launch_forward_tma(
         "failed to opt in StableFold TMA forward shared memory: ",          \
         cudaGetErrorString(status));                                        \
     stablefold_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,       \
-                                           OuterEq>                         \
+                                           OuterEq, InputInterleaved>       \
         <<<grid, kThreads, shared_bytes_tma<HeadDim>(), stream>>>(          \
             k_map,                                                          \
             v_map,                                                          \
@@ -1016,7 +1015,6 @@ void launch_forward_tma(
             sequence,                                                       \
             outer_count,                                                    \
             heads,                                                          \
-            input_interleaved,                                              \
             scale);                                                         \
   } while (false)
   const bool outer_eq = outer_count == sequence;
@@ -1040,7 +1038,7 @@ void launch_forward_tma(
 #undef LAUNCH_STABLEFOLD_FORWARD_TMA
 }
 
-template <int HeadDim>
+template <int HeadDim, bool InputInterleaved>
 void launch_forward(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -1056,7 +1054,6 @@ void launch_forward(
     int io_dim,
     cudaStream_t stream) {
   const float scale = 1.0F / std::sqrt(static_cast<float>(io_dim));
-  const bool input_interleaved = !q.is_contiguous();
   const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
   const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
   const bool tile_major_grid = outer_tasks <= 65535;
@@ -1075,14 +1072,15 @@ void launch_forward(
   do {                                                                      \
     const cudaError_t status = cudaFuncSetAttribute(                        \
         stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact,       \
-                                           OuterEq>,                        \
+                                           OuterEq, InputInterleaved>,      \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                        \
         shared_bytes<HeadDim>());                                           \
     TORCH_CHECK(                                                            \
         status == cudaSuccess,                                              \
         "failed to opt in StableFold forward shared memory: ",              \
         cudaGetErrorString(status));                                        \
-    stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact, OuterEq>  \
+    stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact, OuterEq,  \
+                                       InputInterleaved>                    \
         <<<grid, kThreads, shared_bytes<HeadDim>(), stream>>>(              \
             reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),          \
             reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),          \
@@ -1096,7 +1094,6 @@ void launch_forward(
             heads,                                                         \
             batch,                                                         \
             io_dim,                                                        \
-            input_interleaved,                                             \
             scale);                                                        \
   } while (false)
   const bool outer_eq = outer_count == sequence;
@@ -1279,46 +1276,58 @@ void stablefold_triangle_forward_out(
   const int storage = head_dim <= 16
       ? 16
       : (head_dim <= 32 ? 32 : (head_dim <= 64 ? 64 : 128));
+#define DISPATCH_FORWARD_TMA(HeadDim)                                      \
+  do {                                                                     \
+    if (q_interleaved) {                                                   \
+      launch_forward_tma<HeadDim, true>(                                   \
+          q, k, v, mask, bias, out, lse, sequence, outer_count, heads,    \
+          batch, stream);                                                  \
+    } else {                                                               \
+      launch_forward_tma<HeadDim, false>(                                  \
+          q, k, v, mask, bias, out, lse, sequence, outer_count, heads,    \
+          batch, stream);                                                  \
+    }                                                                      \
+  } while (false)
+#define DISPATCH_FORWARD(HeadDim)                                          \
+  do {                                                                     \
+    if (q_interleaved) {                                                   \
+      launch_forward<HeadDim, true>(                                       \
+          q, k, v, mask, bias, out, lse, sequence, outer_count, heads,    \
+          batch, head_dim, stream);                                        \
+    } else {                                                               \
+      launch_forward<HeadDim, false>(                                      \
+          q, k, v, mask, bias, out, lse, sequence, outer_count, heads,    \
+          batch, head_dim, stream);                                        \
+    }                                                                      \
+  } while (false)
   switch (storage) {
     case 16:
       if (tma_planes_ok && head_dim == 16) {
-        launch_forward_tma<16>(
-            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+        DISPATCH_FORWARD_TMA(16);
       } else {
-        launch_forward<16>(
-            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, head_dim, stream);
+        DISPATCH_FORWARD(16);
       }
       break;
     case 32:
       if (tma_planes_ok && head_dim == 32) {
-        launch_forward_tma<32>(
-            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+        DISPATCH_FORWARD_TMA(32);
       } else {
-        launch_forward<32>(
-            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, head_dim, stream);
+        DISPATCH_FORWARD(32);
       }
       break;
     case 64:
       if (tma_planes_ok && head_dim == 64) {
-        launch_forward_tma<64>(
-            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+        DISPATCH_FORWARD_TMA(64);
       } else {
-        launch_forward<64>(
-            q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, head_dim, stream);
+        DISPATCH_FORWARD(64);
       }
       break;
     default:
-      launch_forward<128>(
-          q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch,
-          head_dim, stream);
+      DISPATCH_FORWARD(128);
       break;
   }
+#undef DISPATCH_FORWARD
+#undef DISPATCH_FORWARD_TMA
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "launch failed");
 }
 

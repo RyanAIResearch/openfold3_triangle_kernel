@@ -239,7 +239,8 @@ __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
-          bool EmitDeltaTrue, bool OuterEqSeq, bool TmaQdo>
+          bool EmitDeltaTrue, bool OuterEqSeq, bool TmaQdo,
+          bool InputInterleaved>
 __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     const CUtensorMap* q_map,
     const CUtensorMap* do_map,
@@ -262,7 +263,6 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
     int heads,
     int batch,
     int io_dim,
-    bool input_interleaved,
     float scale) {
   // StaticSequence == -1: the production exact-tiles lane -- sequence is
   // a pure runtime parameter under the facade's pad-to-tile contract, so
@@ -329,10 +329,10 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t stats_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
-  const int64_t head_base = input_interleaved
+  const int64_t head_base = InputInterleaved
       ? (plane * static_cast<int64_t>(sequence) * heads + head) * io_dim
       : stats_base * io_dim;
-  const int64_t input_row_stride = input_interleaved
+  const int64_t input_row_stride = InputInterleaved
       ? static_cast<int64_t>(heads) * io_dim
       : io_dim;
   // d_output arrives in the public [B, O, N, H, io_dim] layout.
@@ -765,7 +765,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
 // codegen (the EmitDeltaTrue=false body folds every delta-true statement
 // away and the dead nullptr/0 arguments vanish under inlining).
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
-          bool OuterEqSeq, bool TmaQdo>
+          bool OuterEqSeq, bool TmaQdo, bool InputInterleaved>
 __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     const __grid_constant__ CUtensorMap q_map,
     const __grid_constant__ CUtensorMap do_map,
@@ -786,17 +786,17 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     int heads,
     int batch,
     int io_dim,
-    bool input_interleaved,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
-                                false, OuterEqSeq, TmaQdo>(
+                                false, OuterEqSeq, TmaQdo,
+                                InputInterleaved>(
       &q_map, &do_map, &k_map, &v_map, q, k, v, d_output, logsumexp,
       delta, mask, bias, out_dk, out_dv, nullptr, 0, runtime_sequence,
-      outer_count, heads, batch, io_dim, input_interleaved, scale);
+      outer_count, heads, batch, io_dim, scale);
 }
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
-          bool OuterEqSeq, bool TmaQdo>
+          bool OuterEqSeq, bool TmaQdo, bool InputInterleaved>
 __global__ __launch_bounds__(kThreads)
 void stablefold_triangle_dkdv_delta_true_kernel(
     const __grid_constant__ CUtensorMap q_map,
@@ -820,14 +820,13 @@ void stablefold_triangle_dkdv_delta_true_kernel(
     int heads,
     int batch,
     int io_dim,
-    bool input_interleaved,
     float scale) {
   stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
-                                true, OuterEqSeq, TmaQdo>(
+                                true, OuterEqSeq, TmaQdo,
+                                InputInterleaved>(
       &q_map, &do_map, &k_map, &v_map, q, k, v, d_output, logsumexp,
       delta, mask, bias, out_dk, out_dv, delta_true_partials, key_blocks,
-      runtime_sequence, outer_count, heads, batch, io_dim,
-      input_interleaved, scale);
+      runtime_sequence, outer_count, heads, batch, io_dim, scale);
 }
 
 // Fixed ascending fold of the per-key-block row scalars into
@@ -861,7 +860,7 @@ __global__ void stablefold_delta_true_reduce_kernel(
 }
 
 template <int HeadDim, int StaticSequence, bool EmitDeltaTrue,
-          bool OuterEqSeq, bool TmaQdo>
+          bool OuterEqSeq, bool TmaQdo, bool InputInterleaved>
 void launch(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -883,7 +882,6 @@ void launch(
     int heads,
     int batch,
     int io_dim,
-    bool input_interleaved,
     cudaStream_t stream) {
   constexpr int kStride = HeadDim + 8;
   constexpr int kSharedBytes =
@@ -910,12 +908,14 @@ void launch(
     const cudaError_t attribute_status = tile_major_grid
         ? cudaFuncSetAttribute(
               stablefold_triangle_dkdv_delta_true_kernel<
-                  HeadDim, StaticSequence, true, OuterEqSeq, TmaQdo>,
+                  HeadDim, StaticSequence, true, OuterEqSeq, TmaQdo,
+                  InputInterleaved>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes)
         : cudaFuncSetAttribute(
               stablefold_triangle_dkdv_delta_true_kernel<
-                  HeadDim, StaticSequence, false, OuterEqSeq, TmaQdo>,
+                  HeadDim, StaticSequence, false, OuterEqSeq, TmaQdo,
+                  InputInterleaved>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes);
     TORCH_CHECK(
@@ -924,7 +924,8 @@ void launch(
         cudaGetErrorString(attribute_status));
     if (tile_major_grid) {
       stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
-                                                 true, OuterEqSeq, TmaQdo>
+                                                 true, OuterEqSeq, TmaQdo,
+                                                 InputInterleaved>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
               do_map,
@@ -947,11 +948,11 @@ void launch(
               heads,
               batch,
               io_dim,
-              input_interleaved,
               scale);
     } else {
       stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
-                                                 false, OuterEqSeq, TmaQdo>
+                                                 false, OuterEqSeq, TmaQdo,
+                                                 InputInterleaved>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
               do_map,
@@ -974,19 +975,20 @@ void launch(
               heads,
               batch,
               io_dim,
-              input_interleaved,
               scale);
     }
   } else {
     const cudaError_t attribute_status = tile_major_grid
         ? cudaFuncSetAttribute(
               stablefold_triangle_dkdv_kernel<
-                  HeadDim, StaticSequence, true, OuterEqSeq, TmaQdo>,
+                  HeadDim, StaticSequence, true, OuterEqSeq, TmaQdo,
+                  InputInterleaved>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes)
         : cudaFuncSetAttribute(
               stablefold_triangle_dkdv_kernel<
-                  HeadDim, StaticSequence, false, OuterEqSeq, TmaQdo>,
+                  HeadDim, StaticSequence, false, OuterEqSeq, TmaQdo,
+                  InputInterleaved>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes);
     TORCH_CHECK(
@@ -995,7 +997,7 @@ void launch(
         cudaGetErrorString(attribute_status));
     if (tile_major_grid) {
       stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, true,
-                                      OuterEqSeq, TmaQdo>
+                                      OuterEqSeq, TmaQdo, InputInterleaved>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
               do_map,
@@ -1016,11 +1018,10 @@ void launch(
               heads,
               batch,
               io_dim,
-              input_interleaved,
               scale);
     } else {
       stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, false,
-                                      OuterEqSeq, TmaQdo>
+                                      OuterEqSeq, TmaQdo, InputInterleaved>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
               do_map,
@@ -1041,7 +1042,6 @@ void launch(
               heads,
               batch,
               io_dim,
-              input_interleaved,
               scale);
     }
   }
@@ -1166,7 +1166,8 @@ CUtensorMap dkdv_make_kv_block_map(
   return tensor_map;
 }
 
-template <int HeadDim, bool EmitDeltaTrue, bool TmaQdo>
+template <int HeadDim, bool EmitDeltaTrue, bool TmaQdo,
+          bool InputInterleaved>
 void dispatch_sequence(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -1188,7 +1189,6 @@ void dispatch_sequence(
     int heads,
     int batch,
     int io_dim,
-    bool input_interleaved,
     cudaStream_t stream) {
   // One lane for every length: the exact-tiles contract (sequence padded
   // to the tile quantum by the facade) folds all guards at compile time
@@ -1196,26 +1196,26 @@ void dispatch_sequence(
   const bool outer_eq = outer_count == sequence;
   if (sequence % kKeyBlock == 0 && sequence % kQueryTile == 0) {
     if (outer_eq) {
-      launch<HeadDim, -1, EmitDeltaTrue, true, TmaQdo>(
+      launch<HeadDim, -1, EmitDeltaTrue, true, TmaQdo, InputInterleaved>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
           delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, input_interleaved, stream);
+          outer_count, heads, batch, io_dim, stream);
     } else {
-      launch<HeadDim, -1, EmitDeltaTrue, false, TmaQdo>(
+      launch<HeadDim, -1, EmitDeltaTrue, false, TmaQdo, InputInterleaved>(
           q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
           delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, input_interleaved, stream);
+          outer_count, heads, batch, io_dim, stream);
     }
   } else if (outer_eq) {
-    launch<HeadDim, 0, EmitDeltaTrue, true, TmaQdo>(
+    launch<HeadDim, 0, EmitDeltaTrue, true, TmaQdo, InputInterleaved>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
         delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, input_interleaved, stream);
+          outer_count, heads, batch, io_dim, stream);
   } else {
-    launch<HeadDim, 0, EmitDeltaTrue, false, TmaQdo>(
+    launch<HeadDim, 0, EmitDeltaTrue, false, TmaQdo, InputInterleaved>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
         delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, input_interleaved, stream);
+          outer_count, heads, batch, io_dim, stream);
   }
 }
 
@@ -1336,61 +1336,49 @@ void run_dkdv(
     v_map = dkdv_make_kv_block_map(
         v, io_dim, sequence, heads, outer_count, batch);
   }
+#define DISPATCH_DKDV(HeadDim, TmaQdo)                                     \
+  do {                                                                     \
+    if (input_interleaved) {                                               \
+      dispatch_sequence<HeadDim, EmitDeltaTrue, TmaQdo, true>(            \
+          q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,        \
+          out_dv, delta_true_partials, q_map, do_map, k_map, v_map,       \
+          sequence, outer_count, heads, batch, io_dim, stream);           \
+    } else {                                                               \
+      dispatch_sequence<HeadDim, EmitDeltaTrue, TmaQdo, false>(           \
+          q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,        \
+          out_dv, delta_true_partials, q_map, do_map, k_map, v_map,       \
+          sequence, outer_count, heads, batch, io_dim, stream);           \
+    }                                                                      \
+  } while (false)
   switch (storage) {
     case 16:
       if (tma_qdo) {
-        dispatch_sequence<16, EmitDeltaTrue, true>(
-            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim,
-            input_interleaved, stream);
+        DISPATCH_DKDV(16, true);
       } else {
-        dispatch_sequence<16, EmitDeltaTrue, false>(
-            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim,
-            input_interleaved, stream);
+        DISPATCH_DKDV(16, false);
       }
       break;
     case 32:
       if (tma_qdo) {
-        dispatch_sequence<32, EmitDeltaTrue, true>(
-            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim,
-            input_interleaved, stream);
+        DISPATCH_DKDV(32, true);
       } else {
-        dispatch_sequence<32, EmitDeltaTrue, false>(
-            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim,
-            input_interleaved, stream);
+        DISPATCH_DKDV(32, false);
       }
       break;
     case 64:
       if (tma_qdo) {
-        dispatch_sequence<64, EmitDeltaTrue, true>(
-            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim,
-            input_interleaved, stream);
+        DISPATCH_DKDV(64, true);
       } else {
-        dispatch_sequence<64, EmitDeltaTrue, false>(
-            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk,
-            out_dv, delta_true_partials, q_map, do_map, k_map, v_map,
-            sequence, outer_count, heads, batch, io_dim,
-            input_interleaved, stream);
+        DISPATCH_DKDV(64, false);
       }
       break;
     case 128:
-      dispatch_sequence<128, EmitDeltaTrue, false>(
-          q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv,
-          delta_true_partials, q_map, do_map, k_map, v_map, sequence,
-          outer_count, heads, batch, io_dim, input_interleaved, stream);
+      DISPATCH_DKDV(128, false);
       break;
     default:
       TORCH_CHECK(false, "unsupported storage lane for StableFold dK/dV");
   }
+#undef DISPATCH_DKDV
   {
     const cudaError_t launch_status = cudaGetLastError();
     TORCH_CHECK(
