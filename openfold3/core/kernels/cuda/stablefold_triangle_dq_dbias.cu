@@ -140,7 +140,8 @@ template <
     int StaticSequence,
     bool FullQueryTiles,
     bool TaskInGridZ,
-    bool OuterEqSeq>
+    bool OuterEqSeq,
+    bool InputInterleaved>
 __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
@@ -163,7 +164,6 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     int query_capacity,
     int leaf_base,
     int io_dim,
-    bool input_interleaved,
     float scale) {
   // StaticSequence == -1 is the production lane: sequence stays a pure
   // runtime parameter under the facade's pad-to-tile contract (every tile
@@ -235,10 +235,10 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
         static_cast<int64_t>(batch_index) * oc + outer_load;
     const int64_t row_stats_base =
         (plane * heads + head) * static_cast<int64_t>(sequence);
-    const int64_t tensor_base = input_interleaved
+    const int64_t tensor_base = InputInterleaved
         ? (plane * static_cast<int64_t>(sequence) * heads + head) * io_dim
         : row_stats_base * io_dim;
-    const int64_t input_row_stride = input_interleaved
+    const int64_t input_row_stride = InputInterleaved
         ? static_cast<int64_t>(heads) * io_dim
         : io_dim;
     // d_output arrives in the public [B, O, N, H, io_dim] layout.
@@ -616,7 +616,7 @@ int64_t positive_ceil_div(int64_t numerator, int64_t denominator) {
   return numerator / denominator + (numerator % denominator != 0);
 }
 
-template <int HeadDim, int StaticSequence>
+template <int HeadDim, int StaticSequence, bool InputInterleaved>
 void launch(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -637,7 +637,6 @@ void launch(
     int resident_leaves,
     int batch_chunk,
     int io_dim,
-    bool input_interleaved,
     cudaStream_t stream) {
   constexpr int kQStride = HeadDim + 8;
   constexpr int kKVStride = HeadDim + 8;
@@ -670,12 +669,14 @@ void launch(
   do {                                                                     \
     const cudaError_t status = cudaFuncSetAttribute(                       \
         stablefold_dq_dbias_leaf_kernel<                                    \
-            HeadDim, StaticSequence, FullTiles, TaskInZ, true>,            \
+            HeadDim, StaticSequence, FullTiles, TaskInZ, true,             \
+            InputInterleaved>,                                             \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytes);                                                     \
     const cudaError_t status_g = cudaFuncSetAttribute(                     \
         stablefold_dq_dbias_leaf_kernel<                                    \
-            HeadDim, StaticSequence, FullTiles, TaskInZ, false>,           \
+            HeadDim, StaticSequence, FullTiles, TaskInZ, false,            \
+            InputInterleaved>,                                             \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytes);                                                     \
     TORCH_CHECK(                                                           \
@@ -733,7 +734,8 @@ void launch(
                   static_cast<unsigned int>(query_blocks));
 #define LAUNCH_DQ_DBIAS_LEAF(FullTiles, TaskInZ, OuterEq)                  \
   stablefold_dq_dbias_leaf_kernel<                                          \
-      HeadDim, StaticSequence, FullTiles, TaskInZ, OuterEq>                \
+      HeadDim, StaticSequence, FullTiles, TaskInZ, OuterEq,                \
+      InputInterleaved>                                                    \
       <<<grid, kThreads, kSharedBytes, stream>>>(                          \
           reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
           reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),           \
@@ -756,7 +758,6 @@ void launch(
           query_span,                                                     \
           leaf_base,                                                      \
           io_dim,                                                          \
-          input_interleaved,                                               \
           scale)
         if constexpr (StaticSequence == -1) {
           // The exact-tiles contract guarantees full query blocks; the
@@ -819,7 +820,7 @@ void launch(
   }
 }
 
-template <int HeadDim>
+template <int HeadDim, bool InputInterleaved>
 void dispatch_sequence(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -840,22 +841,21 @@ void dispatch_sequence(
     int resident_leaves,
     int batch_chunk,
     int io_dim,
-    bool input_interleaved,
     cudaStream_t stream) {
   // One lane for every length: the exact-tiles contract (sequence padded
   // to the tile quantum by the facade) folds all guards at compile time
   // with sequence still a pure runtime value. Unpadded lengths from direct
   // ABI callers take the guarded fallback.
   if (sequence % kQueryBlock == 0 && sequence % kOuterLeaf == 0) {
-    launch<HeadDim, -1>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                        out_dq, out_dbias, workspace, sequence, outer_count,
-                        heads, batch, query_span, resident_leaves,
-                        batch_chunk, io_dim, input_interleaved, stream);
+    launch<HeadDim, -1, InputInterleaved>(
+        q, k, v, d_output, logsumexp, delta, mask, bias, out_dq, out_dbias,
+        workspace, sequence, outer_count, heads, batch, query_span,
+        resident_leaves, batch_chunk, io_dim, stream);
   } else {
-    launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                       out_dq, out_dbias, workspace, sequence, outer_count,
-                       heads, batch, query_span, resident_leaves, batch_chunk,
-                       io_dim, input_interleaved, stream);
+    launch<HeadDim, 0, InputInterleaved>(
+        q, k, v, d_output, logsumexp, delta, mask, bias, out_dq, out_dbias,
+        workspace, sequence, outer_count, heads, batch, query_span,
+        resident_leaves, batch_chunk, io_dim, stream);
   }
 }
 
@@ -987,32 +987,35 @@ void stablefold_triangle_dq_dbias_out(
   const int storage = head_dim <= 16
       ? 16
       : (head_dim <= 32 ? 32 : (head_dim <= 64 ? 64 : 128));
+#define DISPATCH_DQ_DBIAS(HeadDim)                                        \
+  do {                                                                     \
+    if (input_interleaved) {                                               \
+      dispatch_sequence<HeadDim, true>(                                   \
+          q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,        \
+          out_dbias, workspace, sequence, outer_count, heads, batch,      \
+          query_span, resident_leaves, batch_chunk, io_dim, stream);      \
+    } else {                                                               \
+      dispatch_sequence<HeadDim, false>(                                  \
+          q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,        \
+          out_dbias, workspace, sequence, outer_count, heads, batch,      \
+          query_span, resident_leaves, batch_chunk, io_dim, stream);      \
+    }                                                                      \
+  } while (false)
   switch (storage) {
     case 16:
-      dispatch_sequence<16>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, io_dim,
-                 input_interleaved, stream);
+      DISPATCH_DQ_DBIAS(16);
       break;
     case 32:
-      dispatch_sequence<32>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, io_dim,
-                 input_interleaved, stream);
+      DISPATCH_DQ_DBIAS(32);
       break;
     case 64:
-      dispatch_sequence<64>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, io_dim,
-                 input_interleaved, stream);
+      DISPATCH_DQ_DBIAS(64);
       break;
     default:
-      dispatch_sequence<128>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
-                 out_dbias, workspace, sequence, outer_count, heads, batch,
-                 query_span, resident_leaves, batch_chunk, io_dim,
-                 input_interleaved, stream);
+      DISPATCH_DQ_DBIAS(128);
       break;
   }
+#undef DISPATCH_DQ_DBIAS
   TORCH_CHECK(
       cudaGetLastError() == cudaSuccess, "StableFold dQ/dBias launch failed");
 }
