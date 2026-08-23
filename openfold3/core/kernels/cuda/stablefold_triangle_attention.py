@@ -19,7 +19,8 @@ from typing import Any
 
 import torch
 
-_SUPPORTED_HEAD_DIMS = frozenset((16, 32))
+_SUPPORTED_HEAD_DIMS = frozenset((16, 32))   # exact lanes (bitwise-frozen)
+_PAD_HEAD_LANES = (16, 32, 64)               # any D pads up to the next lane
 _MAX_GRID_X = 2_147_483_647
 _MAX_GRID_YZ = 65_535
 _SMALLEST_QUERY_BLOCK = 32
@@ -128,8 +129,8 @@ def _is_stablefold_supported_uncached(
     batch = 1
     for dimension in prefix:
         batch *= int(dimension)
-    if outer != sequence or sequence <= 0:
-        return False, "requires equal positive outer/key sequence dimensions"
+    if outer <= 0 or sequence <= 0:
+        return False, "requires positive outer and key sequence dimensions"
     query_blocks = (int(sequence) + _SMALLEST_QUERY_BLOCK - 1) // (
         _SMALLEST_QUERY_BLOCK
     )
@@ -137,10 +138,10 @@ def _is_stablefold_supported_uncached(
         return False, "sequence requires too many CUDA query blocks"
     if heads > _MAX_GRID_YZ:
         return False, "head count exceeds Hopper CUDA grid-y limit (65535)"
-    if batch * sequence > _MAX_GRID_X:
-        return False, "flattened batch*sequence exceeds CUDA grid-x limit"
-    if heads < 1 or head_dim not in _SUPPORTED_HEAD_DIMS:
-        return False, "requires H>=1 and production D in {16,32}"
+    if batch * sequence > _MAX_GRID_X or batch * outer > _MAX_GRID_X:
+        return False, "flattened batch*outer/sequence exceeds CUDA grid-x limit"
+    if heads < 1 or head_dim < 1 or head_dim > _PAD_HEAD_LANES[-1]:
+        return False, "requires H>=1 and D<=64 (pads to lanes {16,32,64})"
     for name, tensor in {"k": k, "v": v}.items():
         if tensor.shape != q.shape:
             return False, f"{name} shape must match q"
@@ -311,29 +312,44 @@ def stablefold_triangle_attention(
     global _INVOCATIONS
     _INVOCATIONS += 1
     prefix = q.shape[:-4]
+    outer = int(q.shape[-4])
     sequence = int(q.shape[-2])
+    head_dim = int(q.shape[-1])
 
-    # Pad-to-tile contract: sequences are padded to the kernel tile quantum
-    # so the single exact-tiles lane (no tail guards) serves every length.
-    # Padded key columns carry a -inf mask, so every real-region value and
-    # gradient is bit-identical to an unpadded computation; padded rows are
-    # sliced away below and their gradients are exact zeros. F.pad/slice are
-    # autograd-native, so q/k/v/bias gradients flow back unpadded.
+    # Pad-to-lane contract, three independent axes.
+    #  * head dim: zero-pad to the next kernel lane {16,32,64}. Exact math:
+    #    padded q.k dot terms are +0.0, padded V columns produce zero output
+    #    columns that are sliced away; F.pad/slice are autograd-native so all
+    #    real-region values and gradients match an unpadded run.
+    #  * outer / sequence: padded to the tile quantum so the single
+    #    exact-tiles lane (no tail guards) serves every length. Padded key
+    #    columns carry a -inf mask; padded query rows are sliced away.
+    lane = next(l for l in _PAD_HEAD_LANES if l >= head_dim)
+    d_padding = lane - head_dim
+    if d_padding:
+        # The kernel's internal softmax scale is 1/sqrt(lane); pre-scaling q
+        # by sqrt(lane/d) makes the effective scale the correct 1/sqrt(d).
+        q = q * float(lane / head_dim) ** 0.5
+        q = torch.nn.functional.pad(q, (0, d_padding))
+        k = torch.nn.functional.pad(k, (0, d_padding))
+        v = torch.nn.functional.pad(v, (0, d_padding))
+    # outer is a pure plane count for every kernel (decoupled from the key
+    # sequence); only the key/query sequence needs tile-quantum padding.
     padding = (-sequence) % _PAD_QUANTUM
     if padding:
-        pad_qkv = (0, 0, 0, padding, 0, 0, 0, padding)
+        pad_qkv = (0, 0, 0, padding)
         q = torch.nn.functional.pad(q, pad_qkv)
         k = torch.nn.functional.pad(k, pad_qkv)
         v = torch.nn.functional.pad(v, pad_qkv)
         pair_bias = torch.nn.functional.pad(
             pair_bias, (0, padding, 0, padding)
         )
-        padded = sequence + padding
+        padded_seq = sequence + padding
         padded_mask = res_mask.new_full(
-            tuple(res_mask.shape[:-4]) + (padded, 1, 1, padded),
+            tuple(res_mask.shape[:-4]) + (outer, 1, 1, padded_seq),
             float("-inf"),
         )
-        padded_mask[..., :sequence, :, :, :sequence] = res_mask
+        padded_mask[..., :outer, :, :, :sequence] = res_mask
         res_mask = padded_mask
 
     shape = tuple(q.shape[-4:])
@@ -397,7 +413,9 @@ def stablefold_triangle_attention(
         tuple(pair_bias.shape[:-4]),
     )
     if padding:
-        output_internal = output_internal[:, :sequence, :, :sequence, :]
+        output_internal = output_internal[:, :, :, :sequence, :]
+    if d_padding:
+        output_internal = output_internal[..., :head_dim]
     output = output_internal.transpose(-2, -3).contiguous()
     return output.reshape(prefix + output.shape[1:])
 
