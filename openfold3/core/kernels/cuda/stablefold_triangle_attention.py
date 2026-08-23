@@ -21,6 +21,8 @@ import torch
 
 _SUPPORTED_HEAD_DIMS = frozenset((16, 32))   # exact lanes (bitwise-frozen)
 _PAD_HEAD_LANES = (16, 32, 64)               # any D pads up to the next lane
+_CAPABILITY_CACHE: dict = {}
+_SUPPORT_CACHE: dict = {}
 _MAX_GRID_X = 2_147_483_647
 _MAX_GRID_YZ = 65_535
 _SMALLEST_QUERY_BLOCK = 32
@@ -118,7 +120,11 @@ def _is_stablefold_supported_uncached(
         return False, "all inputs must be torch.Tensor instances"
     if not q.is_cuda:
         return False, "q/k/v, res_mask, and pair_bias must be CUDA tensors"
-    if torch.cuda.get_device_capability(q.device) != (9, 0):
+    capability = _CAPABILITY_CACHE.get(q.device.index)
+    if capability is None:
+        capability = torch.cuda.get_device_capability(q.device)
+        _CAPABILITY_CACHE[q.device.index] = capability
+    if capability != (9, 0):
         return False, "StableFold Triangle Attention requires Hopper sm_90"
     if q.ndim < 5:
         return False, "q must have shape [*B,O,H,N,D]"
@@ -306,7 +312,16 @@ def stablefold_triangle_attention(
 ) -> torch.Tensor:
     """Run one StableFold Triangle Attention call (raw q; no fallback)."""
 
-    supported, reason = is_stablefold_supported(q, k, v, res_mask, pair_bias)
+    key = (
+        tuple(q.shape), tuple(res_mask.shape), tuple(pair_bias.shape),
+        q.dtype, res_mask.dtype, pair_bias.dtype, q.device.index,
+    )
+    cached = _SUPPORT_CACHE.get(key)
+    if cached is None:
+        cached = is_stablefold_supported(q, k, v, res_mask, pair_bias)
+        if len(_SUPPORT_CACHE) < 4096:
+            _SUPPORT_CACHE[key] = cached
+    supported, reason = cached
     if not supported:
         raise ValueError(f"unsupported StableFold case: {reason}")
     global _INVOCATIONS
