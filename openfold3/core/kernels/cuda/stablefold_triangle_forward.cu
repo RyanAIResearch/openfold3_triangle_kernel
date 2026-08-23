@@ -304,6 +304,10 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
   const int64_t mask_base = plane * sequence;
+  // Output is written in the PUBLIC [B, O, N, H, D] layout directly.
+  const int64_t out_plane_base =
+      plane * static_cast<int64_t>(sequence) * heads * HeadDim +
+      static_cast<int64_t>(head) * HeadDim;
 
   // Stage this warp's Q rows (guarded rows load row 0; their stores are
   // guarded at the epilogue, and their softmax state is discarded).
@@ -502,7 +506,8 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
 #pragma unroll
       for (int pair = 0; pair < 2; ++pair) {
         const int dim = tile * 8 + thread_in_group * 2 + pair;
-        out[head_base + static_cast<int64_t>(row) * HeadDim + dim] =
+        out[out_plane_base +
+            static_cast<int64_t>(row) * heads * HeadDim + dim] =
             __float2bfloat16_rn(o_acc[tile].v[half * 2 + pair] * inv_l);
       }
     }
@@ -564,6 +569,11 @@ stablefold_triangle_forward_tma_kernel(
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
   const int64_t mask_base = plane * sequence;
+  // Output is written in the PUBLIC [B, O, N, H, D] layout directly, so the
+  // facade returns it with no transpose/contiguous pass.
+  const int64_t out_plane_base =
+      plane * static_cast<int64_t>(sequence) * heads * HeadDim +
+      static_cast<int64_t>(head) * HeadDim;
   // The launch contract guarantees batch*outer*heads fits int32.
   const int tma_plane = static_cast<int>(plane * heads + head);
 
@@ -779,7 +789,8 @@ stablefold_triangle_forward_tma_kernel(
 #pragma unroll
       for (int pair = 0; pair < 2; ++pair) {
         const int dim = tile * 8 + thread_in_group * 2 + pair;
-        out[head_base + static_cast<int64_t>(row) * HeadDim + dim] =
+        out[out_plane_base +
+            static_cast<int64_t>(row) * heads * HeadDim + dim] =
             __float2bfloat16_rn(o_acc[tile].v[half * 2 + pair] * inv_l);
       }
     }
@@ -1061,7 +1072,13 @@ void stablefold_triangle_forward_out(
   };
   check_q_like(k);
   check_q_like(v);
-  check_q_like(out);
+  TORCH_CHECK(
+      out.is_cuda() && out.device() == q.device() &&
+          out.dtype() == torch::kBFloat16 && out.is_contiguous() &&
+          out.sizes() ==
+              torch::IntArrayRef(
+                  {batch, outer_count, sequence, heads, head_dim}),
+      "out must be contiguous BF16 [B,O,N,H,D] on q.device");
   TORCH_CHECK(q.is_contiguous());
   TORCH_CHECK(
       mask.is_cuda() && mask.device() == q.device() &&

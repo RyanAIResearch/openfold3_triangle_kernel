@@ -236,7 +236,13 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
     ):
         with torch.cuda.device(q.device):
             sequence = q.shape[-2]
-            out = torch.empty_like(q)
+            # The kernel writes the PUBLIC [B, O, N, H, D] layout directly;
+            # no transpose/contiguous pass on either side of autograd.
+            out = torch.empty(
+                (q.shape[0], q.shape[1], q.shape[3], q.shape[2], q.shape[4]),
+                device=q.device,
+                dtype=q.dtype,
+            )
             lse = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
             _forward_extension().stablefold_triangle_forward_out(
                 q, k, v, mask, expanded_bias, out, lse
@@ -428,10 +434,14 @@ def stablefold_triangle_attention(
         tuple(pair_bias.shape[:-4]),
     )
     if padding:
-        output_internal = output_internal[:, :, :, :sequence, :]
+        output_internal = output_internal[:, :, :sequence, :, :]
     if d_padding:
         output_internal = output_internal[..., :head_dim]
-    output = output_internal.transpose(-2, -3).contiguous()
+    output = (
+        output_internal
+        if output_internal.is_contiguous()
+        else output_internal.contiguous()
+    )
     return output.reshape(prefix + output.shape[1:])
 
 
