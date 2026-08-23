@@ -467,6 +467,7 @@ __global__ void transpose_ln_bwd_kernel(
   }
   // phase 4: per-block dgamma/dbeta partials (fixed order: pos ascending,
   // two half-thread partials folded t0-then-t1). 256 threads, 2 per h.
+  __syncthreads();   // phase 3 reads tdx[h*33+..]; staging below reuses tdx
   int h_own = tid % H;
   int half = tid / H;                 // 0 or 1 (host asserts 2*H <= blockDim)
   if (half >= 2) { /* threads beyond 2H idle in phase 4 */ } else {
