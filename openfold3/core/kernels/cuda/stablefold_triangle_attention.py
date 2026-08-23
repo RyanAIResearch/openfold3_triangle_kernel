@@ -401,11 +401,65 @@ def stablefold_triangle_attention(
             and strides[-3] == dim_
         )
 
-    if (
+    def _is_kernel_qkv_layout(tensor):
+        if tensor.is_contiguous():
+            return True
+        batch_, outer_, heads_, seq_, dim_ = tensor.shape
+        strides = tensor.stride()
+        return (
+            strides[-1] == 1
+            and strides[-2] == heads_ * dim_
+            and strides[-3] == dim_
+            and (outer_ == 1 or strides[-4] == seq_ * heads_ * dim_)
+            and (
+                batch_ == 1
+                or strides[-5] == outer_ * seq_ * heads_ * dim_
+            )
+        )
+
+    def _can_flatten_dense_swapped(tensor):
+        if not _is_swapped_hn_view(tensor):
+            return False
+        outer_, heads_, seq_, dim_ = tensor.shape[-4:]
+        strides = tensor.stride()
+        expected = seq_ * heads_ * dim_
+        if strides[-4] != expected:
+            return False
+        expected *= outer_
+        for axis in range(tensor.dim() - 5, -1, -1):
+            # Require canonical strides even on size-one axes. This is
+            # intentionally stricter than PyTorch's viewability rule: it
+            # rejects broadcast/overlap before reshape can materialize a copy.
+            if strides[axis] != expected:
+                return False
+            expected *= tensor.shape[axis]
+        return True
+
+    swapped_qkv = (
         _is_swapped_hn_view(q)
         and _is_swapped_hn_view(k)
         and _is_swapped_hn_view(v)
-    ):
+    )
+    dense_swapped_qkv = swapped_qkv and all(
+        _can_flatten_dense_swapped(tensor) for tensor in (q, k, v)
+    )
+    if dense_swapped_qkv:
+        candidate_q = q.reshape((batch,) + shape)
+        candidate_k = k.reshape((batch,) + shape)
+        candidate_v = v.reshape((batch,) + shape)
+        if all(
+            _is_kernel_qkv_layout(tensor)
+            for tensor in (candidate_q, candidate_k, candidate_v)
+        ):
+            # Preserve dense physical [B,O,N,H,D] storage. The CUDA kernels
+            # consume the logical [B,O,H,N,D] views directly.
+            q_flat, k_flat, v_flat = candidate_q, candidate_k, candidate_v
+        else:
+            raise RuntimeError("dense Q/K/V flatten changed the storage contract")
+    elif swapped_qkv:
+        # Broadcasted or overlapping prefix/outer views still need a gather:
+        # direct gradient writes would require a fixed reduction. Keep the
+        # existing deterministic pack contract for them.
         outer_, heads_, seq_, dim_ = shape
         q_flat, k_flat, v_flat = _PackQKV.apply(
             q, k, v, batch * outer_, heads_, seq_, dim_
