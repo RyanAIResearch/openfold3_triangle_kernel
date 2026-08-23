@@ -3,7 +3,7 @@
 Working title. Alternatives:
 - "One Reconstruction Is Enough: Deterministic Backward Execution for Triangular Attention"
 - "StableFold: Deterministic Triangle Kernels with a Single-Reconstruction Backward"
-Target: MLSys 2027 (expected deadline ~late Oct 2026). Fallback: ICML 2027.
+Target: ICLR 2027 (abstract Sep 18, full paper Sep 25, 2026; 9-page main text, double-blind — no website links). Fallback: ICML 2027.
 
 ## One-sentence thesis
 
@@ -51,9 +51,10 @@ tree invariant to workspace scheduling.
 1. **Introduction** (1.25pp) — reproducibility motivation for scientific ML;
    the three-axis problem; contributions. [draft.md]
 2. **Background** (1pp) — AF3/OF3 triangular attention; FA recompute
-   paradigm; determinism state of practice. Receipts: AQLab Triton fp32
-   `tl.atomic_add` (evoformer.py:597); atomic-twin replay divergence (up to
-   11.8% of dBias elements); cuEq no replay contract.
+   paradigm; determinism state of practice. Receipts: vendored Triton fp32
+   `tl.atomic_add` (evoformer.py:598 AT OUR PINNED COMMIT — upstream since
+   revised; pin explicitly); atomic-twin replay divergence (up to 11.8% of
+   dBias elements, the primary receipt); cuEq no replay contract.
 3. **Deterministic execution model** (1.5pp) — fixed (o0+o1)+(o2+o3) leaf
    tree; global leaf order; planner; invariance statement + proof sketch;
    pass-invariance lemma (plane traffic independent of pass count).
@@ -104,9 +105,10 @@ tree invariant to workspace scheduling.
   shadow / fp32-shadow / perfect). [HAVE: sr_ladder outputs; MORE COLUMNS
   PENDING: D=32 sites, 384/768 crops, OpenBind ckpt]
 - **F5** e2e ABBA per-block walls + per-step time distributions.
-  [PENDING: sr_stats_blocks campaign, running]
+  [HAVE: sr_stats_blocks, numbers in draft Results notes; 400-step
+  pretrained pair running for the long-horizon panel]
 - **F6** Same-seed loss overlay cueq vs SR, scratch + pretrained.
-  [PENDING: same campaign, csvlogger]
+  [HAVE 30-step both regimes; 400-step pretrained running]
 - **T1** Determinism cost: fixed-tree vs atomicAdd twin (+10–12% kernel /
   ~4.8% step; twin replay divergence up to 11.8% of elements).
   [HAVE (v8-era); RE-RUN on current kernels recommended]
@@ -115,7 +117,7 @@ tree invariant to workspace scheduling.
 - **T3** Contract matrix: gates per lane (bitwise battery / replay /
   sanitizers / dV invariant). [HAVE]
 - **T4** Memory: workspace + partials + shadow state per crop. [HAVE calc]
-- **T5** e2e stats: n-block mean/CI, both orders, bootstrap. [PENDING F5 data]
+- **T5** e2e stats: n-block mean/CI, both orders, bootstrap. [HAVE]
 
 ## Must-cite list (verified where marked)
 
