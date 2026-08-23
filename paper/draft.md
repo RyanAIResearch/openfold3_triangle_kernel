@@ -89,8 +89,8 @@ logical leaves: one writer per cell, a global fold order that is a
 function of the problem shape alone. A planner chooses query slabs,
 batch chunks, and resident leaf waves against a memory budget, and we
 prove (and gate bitwise) that these choices alter residency and
-parallelism but never the arithmetic history. Changing the workspace
-budget cannot change the model you train.
+parallelism but never the arithmetic history: changing the workspace
+budget cannot change the operator's arithmetic output, bit for bit.
 
 Second, on this substrate we build a single-reconstruction backward: one
 producer reconstructs $\{S, P, dP, dS\}$ per (plane, tile) and feeds all
@@ -136,8 +136,9 @@ OpenFold3 training at crop 640 it beats NVIDIA cuEquivariance in every
 one of ten paired same-session arms across three campaigns: four
 order-balanced scratch blocks give a mean margin of −9.5 s per 30 steps
 (bootstrap 95% CI [−11.5, −6.5] s; steady-state 8.52 vs 8.83 s/step,
-−3.5%), and a pretrained block gives −7.8 s (8.56 vs 8.96 s/step,
-−4.5%). The same-seed loss gap between SR and cuEquivariance (mean
+−3.5%), and a pretrained-weights block — within the official 1,000-step
+learning-rate warmup, as the released checkpoint carries no optimizer
+state — gives −7.8 s (8.56 vs 8.96 s/step, −4.5%). The same-seed loss gap between SR and cuEquivariance (mean
 8.8e-4 scratch, 9.7e-4 pretrained) sits well inside cuEquivariance's own
 four-run scatter (mean 3.6e-3), and SR tightens that model-level scatter
 by 37% — the residual scatter belongs to the surrounding stock
@@ -173,6 +174,14 @@ serving a single kernel.
 
 ## Results notes (data landed 2026-08-22, feeds F4/F5/F6/T5)
 
+- LR-SCHEDULE CAVEAT (verified in code + checkpoint): released ckpt is a
+  bare state_dict (no global_step/optimizer) and restore_lr_scheduler
+  defaults false → EVERY pretrained run so far sits inside the official
+  1,000-step warmup (step 30 ≈ 3% of peak LR, step 400 ≈ 40%). All
+  pretrained loss statements are "warmup-horizon"; the 400-step pair is
+  the warmup-horizon referee. Post-warmup evidence = the fork experiment
+  (shared step-1000 checkpoint WITH optimizer state → cueq / SR-R forks
+  at full LR, 500 steps each; campaign sr_fork1000, queued).
 - F5/T5: scratch blocks cueq {736.5, 739.8, 739.3, 739.6} vs SR {731.6,
   728.1, 729.3, 728.4}; margins {−4.9, −11.7, −10.0, −11.3}; mean −9.46 s
   (−1.28%); bootstrap 95% CI [−11.46, −6.50]; steady-state per-step

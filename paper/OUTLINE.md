@@ -159,6 +159,14 @@ FlexAttention, Flashlight, TileLang, PairMixer.
   rounding-residual state improves the output-based delta without
   restoring a second reconstruction." 
 
+## Arm naming (canonical, all headline numbers from one post-fence commit)
+
+DR-Prod (a94b production) / DR-WG (modernized two-pass) / SR-C (classic
+delta) / SR-R (residual-corrected). Historical intermediates appear only
+in the F2 design-evolution ladder. Statistics discipline: the PAIRED
+BLOCK is the statistical unit (never pool per-step samples as
+independent); balance AB/BA; report order effect.
+
 ## Evidence still owed before submission
 
 1. sr_stats_blocks campaign (running): 4 scratch blocks + pretrained block,
@@ -171,5 +179,16 @@ FlexAttention, Flashlight, TileLang, PairMixer.
 5. Pin the artifact commit; wheel + receipts bundle for the SR branch.
 6. Incremental related-work search in the week before submission (watch
    Aug–Sep 2026 arXiv, NeurIPS 2026 / EMNLP 2026 rollouts).
+8. P0 set from the 08-22 review: (1) 400-step pair = warmup-horizon
+   referee, analyze as such; (2) post-warmup fork test (step-1000 shared
+   ckpt with optimizer state → cueq/SR-R at full LR — THE learning-level
+   gate; campaign queued); (3) APB-0.81 forensic (abs norms, cosine,
+   dW_Q, Adam-update effect — guard against small-denominator artifact);
+   (4) +2–4 paired blocks (target n=6–8); (5) direct delta-vs-delta
+   comparison for the fp32-shadow claim (report as "same observed error
+   floor" until then); (6) workspace 64↔512MiB trainer bitwise demo;
+   (7) atomic twin re-run on the post-fence kernel; (8) contributions
+   5→4 (fold AOT into #4/implementation); abstract trims: drop
+   "industry-wide"/"minimum state"; keep speed + referee wording scoped.
 7. Verify TBIK + Kernel Contracts + FlashBias + FA4 citations first-hand
    at the citation pass (currently second-hand from the survey).
