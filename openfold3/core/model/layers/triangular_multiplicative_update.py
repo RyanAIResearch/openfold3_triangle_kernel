@@ -1109,6 +1109,7 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         inplace_safe: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_multiplicative: bool = False,
         _add_with_inplace: bool = False,
         _inplace_chunk_size: int | None = 256,
     ) -> torch.Tensor:
@@ -1123,6 +1124,13 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         """
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
+
+        if use_stable_triangle_multiplicative:
+            from openfold3.core.kernels.cuda.stablefold_trimul import (
+                run_stable_trimul,
+            )
+
+            return run_stable_trimul(self, z, mask)
 
         ## NOTE: valid for inplace safe and use_cueq_triangle_kernels to be enabled
         ## inplace safe is used across the codebase and so should not
@@ -1401,6 +1409,7 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         inplace_safe: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_multiplicative: bool = False,
         _add_with_inplace: bool = False,
         _inplace_chunk_size: int | None = 256,
     ) -> torch.Tensor:
@@ -1415,6 +1424,12 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         """
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
+
+        if use_stable_triangle_multiplicative:
+            raise NotImplementedError(
+                "use_stable_triangle_multiplicative requires "
+                "fuse_projection_weights=False"
+            )
 
         # Supersede inplace_safe conditional if cueq kernel is used
         if use_cueq_triangle_kernels:

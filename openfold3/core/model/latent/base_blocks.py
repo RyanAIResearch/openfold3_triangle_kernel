@@ -314,9 +314,18 @@ class PairBlock(nn.Module):
         inplace_safe: bool,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_multiplicative: bool = False,
     ) -> torch.Tensor:
         """Perform the outgoing and incoming triangular multiplicative updates."""
-        inplace_safe = inplace_safe and (not use_cueq_triangle_kernels)
+        # StableFold owns the trimul site when enabled; cuEq keeps other sites.
+        use_cueq_triangle_kernels = (
+            use_cueq_triangle_kernels and not use_stable_triangle_multiplicative
+        )
+        inplace_safe = (
+            inplace_safe
+            and (not use_cueq_triangle_kernels)
+            and (not use_stable_triangle_multiplicative)
+        )
         ## VS: having both inplace_safe and use_cueq_triangle_kernels set to
         ## true causes `z = z + self.ps_dropout_row_layer(tmu_update)` below
         ## to be skipped, as this is the expected output of tri_mult w/ inplace
@@ -330,6 +339,7 @@ class PairBlock(nn.Module):
             _add_with_inplace=True,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
         )
         if not inplace_safe:
             z = z + self.ps_dropout_row_layer(tmu_update)
@@ -348,6 +358,7 @@ class PairBlock(nn.Module):
             _add_with_inplace=True,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
         )
         if not inplace_safe:
             z = z + self.ps_dropout_row_layer(tmu_update)
@@ -422,6 +433,7 @@ class PairBlock(nn.Module):
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
         use_stable_triangle_attention: bool = False,
+        use_stable_triangle_multiplicative: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -466,6 +478,7 @@ class PairBlock(nn.Module):
             inplace_safe=inplace_safe,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
         )
 
         z = self.tri_att_start_end(
