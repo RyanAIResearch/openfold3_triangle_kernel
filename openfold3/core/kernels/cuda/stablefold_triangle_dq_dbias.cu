@@ -1415,7 +1415,11 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
   }
 }
 
-// Fixed ascending-kb fold of the SR dQ partials into BF16 dQ.
+// Fixed ascending-kb fold of the SR dQ partials into BF16 dQ.  Each
+// thread owns eight consecutive elements (one 16-byte vector) so the
+// per-kb loads coalesce to full lines and the eight per-element fadd
+// chains stay independent; per-element fold order (ascending kb) and
+// therefore the output bits match the scalar form exactly.
 __global__ void stablefold_sr_dq_reduce_kernel(
     const __nv_bfloat16* __restrict__ dq_partials,
     __nv_bfloat16* __restrict__ out_dq,
@@ -1423,22 +1427,44 @@ __global__ void stablefold_sr_dq_reduce_kernel(
     int64_t partial_stride,
     int key_blocks,
     float scale) {
+  const int64_t vectors = output_elements / 8;
   const int64_t grid_stride =
       static_cast<int64_t>(blockDim.x) * gridDim.x;
-  for (int64_t linear =
+  for (int64_t vec =
            static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-       linear < output_elements;
-       linear += grid_stride) {
-    float root = __bfloat162float(dq_partials[linear]);
+       vec < vectors;
+       vec += grid_stride) {
+    const int64_t linear = vec * 8;
+    float root[8];
+    {
+      const uint4 first = *reinterpret_cast<const uint4*>(
+          dq_partials + linear);
+      const __nv_bfloat16* half_values =
+          reinterpret_cast<const __nv_bfloat16*>(&first);
+#pragma unroll
+      for (int element = 0; element < 8; ++element) {
+        root[element] = __bfloat162float(half_values[element]);
+      }
+    }
 #pragma unroll 1
     for (int kb = 1; kb < key_blocks; ++kb) {
-      root = __fadd_rn(
-          root,
-          __bfloat162float(
-              dq_partials[static_cast<int64_t>(kb) * partial_stride +
-                          linear]));
+      const uint4 chunk = *reinterpret_cast<const uint4*>(
+          dq_partials + static_cast<int64_t>(kb) * partial_stride + linear);
+      const __nv_bfloat16* half_values =
+          reinterpret_cast<const __nv_bfloat16*>(&chunk);
+#pragma unroll
+      for (int element = 0; element < 8; ++element) {
+        root[element] = __fadd_rn(
+            root[element], __bfloat162float(half_values[element]));
+      }
     }
-    out_dq[linear] = __float2bfloat16_rn(root * scale);
+    uint4 packed;
+    __nv_bfloat16* out_values = reinterpret_cast<__nv_bfloat16*>(&packed);
+#pragma unroll
+    for (int element = 0; element < 8; ++element) {
+      out_values[element] = __float2bfloat16_rn(root[element] * scale);
+    }
+    *reinterpret_cast<uint4*>(out_dq + linear) = packed;
   }
 }
 
@@ -2122,11 +2148,14 @@ void launch_sr(
     batch_base += active_batch;
   }
   const int64_t output_elements = out_dq.numel();
+  TORCH_CHECK(
+      output_elements % 8 == 0,
+      "SR dQ reduce requires an 8-element-aligned output");
   const int64_t partial_stride = static_cast<int64_t>(total_planes) *
       heads * sequence * io_dim;
   constexpr int reduce_threads = 256;
   const int64_t reduce_blocks_needed =
-      positive_ceil_div(output_elements, reduce_threads);
+      positive_ceil_div(output_elements / 8, reduce_threads);
   const unsigned int reduce_blocks = static_cast<unsigned int>(
       std::min<int64_t>(reduce_blocks_needed, 65535));
   stablefold_sr_dq_reduce_kernel<<<reduce_blocks, reduce_threads, 0,
