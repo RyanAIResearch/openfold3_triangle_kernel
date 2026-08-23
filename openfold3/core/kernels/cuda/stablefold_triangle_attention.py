@@ -15,6 +15,7 @@ Internal layout [*, O, H, N, D]; the public return is contiguous
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import torch
@@ -272,6 +273,37 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
             d_output = d_output.contiguous()
             delta = torch.empty_like(lse)
             _delta_extension().stablefold_triangle_delta_out(d_output, out, delta)
+            if os.environ.get("OPENFOLD3_SR_BACKWARD") == "1" and (
+                q.shape[-2] % 64 == 0 and q.shape[-1] <= 64
+            ):
+                # Experimental single-reconstruction lane: one kernel
+                # reconstructs P/dS and produces all four gradients with
+                # the classic delta everywhere (v1 perf-experiment
+                # contract; dQ/dBias forgo the delta_true accuracy fix).
+                from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (  # noqa: E501
+                    stablefold_triangle_sr_backward,
+                )
+
+                d_q, d_k, d_v, per_batch_dbias = (
+                    stablefold_triangle_sr_backward(
+                        q, k, v, d_output, lse, delta, mask, expanded_bias
+                    )
+                )
+                if ctx.bias_prefix == ctx.target_prefix:
+                    d_bias = per_batch_dbias.reshape(ctx.bias_shape).to(
+                        dtype=torch.bfloat16
+                    )
+                else:
+                    d_bias = stablefold_reduce_broadcast_dbias(
+                        per_batch_dbias,
+                        target_prefix=ctx.target_prefix,
+                        bias_prefix=ctx.bias_prefix,
+                    )
+                if tuple(d_bias.shape) != ctx.bias_shape:
+                    raise RuntimeError(
+                        "fixed dBias reduction returned the wrong shape"
+                    )
+                return d_q, d_k, d_v, None, None, d_bias, None, None
             # Keep probability reconstruction on the same raw-Q/post-scale
             # arithmetic contract as the StableFold forward. The older resident
             # fast lane reconstructs scores using an AQLab-style pre-scaled BF16 K

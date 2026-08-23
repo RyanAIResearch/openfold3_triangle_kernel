@@ -414,8 +414,86 @@ def stablefold_triangle_dq_dbias(
     return out_dq, out_dbias
 
 
+def stablefold_triangle_sr_backward(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    d_output: torch.Tensor,
+    logsumexp: torch.Tensor,
+    delta: torch.Tensor,
+    mask: torch.Tensor,
+    pair_bias: torch.Tensor,
+    *,
+    workspace_budget_bytes: int = _DEFAULT_WORKSPACE_BUDGET_BYTES,
+    query_span: int | None = None,
+    batch_chunk: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Single-reconstruction backward: dQ, dK, dV, per-batch dBias.
+
+    Experimental v1 contract: classic delta for every gradient, flat BF16
+    dQ partials of [key_blocks, B*O, H, N, D] folded in fixed ascending
+    key-block order.  Exact-tiles shapes only (sequence % 64 == 0, D <= 64).
+    """
+
+    outer = int(q.shape[1])
+    heads = int(q.shape[2])
+    sequence = int(q.shape[3])
+    dim = int(q.shape[4])
+    batch = int(q.shape[0])
+    if sequence % 64 != 0 or dim > 64 or dim % 8 != 0:
+        raise ValueError("SR backward requires sequence % 64 == 0 and D <= 64")
+    plan = workspace_plan(
+        sequence,
+        heads,
+        outer=outer,
+        batch=batch,
+        workspace_budget_bytes=workspace_budget_bytes,
+        query_span=query_span,
+        batch_chunk=batch_chunk,
+    )
+    workspace = torch.empty(
+        plan.elements, device=q.device, dtype=torch.bfloat16
+    )
+    key_blocks = sequence // 64
+    dq_partials = torch.empty(
+        (key_blocks, batch * outer, heads, sequence, dim),
+        device=q.device,
+        dtype=torch.bfloat16,
+    )
+    out_dq = torch.empty_like(q)
+    out_dk = torch.empty_like(q)
+    out_dv = torch.empty_like(q)
+    out_dbias = torch.empty(
+        (batch, 1, heads, sequence, sequence),
+        device=q.device,
+        dtype=torch.float32,
+    )
+    with torch.cuda.device(q.device), torch.no_grad():
+        load_extension().stablefold_triangle_sr_backward_out(
+            q,
+            k,
+            v,
+            d_output,
+            logsumexp.reshape(-1).contiguous(),
+            delta.reshape(-1).contiguous(),
+            mask,
+            pair_bias,
+            out_dq,
+            out_dk,
+            out_dv,
+            out_dbias,
+            workspace,
+            dq_partials,
+            plan.query_span,
+            plan.resident_leaves,
+            plan.batch_chunk,
+        )
+    return out_dq, out_dk, out_dv, out_dbias
+
+
 __all__ = [
     "stablefold_triangle_dq_dbias",
+    "stablefold_triangle_sr_backward",
     "load_extension",
     "stablefold_reduce_broadcast_dbias",
     "source_sha256",

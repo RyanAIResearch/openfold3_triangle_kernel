@@ -921,6 +921,527 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_dq_dbias_wg_kernel(
   }
 }
 
+// ---------------------------------------------------------------------------
+// SR (single-reconstruction) backward leaf: ONE kernel reconstructs
+// {S^T, P^T, dP^T, dS^T} per (outer, q-tile) and feeds all four gradients.
+//   * CTA = (64-key block, head, 4-outer leaf), 256 threads = 2 warpgroups
+//     owning slot pairs {0,1}/{2,3} (the proven dq-wg platform, mirrored to
+//     K residency).  K/V and the additive mask are key-invariant per CTA and
+//     staged once; the CTA sweeps the query slab in 32-row tiles.
+//   * dK/dV accumulate in registers with the dkdv chain order (A = packed
+//     dS^T/P^T accumulators, B = rowtrans over the staged q/dO tiles) --
+//     bit-identical to the two-pass dkdv by construction.
+//   * dBias keeps the exact workspace contract: per q-tile the two
+//     warpgroups fold (o0+o1)/(o2+o3) into FP32 tree tiles, combine, and
+//     single-write the leaf plane cells [q, kb-keys]; leaf-wave residency
+//     and the finalize kernel are untouched.
+//   * dQ is the one scattered gradient: per (kb, q-tile, slot) the dS tile
+//     is transposed through shared memory, multiplied by K, and written to
+//     a flat FP32 partial [kb][plane][q][D]; a fixed ascending-kb reduce
+//     folds partials into BF16 dQ.  delta = classic dO.O (v1 contract).
+constexpr int kSrKeyBlock = 64;
+constexpr int kSrQueryTile = 32;
+constexpr int kSrTreeStride = kSrKeyBlock + 1;
+constexpr int kSrBiasStride = kSrKeyBlock + 8;
+constexpr int kSrDsStride = kSrKeyBlock + 8;
+
+__device__ __forceinline__ void sr_cp_async_16(
+    __nv_bfloat16* dst, const __nv_bfloat16* src) {
+  asm volatile(
+      "cp.async.cg.shared.global [%0], [%1], 16;\n" ::"r"(shared_u32(dst)),
+      "l"(src));
+}
+
+__device__ __forceinline__ void sr_cp_async_commit() {
+  asm volatile("cp.async.commit_group;\n");
+}
+
+__device__ __forceinline__ void sr_cp_async_wait_all() {
+  asm volatile("cp.async.wait_group 0;\n");
+}
+
+template <int HeadDim>
+__device__ __forceinline__ void ldmatrix_b_rowtrans_sw_sr(
+    const __nv_bfloat16* tile, int row_start, int dim_start, int lane,
+    uint32_t (&frag)[2]) {
+  const int row = row_start + (lane & 15);
+  const uint32_t addr = shared_u32(
+      tile + row * HeadDim + wg_swz_col<HeadDim>(row, dim_start));
+  asm volatile(
+      "ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n"
+      : "=r"(frag[0]), "=r"(frag[1])
+      : "r"(addr));
+}
+
+template <int HeadDim, bool TaskInGridZ, bool OuterEqSeq>
+__global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
+    const __nv_bfloat16* __restrict__ q,
+    const __nv_bfloat16* __restrict__ k,
+    const __nv_bfloat16* __restrict__ v,
+    const __nv_bfloat16* __restrict__ d_output,
+    const float* __restrict__ logsumexp,
+    const float* __restrict__ delta,
+    const float* __restrict__ mask,
+    const __nv_bfloat16* __restrict__ bias,
+    __nv_bfloat16* __restrict__ out_dk,
+    __nv_bfloat16* __restrict__ out_dv,
+    __nv_bfloat16* __restrict__ dq_partials,
+    __nv_bfloat16* __restrict__ workspace,
+    int sequence,
+    int outer_count,
+    int total_planes,
+    int heads,
+    int batch_base,
+    int active_batch,
+    int batch_capacity,
+    int query_base,
+    int query_rows,
+    int query_capacity,
+    int leaf_base,
+    int io_dim,
+    float scale) {
+  const int lane = threadIdx.x & (kWarpSize - 1);
+  const int warp = threadIdx.x / kWarpSize;
+  const int warpgroup = warp / kWarpsPerBlock;
+  const int warp_in_group = warp & (kWarpsPerBlock - 1);
+  const int wave_task = TaskInGridZ ? blockIdx.z : blockIdx.x;
+  const int local_batch = wave_task % active_batch;
+  const int batch_index = batch_base + local_batch;
+  const int wave_leaf = wave_task / active_batch;
+  const int key_block = TaskInGridZ ? blockIdx.x : blockIdx.z;
+  const int key_start = key_block * kSrKeyBlock;
+  const int head = blockIdx.y;
+  const int leaf = leaf_base + wave_leaf;
+  const int group = lane >> 2;
+  const int thread_in_group = lane & 3;
+  const int warp_key = warp_in_group * kQueryTile;
+
+  // q/dO/bias staging is double-buffered behind cp.async so the global
+  // latency of the next query tile hides under the current tile's math.
+  extern __shared__ __align__(1024) unsigned char smem_raw[];
+  __nv_bfloat16* sk = reinterpret_cast<__nv_bfloat16*>(smem_raw);
+  __nv_bfloat16* sv = sk + kOuterLeaf * kSrKeyBlock * HeadDim;
+  __nv_bfloat16* sq = sv + kOuterLeaf * kSrKeyBlock * HeadDim;
+  __nv_bfloat16* sdo = sq + 2 * kOuterLeaf * kSrQueryTile * HeadDim;
+  __nv_bfloat16* sds = sdo + 2 * kOuterLeaf * kSrQueryTile * HeadDim;
+  __nv_bfloat16* sbias_tile =
+      sds + kOuterLeaf * kSrQueryTile * kSrDsStride;
+  float* smask = reinterpret_cast<float*>(
+      sbias_tile + 2 * kSrQueryTile * kSrBiasStride);
+  float* sbias_acc = smask + kOuterLeaf * kSrKeyBlock;
+
+  const int64_t plane_base =
+      (((static_cast<int64_t>(wave_leaf) * batch_capacity + local_batch) *
+            heads +
+        head) *
+           static_cast<int64_t>(query_capacity)) *
+      sequence;
+  const int64_t bias_base =
+      ((static_cast<int64_t>(batch_index) * heads + head) * sequence) *
+      static_cast<int64_t>(sequence);
+
+  const int oc = OuterEqSeq ? sequence : outer_count;
+  const auto slot_plane = [&](int slot) -> int64_t {
+    const int outer = leaf * kOuterLeaf + slot;
+    const int outer_load = outer < oc ? outer : oc - 1;
+    return static_cast<int64_t>(batch_index) * oc + outer_load;
+  };
+  float outer_mult[kOuterLeaf];
+#pragma unroll
+  for (int slot = 0; slot < kOuterLeaf; ++slot) {
+    outer_mult[slot] = leaf * kOuterLeaf + slot < oc ? 1.0F : 0.0F;
+  }
+
+  // K/V and the additive mask are key-invariant: staged once.
+#pragma unroll 1
+  for (int slot = 0; slot < kOuterLeaf; ++slot) {
+    __nv_bfloat16* dst_k = sk + slot * kSrKeyBlock * HeadDim;
+    __nv_bfloat16* dst_v = sv + slot * kSrKeyBlock * HeadDim;
+    const int64_t tensor_base = (slot_plane(slot) * heads + head) *
+        static_cast<int64_t>(sequence) * io_dim;
+    for (int element = threadIdx.x; element < kSrKeyBlock * HeadDim;
+         element += kThreadsWg) {
+      const int row = element / HeadDim;
+      const int col = element - row * HeadDim;
+      const int64_t src = tensor_base +
+          static_cast<int64_t>(key_start + row) * io_dim + col;
+      const int dst_index = row * HeadDim + wg_swz_col<HeadDim>(row, col);
+      dst_k[dst_index] =
+          col < io_dim ? k[src] : __float2bfloat16_rn(0.0F);
+      dst_v[dst_index] =
+          col < io_dim ? v[src] : __float2bfloat16_rn(0.0F);
+    }
+  }
+  for (int element = threadIdx.x; element < kOuterLeaf * kSrKeyBlock;
+       element += kThreadsWg) {
+    const int slot = element / kSrKeyBlock;
+    const int key = element - slot * kSrKeyBlock;
+    smask[element] = mask[slot_plane(slot) * sequence + key_start + key];
+  }
+
+  Acc dk_acc[kSlotsPerWarpgroup][HeadDim / 8];
+  Acc dv_acc[kSlotsPerWarpgroup][HeadDim / 8];
+#pragma unroll
+  for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
+#pragma unroll
+    for (int tile = 0; tile < HeadDim / 8; ++tile) {
+      dk_acc[local][tile] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+      dv_acc[local][tile] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+    }
+  }
+
+  constexpr int kSrChunks = HeadDim / 8;
+  const auto stage_qdo_and_bias = [&](int query_start, int parity) {
+    __nv_bfloat16* buf_q =
+        sq + parity * kOuterLeaf * kSrQueryTile * HeadDim;
+    __nv_bfloat16* buf_do =
+        sdo + parity * kOuterLeaf * kSrQueryTile * HeadDim;
+    __nv_bfloat16* buf_bias =
+        sbias_tile + parity * kSrQueryTile * kSrBiasStride;
+#pragma unroll 1
+    for (int slot = 0; slot < kOuterLeaf; ++slot) {
+      __nv_bfloat16* dst_q = buf_q + slot * kSrQueryTile * HeadDim;
+      __nv_bfloat16* dst_do = buf_do + slot * kSrQueryTile * HeadDim;
+      const int64_t plane = slot_plane(slot);
+      const int64_t tensor_base = (plane * heads + head) *
+          static_cast<int64_t>(sequence) * io_dim;
+      const int64_t dout_base =
+          plane * static_cast<int64_t>(sequence) * heads * io_dim +
+          static_cast<int64_t>(head) * io_dim;
+      for (int chunk = threadIdx.x; chunk < kSrQueryTile * kSrChunks;
+           chunk += kThreadsWg) {
+        const int row = chunk / kSrChunks;
+        const int col = (chunk - row * kSrChunks) * 8;
+        const int gq = query_start + row;
+        const int dst_index = row * HeadDim + wg_swz_col<HeadDim>(row, col);
+        if (col < io_dim) {
+          sr_cp_async_16(
+              dst_q + dst_index,
+              q + tensor_base + static_cast<int64_t>(gq) * io_dim + col);
+          sr_cp_async_16(
+              dst_do + dst_index,
+              d_output + dout_base +
+                  static_cast<int64_t>(gq) * heads * io_dim + col);
+        } else {
+          *reinterpret_cast<uint4*>(dst_q + dst_index) =
+              uint4{0U, 0U, 0U, 0U};
+          *reinterpret_cast<uint4*>(dst_do + dst_index) =
+              uint4{0U, 0U, 0U, 0U};
+        }
+      }
+    }
+    for (int chunk = threadIdx.x; chunk < kSrQueryTile * (kSrKeyBlock / 8);
+         chunk += kThreadsWg) {
+      const int row = chunk / (kSrKeyBlock / 8);
+      const int key = (chunk - row * (kSrKeyBlock / 8)) * 8;
+      sr_cp_async_16(
+          buf_bias + row * kSrBiasStride + key,
+          bias + bias_base +
+              static_cast<int64_t>(query_start + row) * sequence +
+              key_start + key);
+    }
+    sr_cp_async_commit();
+  };
+
+  stage_qdo_and_bias(query_base, 0);
+
+  const int query_end = query_base + query_rows;
+#pragma unroll 1
+  for (int query_start = query_base; query_start < query_end;
+       query_start += kSrQueryTile) {
+    const int parity = ((query_start - query_base) / kSrQueryTile) & 1;
+    sr_cp_async_wait_all();
+    __syncthreads();
+    if (query_start + kSrQueryTile < query_end) {
+      stage_qdo_and_bias(query_start + kSrQueryTile, parity ^ 1);
+    }
+    const __nv_bfloat16* cur_q =
+        sq + parity * kOuterLeaf * kSrQueryTile * HeadDim;
+    const __nv_bfloat16* cur_do =
+        sdo + parity * kOuterLeaf * kSrQueryTile * HeadDim;
+    const __nv_bfloat16* cur_bias =
+        sbias_tile + parity * kSrQueryTile * kSrBiasStride;
+#pragma unroll
+    for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
+      const int slot = warpgroup * kSlotsPerWarpgroup + local;
+      const __nv_bfloat16* tile_k = sk + slot * kSrKeyBlock * HeadDim;
+      const __nv_bfloat16* tile_v = sv + slot * kSrKeyBlock * HeadDim;
+      const __nv_bfloat16* tile_q = cur_q + slot * kSrQueryTile * HeadDim;
+      const __nv_bfloat16* tile_do = cur_do + slot * kSrQueryTile * HeadDim;
+
+      // S^T = K.Q^T and dP^T = V.dO^T: A = the slot's 64-key K/V tile,
+      // B = its 32-query q/dO tile (the dkdv ss encoding, proven bitwise
+      // vs the mma.sync chain).  Accumulator rows = this warp's 16 keys.
+      constexpr uint64_t kSsMode =
+          HeadDim == 16 ? 3 : (HeadDim == 32 ? 2 : 1);
+      constexpr uint64_t kSsLbo = 64;
+      constexpr uint64_t kSsSbo = HeadDim;
+      Acc score[kSrQueryTile / 8];
+      Acc dp[kSrQueryTile / 8];
+#pragma unroll
+      for (int column = 0; column < kSrQueryTile / 8; ++column) {
+        score[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+        dp[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+      }
+      wg_wgmma_fence();
+#pragma unroll
+      for (int chain = 0; chain < HeadDim / 16; ++chain) {
+        const uint64_t chain_off = static_cast<uint64_t>(chain) * 32;
+        const uint64_t desc_k =
+            ((static_cast<uint64_t>(shared_u32(tile_k)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        const uint64_t desc_q =
+            ((static_cast<uint64_t>(shared_u32(tile_q)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        wg_ss_wgmma_m64n32k16(score, desc_k, desc_q, chain != 0);
+      }
+#pragma unroll
+      for (int chain = 0; chain < HeadDim / 16; ++chain) {
+        const uint64_t chain_off = static_cast<uint64_t>(chain) * 32;
+        const uint64_t desc_v =
+            ((static_cast<uint64_t>(shared_u32(tile_v)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        const uint64_t desc_do =
+            ((static_cast<uint64_t>(shared_u32(tile_do)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        wg_ss_wgmma_m64n32k16(dp, desc_v, desc_do, chain != 0);
+      }
+      wg_wgmma_commit();
+      wg_wgmma_wait_zero();
+
+      // Elementwise recompute in the [key, query] accumulator layout:
+      // P^T = exp(S^T*scale + mask[key] + bias[q,k] - LSE[q]);
+      // dS^T = P^T * (dP^T - delta[q]).  Column index = query.
+      float* tree = sbias_acc +
+          warpgroup * (kSrQueryTile * kSrTreeStride);
+      __nv_bfloat16* ds_tile = sds + slot * kSrQueryTile * kSrDsStride;
+      const float slot_mult = outer_mult[slot];
+      const float* slot_mask = smask + slot * kSrKeyBlock;
+      const int64_t stats_base = (slot_plane(slot) * heads + head) *
+          static_cast<int64_t>(sequence);
+#pragma unroll
+      for (int column = 0; column < kSrQueryTile / 8; ++column) {
+#pragma unroll
+        for (int half = 0; half < 2; ++half) {
+          const int key_row = warp_key + group + half * 8;
+#pragma unroll
+          for (int pair = 0; pair < 2; ++pair) {
+            const int query_in_tile = column * 8 + thread_in_group * 2 +
+                pair;
+            const int query = query_start + query_in_tile;
+            const int index = half * 2 + pair;
+            const int64_t stats = stats_base + query;
+            const float lse = logsumexp[stats];
+            const float value = score[column].v[index] * scale +
+                slot_mask[key_row] +
+                __bfloat162float(
+                    cur_bias[query_in_tile * kSrBiasStride + key_row]);
+            const float probability =
+                lse == -std::numeric_limits<float>::infinity()
+                ? 0.0F
+                : __expf(value - lse);
+            float d_score =
+                probability * (dp[column].v[index] - delta[stats]);
+            if constexpr (!OuterEqSeq) {
+              d_score *= slot_mult;
+            }
+            float p_value = probability;
+            if constexpr (!OuterEqSeq) {
+              p_value *= slot_mult;
+            }
+            dp[column].v[index] = p_value;
+            score[column].v[index] = d_score;
+            const int cell = query_in_tile * kSrTreeStride + key_row;
+            if (local == 0) {
+              tree[cell] = d_score;
+            } else {
+              tree[cell] = __fadd_rn(tree[cell], d_score);
+            }
+            ds_tile[query_in_tile * kSrDsStride + key_row] =
+                __float2bfloat16_rn(d_score);
+          }
+        }
+      }
+
+      // dV += P^T @ dO; dK += dS^T @ Q -- contraction over the 32 queries,
+      // the exact dkdv chain (A = packed accumulators, B = rowtrans).
+#pragma unroll
+      for (int chunk = 0; chunk < kSrQueryTile / 16; ++chunk) {
+        uint32_t p_frag[4];
+        uint32_t ds_frag[4];
+        p_frag[0] = pack_bf16_pair(
+            dp[chunk * 2].v[0], dp[chunk * 2].v[1]);
+        p_frag[1] = pack_bf16_pair(
+            dp[chunk * 2].v[2], dp[chunk * 2].v[3]);
+        p_frag[2] = pack_bf16_pair(
+            dp[chunk * 2 + 1].v[0], dp[chunk * 2 + 1].v[1]);
+        p_frag[3] = pack_bf16_pair(
+            dp[chunk * 2 + 1].v[2], dp[chunk * 2 + 1].v[3]);
+        ds_frag[0] = pack_bf16_pair(
+            score[chunk * 2].v[0], score[chunk * 2].v[1]);
+        ds_frag[1] = pack_bf16_pair(
+            score[chunk * 2].v[2], score[chunk * 2].v[3]);
+        ds_frag[2] = pack_bf16_pair(
+            score[chunk * 2 + 1].v[0], score[chunk * 2 + 1].v[1]);
+        ds_frag[3] = pack_bf16_pair(
+            score[chunk * 2 + 1].v[2], score[chunk * 2 + 1].v[3]);
+#pragma unroll
+        for (int tile = 0; tile < HeadDim / 8; ++tile) {
+          uint32_t b_frag[2];
+          ldmatrix_b_rowtrans_sw_sr<HeadDim>(
+              tile_do, chunk * 16, tile * 8, lane, b_frag);
+          mma_m16n8k16(dv_acc[local][tile], p_frag, b_frag);
+          ldmatrix_b_rowtrans_sw_sr<HeadDim>(
+              tile_q, chunk * 16, tile * 8, lane, b_frag);
+          mma_m16n8k16(dk_acc[local][tile], ds_frag, b_frag);
+        }
+      }
+    }
+
+    // Tree tiles and dS tiles complete for this q-tile.
+    __syncthreads();
+
+    // dBias: combine the warpgroup pair trees and single-write the leaf
+    // plane cells [q, kb-keys] (same values, cells, and order as the
+    // two-pass kernel's fixed tree).
+    const int64_t plane_tile_base = plane_base +
+        static_cast<int64_t>(query_start - query_base) * sequence +
+        key_start;
+    for (int element = threadIdx.x; element < kSrQueryTile * kSrKeyBlock;
+         element += kThreadsWg) {
+      const int row = element / kSrKeyBlock;
+      const int key = element - row * kSrKeyBlock;
+      const int cell = row * kSrTreeStride + key;
+      const float tile_sum = __fadd_rn(
+          sbias_acc[cell],
+          sbias_acc[kSrQueryTile * kSrTreeStride + cell]);
+      workspace[plane_tile_base + static_cast<int64_t>(row) * sequence +
+                key] = __float2bfloat16_rn(tile_sum);
+    }
+
+    // dQ partial for this (kb, q-tile): dq += dS @ K over the CTA's 64
+    // keys.  Each warpgroup serves its own slot pair; warps 0/1 take the
+    // first slot's row halves, warps 2/3 the second's.
+    {
+      const int local = warp_in_group >> 1;
+      const int slot = warpgroup * kSlotsPerWarpgroup + local;
+      const int row_half = warp_in_group & 1;
+      if (outer_mult[slot] != 0.0F) {
+        const __nv_bfloat16* ds_tile =
+            sds + slot * kSrQueryTile * kSrDsStride +
+            row_half * kQueryTile * kSrDsStride;
+        const __nv_bfloat16* tile_k = sk + slot * kSrKeyBlock * HeadDim;
+        Acc dq_acc[HeadDim / 8];
+#pragma unroll
+        for (int tile = 0; tile < HeadDim / 8; ++tile) {
+          dq_acc[tile] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+        }
+#pragma unroll
+        for (int chunk = 0; chunk < kSrKeyBlock / 16; ++chunk) {
+          uint32_t a_frag[4];
+          ldmatrix_a16x16(ds_tile, kSrDsStride, chunk * 16, lane, a_frag);
+          #pragma unroll
+          for (int tile = 0; tile < HeadDim / 8; ++tile) {
+            uint32_t k_frag[2];
+            ldmatrix_b_keytrans_sw<HeadDim>(
+                tile_k, chunk * 16, tile * 8, lane, k_frag);
+            mma_m16n8k16(dq_acc[tile], a_frag, k_frag);
+          }
+        }
+        // Partial layout matches the contiguous [B,O,H,N,D] output per
+        // key block: idx = ((kb * total_planes + plane) * heads + head)
+        //                  * sequence + q) * io_dim + col
+        const int64_t plane = slot_plane(slot);
+        const int64_t idx_base =
+            (((static_cast<int64_t>(key_block) * total_planes + plane) *
+                  heads +
+              head) *
+                 static_cast<int64_t>(sequence) +
+             (query_start + row_half * kQueryTile)) *
+            io_dim;
+#pragma unroll
+        for (int tile = 0; tile < HeadDim / 8; ++tile) {
+#pragma unroll
+          for (int half = 0; half < 2; ++half) {
+            const int row = group + half * 8;
+            const int column = tile * 8 + thread_in_group * 2;
+            if (column >= io_dim) {
+              continue;
+            }
+            dq_partials[idx_base + static_cast<int64_t>(row) * io_dim +
+                        column] =
+                __float2bfloat16_rn(dq_acc[tile].v[half * 2]);
+            dq_partials[idx_base + static_cast<int64_t>(row) * io_dim +
+                        column + 1] =
+                __float2bfloat16_rn(dq_acc[tile].v[half * 2 + 1]);
+          }
+        }
+      }
+    }
+
+  }
+
+  // Epilogue: dK/dV for this warp's 16 key rows, both slots of its
+  // warpgroup.  dK scaled once; both stored BF16.
+#pragma unroll
+  for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
+    const int slot = warpgroup * kSlotsPerWarpgroup + local;
+    if (outer_mult[slot] == 0.0F) {
+      continue;
+    }
+    const int64_t out_base = (slot_plane(slot) * heads + head) *
+        static_cast<int64_t>(sequence) * io_dim +
+        static_cast<int64_t>(key_start + warp_key) * io_dim;
+#pragma unroll
+    for (int tile = 0; tile < HeadDim / 8; ++tile) {
+#pragma unroll
+      for (int half = 0; half < 2; ++half) {
+        const int row = group + half * 8;
+        const int column = tile * 8 + thread_in_group * 2;
+        if (column >= io_dim) {
+          continue;
+        }
+        out_dv[out_base + static_cast<int64_t>(row) * io_dim + column] =
+            __float2bfloat16_rn(dv_acc[local][tile].v[half * 2]);
+        out_dv[out_base + static_cast<int64_t>(row) * io_dim + column + 1] =
+            __float2bfloat16_rn(dv_acc[local][tile].v[half * 2 + 1]);
+        out_dk[out_base + static_cast<int64_t>(row) * io_dim + column] =
+            __float2bfloat16_rn(dk_acc[local][tile].v[half * 2] * scale);
+        out_dk[out_base + static_cast<int64_t>(row) * io_dim + column + 1] =
+            __float2bfloat16_rn(
+                dk_acc[local][tile].v[half * 2 + 1] * scale);
+      }
+    }
+  }
+}
+
+// Fixed ascending-kb fold of the SR dQ partials into BF16 dQ.
+__global__ void stablefold_sr_dq_reduce_kernel(
+    const __nv_bfloat16* __restrict__ dq_partials,
+    __nv_bfloat16* __restrict__ out_dq,
+    int64_t output_elements,
+    int64_t partial_stride,
+    int key_blocks,
+    float scale) {
+  const int64_t grid_stride =
+      static_cast<int64_t>(blockDim.x) * gridDim.x;
+  for (int64_t linear =
+           static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       linear < output_elements;
+       linear += grid_stride) {
+    float root = __bfloat162float(dq_partials[linear]);
+#pragma unroll 1
+    for (int kb = 1; kb < key_blocks; ++kb) {
+      root = __fadd_rn(
+          root,
+          __bfloat162float(
+              dq_partials[static_cast<int64_t>(kb) * partial_stride +
+                          linear]));
+    }
+    out_dq[linear] = __float2bfloat16_rn(root * scale);
+  }
+}
+
 // dbias[h,q,k] = ((plane0 + plane1) + plane2) + ... in leaf order.
 __global__ void stablefold_dq_dbias_finalize_kernel(
     const __nv_bfloat16* __restrict__ workspace,
@@ -1415,6 +1936,323 @@ void launch_wg(
 }
 
 template <int HeadDim>
+void launch_sr(
+    const torch::Tensor& q,
+    const torch::Tensor& k,
+    const torch::Tensor& v,
+    const torch::Tensor& d_output,
+    const torch::Tensor& logsumexp,
+    const torch::Tensor& delta,
+    const torch::Tensor& mask,
+    const torch::Tensor& bias,
+    torch::Tensor& out_dq,
+    torch::Tensor& out_dk,
+    torch::Tensor& out_dv,
+    torch::Tensor& out_dbias,
+    torch::Tensor& workspace,
+    torch::Tensor& dq_partials,
+    int sequence,
+    int outer_count,
+    int heads,
+    int batch,
+    int query_span,
+    int resident_leaves,
+    int batch_chunk,
+    int io_dim,
+    cudaStream_t stream) {
+  constexpr int kSharedBytesSr =
+      (2 * kOuterLeaf * kSrKeyBlock * HeadDim +
+       4 * kOuterLeaf * kSrQueryTile * HeadDim +
+       kOuterLeaf * kSrQueryTile * kSrDsStride +
+       2 * kSrQueryTile * kSrBiasStride) *
+          static_cast<int>(sizeof(__nv_bfloat16)) +
+      (kOuterLeaf * kSrKeyBlock +
+       2 * kSrQueryTile * kSrTreeStride) *
+          static_cast<int>(sizeof(float));
+  const float scale = 1.0F / std::sqrt(static_cast<float>(io_dim));
+  const int leaves = (outer_count + kOuterLeaf - 1) / kOuterLeaf;
+  const bool outer_eq = outer_count == sequence;
+  const int key_blocks = sequence / kSrKeyBlock;
+  const int total_planes = batch * outer_count;
+  TORCH_CHECK(
+      sequence % kSrKeyBlock == 0 && key_blocks <= 65535 &&
+          query_span > 0 && query_span % kSrQueryTile == 0 &&
+          resident_leaves > 0 && resident_leaves <= leaves &&
+          batch_chunk > 0 && batch_chunk <= batch,
+      "invalid SR backward plan");
+  int64_t required_workspace = checked_positive_product(
+      resident_leaves, batch_chunk, "workspace");
+  required_workspace =
+      checked_positive_product(required_workspace, heads, "workspace");
+  required_workspace =
+      checked_positive_product(required_workspace, query_span, "workspace");
+  required_workspace =
+      checked_positive_product(required_workspace, sequence, "workspace");
+  TORCH_CHECK(
+      workspace.numel() >= required_workspace,
+      "workspace is smaller than the query-slab plan");
+  int64_t required_partials = checked_positive_product(
+      key_blocks, total_planes, "dq partials");
+  required_partials =
+      checked_positive_product(required_partials, heads, "dq partials");
+  required_partials =
+      checked_positive_product(required_partials, sequence, "dq partials");
+  required_partials =
+      checked_positive_product(required_partials, io_dim, "dq partials");
+  TORCH_CHECK(
+      dq_partials.numel() >= required_partials,
+      "dq_partials is smaller than the key-block plan");
+#define SET_SR_SMEM_ATTRIBUTE(TaskInZ)                                      \
+  do {                                                                     \
+    const cudaError_t status = cudaFuncSetAttribute(                       \
+        stablefold_sr_leaf_kernel<HeadDim, TaskInZ, true>,                 \
+        cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
+        kSharedBytesSr);                                                   \
+    const cudaError_t status_g = cudaFuncSetAttribute(                     \
+        stablefold_sr_leaf_kernel<HeadDim, TaskInZ, false>,                \
+        cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
+        kSharedBytesSr);                                                   \
+    TORCH_CHECK(                                                           \
+        status == cudaSuccess && status_g == cudaSuccess,                  \
+        "failed to opt in StableFold SR shared memory");                   \
+  } while (false)
+  SET_SR_SMEM_ATTRIBUTE(true);
+  SET_SR_SMEM_ATTRIBUTE(false);
+#undef SET_SR_SMEM_ATTRIBUTE
+  const int finalize_threads = 256;
+  for (int batch_base = 0; batch_base < batch;) {
+    const int active_batch = std::min(batch_chunk, batch - batch_base);
+    for (int query_base = 0; query_base < sequence;) {
+      const int query_rows = std::min(query_span, sequence - query_base);
+      TORCH_CHECK(
+          query_rows % kSrQueryTile == 0,
+          "SR lane requires query rows in 32-row tiles");
+      int64_t active_elements = checked_positive_product(
+          active_batch, heads, "active dBias slab");
+      active_elements = checked_positive_product(
+          active_elements, query_rows, "active dBias slab");
+      active_elements = checked_positive_product(
+          active_elements, sequence, "active dBias slab");
+      const int64_t finalize_blocks =
+          positive_ceil_div(active_elements, finalize_threads);
+      TORCH_CHECK(
+          finalize_blocks > 0 && finalize_blocks <= 2147483647LL,
+          "dBias slab finalizer exceeds the CUDA grid-x contract");
+      for (int leaf_base = 0; leaf_base < leaves;) {
+        const int wave_leaves =
+            std::min(resident_leaves, leaves - leaf_base);
+        const int64_t leaf_tasks =
+            static_cast<int64_t>(active_batch) * wave_leaves;
+        TORCH_CHECK(
+            leaf_tasks > 0 && leaf_tasks <= 2147483647LL,
+            "SR leaf wave exceeds the CUDA grid contract");
+        const bool task_in_grid_z = leaf_tasks <= 65535;
+        const dim3 grid = task_in_grid_z
+            ? dim3(
+                  static_cast<unsigned int>(key_blocks),
+                  static_cast<unsigned int>(heads),
+                  static_cast<unsigned int>(leaf_tasks))
+            : dim3(
+                  static_cast<unsigned int>(leaf_tasks),
+                  static_cast<unsigned int>(heads),
+                  static_cast<unsigned int>(key_blocks));
+#define LAUNCH_SR_LEAF(TaskInZ, OuterEq)                                    \
+  stablefold_sr_leaf_kernel<HeadDim, TaskInZ, OuterEq>                      \
+      <<<grid, kThreadsWg, kSharedBytesSr, stream>>>(                      \
+          reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
+          reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),           \
+          reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),           \
+          reinterpret_cast<const __nv_bfloat16*>(d_output.data_ptr()),    \
+          logsumexp.data_ptr<float>(),                                    \
+          delta.data_ptr<float>(),                                        \
+          mask.data_ptr<float>(),                                         \
+          reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),        \
+          reinterpret_cast<__nv_bfloat16*>(out_dk.data_ptr()),            \
+          reinterpret_cast<__nv_bfloat16*>(out_dv.data_ptr()),            \
+          reinterpret_cast<__nv_bfloat16*>(                               \
+              dq_partials.data_ptr()),                                    \
+          reinterpret_cast<__nv_bfloat16*>(workspace.data_ptr()),         \
+          sequence,                                                       \
+          outer_count,                                                    \
+          total_planes,                                                   \
+          heads,                                                          \
+          batch_base,                                                     \
+          active_batch,                                                   \
+          batch_chunk,                                                    \
+          query_base,                                                     \
+          query_rows,                                                     \
+          query_span,                                                     \
+          leaf_base,                                                      \
+          io_dim,                                                         \
+          scale)
+        if (task_in_grid_z) {
+          if (outer_eq) { LAUNCH_SR_LEAF(true, true); } else { LAUNCH_SR_LEAF(true, false); }
+        } else {
+          if (outer_eq) { LAUNCH_SR_LEAF(false, true); } else { LAUNCH_SR_LEAF(false, false); }
+        }
+#undef LAUNCH_SR_LEAF
+        TORCH_CHECK(
+            cudaGetLastError() == cudaSuccess,
+            "StableFold SR leaf launch failed");
+        stablefold_dq_dbias_finalize_kernel
+            <<<static_cast<unsigned int>(finalize_blocks),
+               finalize_threads,
+               0,
+               stream>>>(
+                reinterpret_cast<const __nv_bfloat16*>(workspace.data_ptr()),
+                out_dbias.data_ptr<float>(),
+                active_elements,
+                sequence,
+                heads,
+                batch_base,
+                active_batch,
+                batch_chunk,
+                query_base,
+                query_rows,
+                query_span,
+                wave_leaves,
+                leaf_base != 0);
+        TORCH_CHECK(
+            cudaGetLastError() == cudaSuccess,
+            "StableFold SR finalizer launch failed");
+        leaf_base += wave_leaves;
+      }
+      query_base += query_rows;
+    }
+    batch_base += active_batch;
+  }
+  const int64_t output_elements = out_dq.numel();
+  const int64_t partial_stride = static_cast<int64_t>(total_planes) *
+      heads * sequence * io_dim;
+  constexpr int reduce_threads = 256;
+  const int64_t reduce_blocks_needed =
+      positive_ceil_div(output_elements, reduce_threads);
+  const unsigned int reduce_blocks = static_cast<unsigned int>(
+      std::min<int64_t>(reduce_blocks_needed, 65535));
+  stablefold_sr_dq_reduce_kernel<<<reduce_blocks, reduce_threads, 0,
+                                   stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(dq_partials.data_ptr()),
+      reinterpret_cast<__nv_bfloat16*>(out_dq.data_ptr()),
+      output_elements,
+      partial_stride,
+      key_blocks,
+      scale);
+  TORCH_CHECK(
+      cudaGetLastError() == cudaSuccess,
+      "StableFold SR dQ reduce launch failed");
+}
+
+void stablefold_triangle_sr_backward_out(
+    const torch::Tensor& q,
+    const torch::Tensor& k,
+    const torch::Tensor& v,
+    const torch::Tensor& d_output,
+    const torch::Tensor& logsumexp,
+    const torch::Tensor& delta,
+    const torch::Tensor& mask,
+    const torch::Tensor& bias,
+    torch::Tensor& out_dq,
+    torch::Tensor& out_dk,
+    torch::Tensor& out_dv,
+    torch::Tensor& out_dbias,
+    torch::Tensor& workspace,
+    torch::Tensor& dq_partials,
+    int64_t query_span64,
+    int64_t resident_leaves64,
+    int64_t batch_chunk64) {
+  TORCH_CHECK(q.is_cuda() && q.dtype() == torch::kBFloat16);
+  TORCH_CHECK(q.dim() == 5 && q.size(2) >= 1);
+  const int batch = static_cast<int>(q.size(0));
+  const int outer_count = static_cast<int>(q.size(1));
+  const int heads = static_cast<int>(q.size(2));
+  const int sequence = static_cast<int>(q.size(3));
+  const int head_dim = static_cast<int>(q.size(4));
+  TORCH_CHECK(
+      sequence % kSrKeyBlock == 0,
+      "SR backward requires the 64-padded exact-tiles contract");
+  TORCH_CHECK(
+      head_dim % 8 == 0 && head_dim <= 64,
+      "SR backward serves D<=64 (D=128 keeps the two-pass path)");
+  TORCH_CHECK(q.is_contiguous());
+  const auto check_q_like = [&](const torch::Tensor& tensor) {
+    TORCH_CHECK(
+        tensor.is_cuda() && tensor.device() == q.device() &&
+            tensor.dtype() == torch::kBFloat16 &&
+            tensor.sizes() == q.sizes() && tensor.is_contiguous(),
+        "k/v/out_dq/out_dk/out_dv must be contiguous BF16 matching q");
+  };
+  check_q_like(k);
+  check_q_like(v);
+  check_q_like(out_dq);
+  check_q_like(out_dk);
+  check_q_like(out_dv);
+  TORCH_CHECK(
+      d_output.is_cuda() && d_output.dtype() == torch::kBFloat16 &&
+          d_output.is_contiguous() && d_output.dim() == 5 &&
+          d_output.size(0) == q.size(0) && d_output.size(1) == q.size(1) &&
+          d_output.size(2) == q.size(3) && d_output.size(3) == q.size(2) &&
+          d_output.size(4) == q.size(4),
+      "d_output must be contiguous BF16 [B,O,N,H,D]");
+  TORCH_CHECK(
+      logsumexp.is_cuda() && logsumexp.dtype() == torch::kFloat32 &&
+      logsumexp.is_contiguous() && logsumexp.numel() == q.numel() / head_dim);
+  TORCH_CHECK(
+      delta.is_cuda() && delta.dtype() == torch::kFloat32 &&
+      delta.is_contiguous() && delta.sizes() == logsumexp.sizes());
+  TORCH_CHECK(
+      mask.is_cuda() && mask.dtype() == torch::kFloat32 &&
+      mask.is_contiguous() &&
+      mask.sizes() ==
+          torch::IntArrayRef({batch, outer_count, 1, 1, sequence}));
+  TORCH_CHECK(
+      bias.is_cuda() && bias.dtype() == torch::kBFloat16 &&
+      bias.is_contiguous() &&
+      bias.sizes() ==
+          torch::IntArrayRef({batch, 1, heads, sequence, sequence}));
+  TORCH_CHECK(
+      out_dbias.is_cuda() && out_dbias.dtype() == torch::kFloat32 &&
+      out_dbias.is_contiguous() &&
+      out_dbias.sizes() ==
+          torch::IntArrayRef({batch, 1, heads, sequence, sequence}));
+  TORCH_CHECK(
+      workspace.is_cuda() && workspace.dtype() == torch::kBFloat16 &&
+      workspace.is_contiguous());
+  TORCH_CHECK(
+      dq_partials.is_cuda() && dq_partials.dtype() == torch::kBFloat16 &&
+      dq_partials.is_contiguous());
+  const int query_span = static_cast<int>(query_span64);
+  const int resident_leaves = static_cast<int>(resident_leaves64);
+  const int batch_chunk = static_cast<int>(batch_chunk64);
+
+  const c10::cuda::CUDAGuard device_guard(q.device());
+  auto stream = at::cuda::getCurrentCUDAStream();
+  const int io_dim = head_dim;
+  const int storage = head_dim <= 16 ? 16 : (head_dim <= 32 ? 32 : 64);
+  switch (storage) {
+    case 16:
+      launch_sr<16>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
+                    out_dk, out_dv, out_dbias, workspace, dq_partials,
+                    sequence, outer_count, heads, batch, query_span,
+                    resident_leaves, batch_chunk, io_dim, stream);
+      break;
+    case 32:
+      launch_sr<32>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
+                    out_dk, out_dv, out_dbias, workspace, dq_partials,
+                    sequence, outer_count, heads, batch, query_span,
+                    resident_leaves, batch_chunk, io_dim, stream);
+      break;
+    default:
+      launch_sr<64>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
+                    out_dk, out_dv, out_dbias, workspace, dq_partials,
+                    sequence, outer_count, heads, batch, query_span,
+                    resident_leaves, batch_chunk, io_dim, stream);
+      break;
+  }
+  TORCH_CHECK(
+      cudaGetLastError() == cudaSuccess, "StableFold SR launch failed");
+}
+
+template <int HeadDim>
 void dispatch_sequence(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -1707,4 +2545,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       "stablefold_reduce_broadcast_dbias_out",
       &stablefold_reduce_broadcast_dbias_out,
       "Fixed-order broadcast dBias reduction");
+  module.def(
+      "stablefold_triangle_sr_backward_out",
+      &stablefold_triangle_sr_backward_out,
+      "StableFold single-reconstruction backward (dQ/dK/dV/dBias)");
 }
