@@ -270,7 +270,9 @@ __device__ __forceinline__ void ldmatrix_x4(
 //   warp tile: 32 rows x 80 cols -> acc[2][10][4]
 // ---------------------------------------------------------------------------
 __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
-    const bf16* __restrict__ z, const bf16* __restrict__ wT,
+    const bf16* __restrict__ z, const float* __restrict__ w_ap,
+    const float* __restrict__ w_ag, const float* __restrict__ w_bp,
+    const float* __restrict__ w_bg, const float* __restrict__ w_g,
     const float* __restrict__ mask,
     const float* __restrict__ ln_gamma, const float* __restrict__ ln_beta,
     long rows, long NN, int C, int H,
@@ -290,14 +292,20 @@ __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
   const int slice = blockIdx.x;
   const long tiles = (rows + 127) >> 7;
 
-  // ---- once per CTA: weight slice -> smem (transposed layout host-prepped) --
+  // ---- once per CTA: raw fp32 weights -> permuted bf16 smem slice ----
+  // col = wc*80 + p*16 + j -> projection p of channel h = slice*32 + wc*16 + j
   {
-    const bf16* src = wT + (long)slice * 160 * C;
-    int chunks_per_col = C >> 3;              // uint4 = 8 bf16
+    const float* wsrc[5] = {w_ap, w_ag, w_bp, w_bg, w_g};
+    int chunks_per_col = C >> 3;              // 8 values per uint4 store
     for (int i = tid; i < 160 * chunks_per_col; i += 256) {
-      int c = i / chunks_per_col, q = i % chunks_per_col;
-      reinterpret_cast<uint4*>(wbuf + c * Cp)[q] =
-          reinterpret_cast<const uint4*>(src + (long)c * C)[q];
+      int col = i / chunks_per_col, q = i % chunks_per_col;
+      int wcg = col / 80, rem = col % 80;
+      const float* src = wsrc[rem >> 4]
+          + (long)(slice * 32 + wcg * 16 + (rem & 15)) * C + q * 8;
+      union { bf16 b[8]; uint4 u; } pk;
+      #pragma unroll
+      for (int t = 0; t < 8; ++t) pk.b[t] = __float2bfloat16(src[t]);
+      *reinterpret_cast<uint4*>(wbuf + col * Cp + q * 8) = pk.u;
     }
   }
   const int c0 = lane * 4;
@@ -483,12 +491,18 @@ __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
   }
 }
 
-std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor wT,
+std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor w_ap,
+                                       torch::Tensor w_ag, torch::Tensor w_bp,
+                                       torch::Tensor w_bg, torch::Tensor w_g,
                                        torch::Tensor mask, torch::Tensor gamma,
                                        torch::Tensor beta, long B, long NN,
                                        int C, int H, bool save_zln) {
   TORCH_CHECK(C % 16 == 0 && C <= 128, "trimul_in: C must be mult of 16, <=128");
   TORCH_CHECK(H % 32 == 0, "trimul_in: H must be mult of 32");
+  for (auto* w : {&w_ap, &w_ag, &w_bp, &w_bg, &w_g}) {
+    TORCH_CHECK(w->dtype() == torch::kFloat && w->is_contiguous(),
+                "trimul_in: weights must be contiguous fp32");
+  }
   long rows = B * NN;
   long tiles = (rows + 127) / 128;
   auto stream = at::cuda::getCurrentCUDAStream();
@@ -513,7 +527,9 @@ std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor wT,
   TORCH_CHECK(y <= 65535, "trimul_in: grid.y overflow");
   dim3 grid((unsigned)S, (unsigned)y);
   trimul_in_fwd_kernel<<<grid, dim3(256), smem, stream>>>(
-      (const bf16*)z.data_ptr(), (const bf16*)wT.data_ptr(),
+      (const bf16*)z.data_ptr(), w_ap.data_ptr<float>(),
+      w_ag.data_ptr<float>(), w_bp.data_ptr<float>(), w_bg.data_ptr<float>(),
+      w_g.data_ptr<float>(),
       mask.data_ptr<float>(), gamma.data_ptr<float>(), beta.data_ptr<float>(),
       rows, NN, C, H, (bf16*)a.data_ptr(), (bf16*)b.data_ptr(),
       (bf16*)gate.data_ptr(), mean.data_ptr<float>(), rstd.data_ptr<float>(),
@@ -551,7 +567,7 @@ __device__ __forceinline__ void ldmatrix_x4_trans(
 //   warp tile: 32 pos x C/2 cols
 // ---------------------------------------------------------------------------
 __global__ void __launch_bounds__(256, 2) trimul_out_fwd_kernel(
-    const bf16* __restrict__ x, const bf16* __restrict__ wc,
+    const bf16* __restrict__ x, const float* __restrict__ wz,
     const bf16* __restrict__ gate,
     const float* __restrict__ ln_gamma, const float* __restrict__ ln_beta,
     long rows, long NN, int C, int H,
@@ -568,13 +584,16 @@ __global__ void __launch_bounds__(256, 2) trimul_out_fwd_kernel(
   const int warp = tid >> 5, lane = tid & 31;
   const bool training = xlnT != nullptr;
 
-  // ---- once per CTA: weight + LN params to smem ----
+  // ---- once per CTA: raw fp32 linear_z.weight [C,H] -> bf16 smem ----
   {
     int chunks = H >> 3;
     for (int i = tid; i < C * chunks; i += 256) {
       int c = i / chunks, q = i % chunks;
-      reinterpret_cast<uint4*>(wbuf + c * Hp)[q] =
-          reinterpret_cast<const uint4*>(wc + (long)c * H)[q];
+      const float* src = wz + (long)c * H + q * 8;
+      union { bf16 b[8]; uint4 u; } pk;
+      #pragma unroll
+      for (int t = 0; t < 8; ++t) pk.b[t] = __float2bfloat16(src[t]);
+      reinterpret_cast<uint4*>(wbuf + c * Hp)[q] = pk.u;
     }
     for (int i = tid; i < H; i += 256) {
       gbuf[i] = ln_gamma[i];
@@ -743,12 +762,14 @@ __global__ void __launch_bounds__(256, 2) trimul_out_fwd_kernel(
   }
 }
 
-std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wc,
+std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wz,
                                        torch::Tensor gate, torch::Tensor gamma,
                                        torch::Tensor beta, long B, long NN,
                                        int C, int H, bool training) {
   TORCH_CHECK(C % 32 == 0 && C <= 128, "trimul_out: C must be mult of 32, <=128");
   TORCH_CHECK(H % 32 == 0 && H <= 128, "trimul_out: H must be mult of 32, <=128");
+  TORCH_CHECK(wz.dtype() == torch::kFloat && wz.is_contiguous(),
+              "trimul_out: weight must be contiguous fp32");
   long rows = B * NN;
   long tiles = (rows + 127) / 128;
   auto stream = at::cuda::getCurrentCUDAStream();
@@ -767,7 +788,7 @@ std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wc,
   cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
   long g = std::max(1L, std::min(tiles, (long)(2 * sm_count)));
   trimul_out_fwd_kernel<<<dim3((unsigned)g), dim3(256), smem, stream>>>(
-      (const bf16*)x.data_ptr(), (const bf16*)wc.data_ptr(),
+      (const bf16*)x.data_ptr(), wz.data_ptr<float>(),
       (const bf16*)gate.data_ptr(), gamma.data_ptr<float>(),
       beta.data_ptr<float>(), rows, NN, C, H,
       (bf16*)o.data_ptr(),
@@ -787,7 +808,9 @@ std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wc,
 //   grid (S, 2*sm/S) persistent; block 256; warp tile 32 rows x 64 cols
 // ---------------------------------------------------------------------------
 __global__ void __launch_bounds__(256, 2) trimul_gate_split_bwd_kernel(
-    const bf16* __restrict__ zln, const bf16* __restrict__ wT4,
+    const bf16* __restrict__ zln, const float* __restrict__ w_ap,
+    const float* __restrict__ w_ag, const float* __restrict__ w_bp,
+    const float* __restrict__ w_bg,
     const float* __restrict__ mask,
     const bf16* __restrict__ d_a, const bf16* __restrict__ d_b,
     long rows, long NN, int C, int H,
@@ -805,14 +828,20 @@ __global__ void __launch_bounds__(256, 2) trimul_gate_split_bwd_kernel(
   const int slice = blockIdx.x;
   const long fiveH = 5 * (long)H;
 
-  // ---- once per CTA: 4-projection weight slice ----
+  // ---- once per CTA: raw fp32 4-projection slice -> permuted bf16 smem ----
+  // col = wc*64 + p*16 + j -> projection p of channel h = slice*32 + wc*16 + j
   {
-    const bf16* src = wT4 + (long)slice * 128 * C;
+    const float* wsrc[4] = {w_ap, w_ag, w_bp, w_bg};
     int chunks = C >> 3;
     for (int i = tid; i < 128 * chunks; i += 256) {
-      int c = i / chunks, q = i % chunks;
-      reinterpret_cast<uint4*>(wbuf + c * Cp)[q] =
-          reinterpret_cast<const uint4*>(src + (long)c * C)[q];
+      int col = i / chunks, q = i % chunks;
+      int wcg = col / 64, rem = col % 64;
+      const float* src = wsrc[rem >> 4]
+          + (long)(slice * 32 + wcg * 16 + (rem & 15)) * C + q * 8;
+      union { bf16 b[8]; uint4 u; } pk;
+      #pragma unroll
+      for (int t = 0; t < 8; ++t) pk.b[t] = __float2bfloat16(src[t]);
+      *reinterpret_cast<uint4*>(wbuf + col * Cp + q * 8) = pk.u;
     }
   }
 
@@ -995,7 +1024,9 @@ __global__ void sig_mul_bwd_out_kernel(
   dgate[row * dgate_stride + h] = __float2bfloat16(dy * o * (1.f - g));
 }
 
-torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor wT4,
+torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor w_ap,
+                          torch::Tensor w_ag, torch::Tensor w_bp,
+                          torch::Tensor w_bg,
                           torch::Tensor mask, torch::Tensor d_a,
                           torch::Tensor d_b, torch::Tensor d_proj5,
                           long B, long NN, int C, int H) {
@@ -1017,7 +1048,8 @@ torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor wT4,
   TORCH_CHECK(y <= 65535, "trimul_gate_split_bwd: grid.y overflow");
   trimul_gate_split_bwd_kernel<<<dim3((unsigned)S, (unsigned)y), dim3(256), smem,
                        stream>>>(
-      (const bf16*)zln.data_ptr(), (const bf16*)wT4.data_ptr(),
+      (const bf16*)zln.data_ptr(), w_ap.data_ptr<float>(),
+      w_ag.data_ptr<float>(), w_bp.data_ptr<float>(), w_bg.data_ptr<float>(),
       mask.data_ptr<float>(), (const bf16*)d_a.data_ptr(),
       (const bf16*)d_b.data_ptr(), rows, NN, C, H,
       (bf16*)d_proj5.data_ptr());
@@ -1156,9 +1188,9 @@ torch::Tensor gather_rows1(torch::Tensor src, long bo, int H, int N, int D,
 """
 
 _CPP_SRC = """
-std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor wT, torch::Tensor mask, torch::Tensor gamma, torch::Tensor beta, long B, long NN, int C, int H, bool save_zln);
-std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wc, torch::Tensor gate, torch::Tensor gamma, torch::Tensor beta, long B, long NN, int C, int H, bool training);
-torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor wT4, torch::Tensor mask, torch::Tensor d_a, torch::Tensor d_b, torch::Tensor d_proj5, long B, long NN, int C, int H);
+std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor w_ap, torch::Tensor w_ag, torch::Tensor w_bp, torch::Tensor w_bg, torch::Tensor w_g, torch::Tensor mask, torch::Tensor gamma, torch::Tensor beta, long B, long NN, int C, int H, bool save_zln);
+std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wz, torch::Tensor gate, torch::Tensor gamma, torch::Tensor beta, long B, long NN, int C, int H, bool training);
+torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor w_ap, torch::Tensor w_ag, torch::Tensor w_bp, torch::Tensor w_bg, torch::Tensor mask, torch::Tensor d_a, torch::Tensor d_b, torch::Tensor d_proj5, long B, long NN, int C, int H);
 torch::Tensor sig_mul_bwd_out(torch::Tensor out, torch::Tensor gate, torch::Tensor grad_out, torch::Tensor dgate_dst, int H, long dgate_stride);
 torch::Tensor ln_bwd_dx(torch::Tensor input, torch::Tensor grad_out, long rows, long row_stride, long col_stride, torch::Tensor gamma, torch::Tensor mean, torch::Tensor rstd);
 std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_out, long rows, long row_stride, long col_stride, int C, torch::Tensor mean, torch::Tensor rstd);
@@ -1188,28 +1220,10 @@ def _get_ext():
     return _ext
 
 
-def _prep_weights(w_in, w_out):
-    """w_in [C,5H], w_out [H,C] -> (wT [S,160,C], wT4 [S,128,C], wc [C,H]).
-
-    Column layouts (block-of-16 channels per warp) are what let the kernels
-    pair each projection with its gate in one thread's mma accumulators.
-    """
-    C = w_in.shape[0]
-    H = w_in.shape[1] // 5
-    w5 = w_in.t().contiguous().view(5, H, C)
-    S = H // 32
-    w5v = w5.view(5, S, 2, 16, C)
-    wT = (w5v.permute(1, 2, 0, 3, 4).reshape(S, 160, C)
-          .contiguous().to(torch.bfloat16))
-    wT4 = (w5v[:4].permute(1, 2, 0, 3, 4).reshape(S, 128, C)
-           .contiguous().to(torch.bfloat16))
-    wc = w_out.t().contiguous().to(torch.bfloat16)
-    return wT, wT4, wc
-
-
 class _StableTrimulFn(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, z, mask, w_in, w_out, g_in, b_in, g_out, b_out, outgoing):
+    def forward(ctx, z, mask, w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+                g_in, b_in, g_out, b_out, outgoing):
         ext = _get_ext()
         orig_shape = z.shape
         C = z.shape[-1]
@@ -1217,7 +1231,7 @@ class _StableTrimulFn(torch.autograd.Function):
         if z.shape[-3] != N:
             raise ValueError(f"expected square pair input, got {tuple(z.shape)}")
         B = z.numel() // (N * N * C)
-        H = w_in.shape[1] // 5
+        H = w_ap.shape[0]
         if H != C:
             raise ValueError("stable trimul requires c_hidden == c_z")
         z_bf = z.reshape(B, N, N, C).to(torch.bfloat16).contiguous()
@@ -1226,13 +1240,11 @@ class _StableTrimulFn(torch.autograd.Function):
         rows = B * N * N
         NN = N * N
         training = any(ctx.needs_input_grad)
-
-        wT, wT4, wc = _prep_weights(w_in, w_out)
         mask_flat = mask_f.view(-1)
 
         a, b, gate, mean_in, rstd_in, z_ln = ext.trimul_in_fwd(
-            z_bf.view(rows, C), wT, mask_flat, g_in, b_in, B, NN, C, H,
-            training)
+            z_bf.view(rows, C), w_ap, w_ag, w_bp, w_bg, w_g,
+            mask_flat, g_in, b_in, B, NN, C, H, training)
         av = a.view(B * H, N, N)
         bv = b.view(B * H, N, N)
         if outgoing:
@@ -1240,11 +1252,12 @@ class _StableTrimulFn(torch.autograd.Function):
         else:
             x = torch.bmm(av.transpose(1, 2), bv)
         out, xlnT, mean_out, rstd_out = ext.trimul_out_fwd(
-            x.view(B * H, NN), wc, gate, g_out, b_out, B, NN, C, H, training)
+            x.view(B * H, NN), w_z, gate, g_out, b_out, B, NN, C, H, training)
 
         ctx.save_for_backward(z_bf, mask_f, z_ln, gate, a, b, x, xlnT,
                               mean_in, rstd_in, mean_out, rstd_out,
-                              w_in, w_out, wT4, wc, g_in, g_out, out)
+                              w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+                              g_in, g_out, out)
         ctx.dims = (B, N, C, H, outgoing)
         ctx.orig_shape = orig_shape
         ctx.z_dtype = z.dtype
@@ -1254,8 +1267,8 @@ class _StableTrimulFn(torch.autograd.Function):
     def backward(ctx, grad_out):
         ext = _get_ext()
         (z_bf, mask_f, z_ln, gate, a, b, x, xlnT, mean_in, rstd_in,
-         mean_out, rstd_out, w_in, w_out, wT4, wc, g_in, g_out,
-         out) = ctx.saved_tensors
+         mean_out, rstd_out, w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+         g_in, g_out, out) = ctx.saved_tensors
         B, N, C, H, outgoing = ctx.dims
         rows = B * N * N
         NN = N * N
@@ -1267,9 +1280,9 @@ class _StableTrimulFn(torch.autograd.Function):
         d_raw = ext.sig_mul_bwd_out(
             out.view(rows, C), gate, go,
             d_proj5.view(rows, 5 * H)[:, 4 * H:], H, 5 * H)
-        # out GEMM backward
-        d_xln = (d_raw @ wc).contiguous()
-        d_wout = (xlnT @ d_raw).float()
+        # out GEMM backward (w_z is [C, H]; no transposes materialized)
+        d_xln = (d_raw @ w_z.to(torch.bfloat16)).contiguous()
+        d_wz = (d_raw.t() @ xlnT.t()).float()                # [C, H]
         # LN out backward (fused transpose variant, dgb folded)
         d_x, d_gout, d_bout = ext.transpose_ln_bwd(
             x.view(B * H, NN), d_xln, N, H, B, g_out, mean_out, rstd_out)
@@ -1283,18 +1296,22 @@ class _StableTrimulFn(torch.autograd.Function):
             d_a = torch.bmm(bv, d_x.transpose(1, 2))
             d_b = torch.bmm(av, d_x)
         # recompute-proj gate-split backward -> slots [0:4H)
-        ext.trimul_gate_split_bwd(z_ln, wT4, mask_f.view(-1),
-                        d_a.view(B * H, NN), d_b.view(B * H, NN),
-                        d_proj5, B, NN, C, H)
-        # in GEMM backward
-        d_zln = (d_proj5 @ w_in.to(torch.bfloat16).t()).contiguous()
-        d_win = (z_ln.t() @ d_proj5).float()
+        ext.trimul_gate_split_bwd(z_ln, w_ap, w_ag, w_bp, w_bg,
+                                  mask_f.view(-1),
+                                  d_a.view(B * H, NN), d_b.view(B * H, NN),
+                                  d_proj5, B, NN, C, H)
+        # in GEMM backward: W5 [5H, C] built once, only here
+        w5 = torch.cat([w_ap, w_ag, w_bp, w_bg, w_g], 0).to(torch.bfloat16)
+        d_zln = (d_proj5 @ w5).contiguous()
+        d_w5 = (d_proj5.t() @ z_ln).float()                  # [5H, C]
         # LN in backward
         d_z = ext.ln_bwd_dx(z_bf.view(rows, C), d_zln, rows, C, 1,
-                             g_in, mean_in, rstd_in)
+                            g_in, mean_in, rstd_in)
         d_gin, d_bin = ext.ln_bwd_dgb(z_bf.view(rows, C), d_zln, rows, C, 1,
-                                       C, mean_in, rstd_in)
-        return (d_z.view(ctx.orig_shape).to(ctx.z_dtype), None, d_win, d_wout,
+                                      C, mean_in, rstd_in)
+        return (d_z.view(ctx.orig_shape).to(ctx.z_dtype), None,
+                d_w5[0 * H:1 * H], d_w5[1 * H:2 * H], d_w5[2 * H:3 * H],
+                d_w5[3 * H:4 * H], d_w5[4 * H:5 * H], d_wz,
                 d_gin, d_bin, d_gout, d_bout, None)
 
 
@@ -1302,21 +1319,15 @@ def run_stable_trimul(module, z, mask):
     """Differentiable entry point bound to an official module's parameters."""
     if mask is None:
         mask = z.new_ones(z.shape[:-1])
-    w_in = torch.cat(
-        [
-            module.linear_a_p.weight, module.linear_a_g.weight,
-            module.linear_b_p.weight, module.linear_b_g.weight,
-            module.linear_g.weight,
-        ],
-        dim=0,
-    ).t().contiguous()
-    w_out = module.linear_z.weight.t().contiguous()
     return _StableTrimulFn.apply(
-        z, mask, w_in, w_out,
-        module.layer_norm_in.weight.float().contiguous(),
-        module.layer_norm_in.bias.float().contiguous(),
-        module.layer_norm_out.weight.float().contiguous(),
-        module.layer_norm_out.bias.float().contiguous(),
+        z, mask,
+        module.linear_a_p.weight, module.linear_a_g.weight,
+        module.linear_b_p.weight, module.linear_b_g.weight,
+        module.linear_g.weight, module.linear_z.weight,
+        module.layer_norm_in.weight.float(),
+        module.layer_norm_in.bias.float(),
+        module.layer_norm_out.weight.float(),
+        module.layer_norm_out.bias.float(),
         module._outgoing,
     )
 
