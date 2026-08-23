@@ -976,6 +976,14 @@ class StableTrimul:
 
 def run_stable_trimul(module, z, mask):
     """Differentiable entry point bound to an official module's parameters."""
+    import os
+
+    if os.environ.get("OF3_TRIMUL_V2", "1") == "1":
+        from openfold3.core.kernels.cuda.stablefold_trimul_v2 import (
+            run_stable_trimul_v2,
+        )
+
+        return run_stable_trimul_v2(module, z, mask)
     if mask is None:
         mask = z.new_ones(z.shape[:-1])
     w_in = torch.cat(
