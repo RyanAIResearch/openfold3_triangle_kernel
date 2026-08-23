@@ -19,7 +19,7 @@ from typing import Any
 import torch
 
 _OUTER_LEAF = 4
-_QUERY_BLOCK = 32
+_QUERY_BLOCK = 64
 _MAX_GRID_YZ = 65_535
 _MAX_INT32 = (1 << 31) - 1
 _MAX_INT64 = (1 << 63) - 1
@@ -164,7 +164,7 @@ def workspace_plan(
         or query_span > _MAX_INT32
         or query_span % _QUERY_BLOCK != 0
     ):
-        raise ValueError("query_span must be an int32 positive multiple of 32")
+        raise ValueError("query_span must be an int32 positive multiple of 64")
     if batch_chunk is not None and not 1 <= batch_chunk <= batch:
         raise ValueError("batch_chunk must lie in [1, batch]")
     if debug_full_plane and (query_span is not None or batch_chunk is not None):
