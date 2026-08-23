@@ -124,9 +124,16 @@ priced menu rather than an implementation accident.
 On an H100, across OpenFold3 crops 384/640/768, StableFold's
 single-reconstruction backward runs 21–26% faster than our production
 baseline and 11–17% faster than the modernized two-pass; in real
-OpenFold3 training at crop 640 it beats NVIDIA cuEquivariance end to end
-in every paired same-session run, with the margin growing from −0.1% to
-−1.5% as the campaign landed [F5/T5: multi-block statistics pending].
+OpenFold3 training at crop 640 it beats NVIDIA cuEquivariance in every
+one of ten paired same-session arms across three campaigns: four
+order-balanced scratch blocks give a mean margin of −9.5 s per 30 steps
+(bootstrap 95% CI [−11.5, −6.5] s; steady-state 8.52 vs 8.83 s/step,
+−3.5%), and a pretrained block gives −7.8 s (8.56 vs 8.96 s/step,
+−4.5%). The same-seed loss gap between SR and cuEquivariance (mean
+8.8e-4 scratch, 9.7e-4 pretrained) sits well inside cuEquivariance's own
+four-run scatter (mean 3.6e-3), and SR tightens that model-level scatter
+by 37% — the residual scatter belongs to the surrounding stock
+operators, which our kernel contract does not cover.
 Every configuration replays bitwise; an aggressive-atomics twin of our
 own kernel — identical except the reduction mechanism — quantifies what
 that guarantee costs (+10–12% per kernel, ~5% per step) and what it buys
