@@ -6,8 +6,8 @@ base_commit: a94b9562e
 branch: sr/dq-warpgroup
 worktree: /home/ubuntu/xzz/of3_sr_dq
 tags:
-  sr-v1-classic-delta: 778d89720   # pre-fence state, rewritten author 2026-08-23
-  sr-v2-shadow-delta: 26ebb0159    # pre-fence state, rewritten author 2026-08-23
+  sr-v1-classic-delta: 3d37258c   # pre-fence state
+  sr-v2-shadow-delta: 84e85725    # shadow commit
 environment:
   gpu: H100-80GB (single)
   driver: 570.195.03
@@ -59,8 +59,12 @@ pending_before_freeze:
   - AOT wheel + clean-install + binary receipts
   - direct delta-vs-delta (fp32-shadow vs perfect) comparison
 
+
 authorship_note: |
-  2026-08-23: all commits after a94b9562e rewritten to author RyanAIResearch
-  (were Evan810828 via stale machine gitconfig). Old hashes cited in earlier
-  session notes map: bc79f56f6->0b751a87d (SR), 76ab6493d->778d89720 (reduce),
-  f284f6133->26ebb0159 (shadow), 03b488d8c->4fa564634 (fence).
+  2026-08-23 FINAL: every Evan810828 commit repo-wide rewritten to
+  RyanAIResearch (three branches; upstream openfold-3 history untouched).
+  Canonical hashes after the final rewrite: sr/dq-warpgroup tip dfb26b85,
+  base(a94b equivalent) 029f76f5, sr-v1-classic-delta=3d37258c,
+  sr-v2-shadow-delta=84e85725, rebuild/fa3-generic-n tip c80088f8.
+  All hashes cited in earlier session notes/memory predate this and are
+  resolvable by commit SUBJECT, which was never changed.
