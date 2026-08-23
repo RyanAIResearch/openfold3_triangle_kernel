@@ -146,12 +146,16 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
     int query_capacity,
     int leaf_base,
     float scale) {
+  // StaticSequence == -1 is the production lane: sequence stays a pure
+  // runtime parameter under the facade's pad-to-tile contract (every tile
+  // divides exactly), so all tail guards are compile-time true and vanish
+  // -- one kernel per head dim, any length, unguarded hot loop.
+  // StaticSequence == 0 keeps the fully guarded fallback for direct ABI
+  // callers with unpadded lengths.
   const int sequence =
-      StaticSequence == 0 ? runtime_sequence : StaticSequence;
+      StaticSequence > 0 ? StaticSequence : runtime_sequence;
   constexpr int outer_leaf = kOuterLeaf;
   constexpr int passes = kPasses;
-  // Official static lanes divide every tile exactly; their guards are
-  // compile-time true and vanish, restoring the ungated codegen.
   constexpr bool kSequenceExact = StaticSequence != 0;
   constexpr int kQStride = HeadDim + 8;
   constexpr int kKVStride = HeadDim + 8;
@@ -598,8 +602,10 @@ void launch(
   } while (false)
   SET_DQ_DBIAS_SMEM_ATTRIBUTE(true, true);
   SET_DQ_DBIAS_SMEM_ATTRIBUTE(true, false);
-  SET_DQ_DBIAS_SMEM_ATTRIBUTE(false, true);
-  SET_DQ_DBIAS_SMEM_ATTRIBUTE(false, false);
+  if constexpr (StaticSequence != -1) {
+    SET_DQ_DBIAS_SMEM_ATTRIBUTE(false, true);
+    SET_DQ_DBIAS_SMEM_ATTRIBUTE(false, false);
+  }
 #undef SET_DQ_DBIAS_SMEM_ATTRIBUTE
   const int finalize_threads = 256;
   for (int batch_base = 0; batch_base < batch;) {
@@ -667,17 +673,30 @@ void launch(
           query_span,                                                     \
           leaf_base,                                                      \
           scale)
-        if (query_rows % kQueryBlock == 0) {
+        if constexpr (StaticSequence == -1) {
+          // The exact-tiles contract guarantees full query blocks; the
+          // guarded row-tail lane is never instantiated for this lane.
+          TORCH_CHECK(
+              query_rows % kQueryBlock == 0,
+              "exact-tiles lane requires query rows in full blocks");
           if (task_in_grid_z) {
             LAUNCH_DQ_DBIAS_LEAF(true, true);
           } else {
             LAUNCH_DQ_DBIAS_LEAF(true, false);
           }
         } else {
-          if (task_in_grid_z) {
-            LAUNCH_DQ_DBIAS_LEAF(false, true);
+          if (query_rows % kQueryBlock == 0) {
+            if (task_in_grid_z) {
+              LAUNCH_DQ_DBIAS_LEAF(true, true);
+            } else {
+              LAUNCH_DQ_DBIAS_LEAF(true, false);
+            }
           } else {
-            LAUNCH_DQ_DBIAS_LEAF(false, false);
+            if (task_in_grid_z) {
+              LAUNCH_DQ_DBIAS_LEAF(false, true);
+            } else {
+              LAUNCH_DQ_DBIAS_LEAF(false, false);
+            }
           }
         }
 #undef LAUNCH_DQ_DBIAS_LEAF
@@ -735,33 +754,19 @@ void dispatch_sequence(
     int resident_leaves,
     int batch_chunk,
     cudaStream_t stream) {
-  // The three official training crops only remove guards and strength-reduce
-  // address arithmetic. Bounded waves, ownership, tiles, and the fixed dBias
-  // tree are identical to the runtime-N fallback used by every other length.
-  switch (sequence) {
-    case 384:
-      launch<HeadDim, 384>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dq, out_dbias, workspace, sequence, heads,
-                           batch, query_span, resident_leaves, batch_chunk,
-                           stream);
-      break;
-    case 640:
-      launch<HeadDim, 640>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dq, out_dbias, workspace, sequence, heads,
-                           batch, query_span, resident_leaves, batch_chunk,
-                           stream);
-      break;
-    case 768:
-      launch<HeadDim, 768>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dq, out_dbias, workspace, sequence, heads,
-                           batch, query_span, resident_leaves, batch_chunk,
-                           stream);
-      break;
-    default:
-      launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                         out_dq, out_dbias, workspace, sequence, heads, batch,
-                         query_span, resident_leaves, batch_chunk, stream);
-      break;
+  // One lane for every length: the exact-tiles contract (sequence padded
+  // to the tile quantum by the facade) folds all guards at compile time
+  // with sequence still a pure runtime value. Unpadded lengths from direct
+  // ABI callers take the guarded fallback.
+  if (sequence % kQueryBlock == 0 && sequence % kOuterLeaf == 0) {
+    launch<HeadDim, -1>(q, k, v, d_output, logsumexp, delta, mask, bias,
+                        out_dq, out_dbias, workspace, sequence, heads,
+                        batch, query_span, resident_leaves, batch_chunk,
+                        stream);
+  } else {
+    launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
+                       out_dq, out_dbias, workspace, sequence, heads, batch,
+                       query_span, resident_leaves, batch_chunk, stream);
   }
 }
 

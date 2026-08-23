@@ -122,8 +122,12 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     int heads,
     int batch,
     float scale) {
+  // StaticSequence == -1: the production exact-tiles lane -- sequence is
+  // a pure runtime parameter under the facade's pad-to-tile contract, so
+  // every tail guard is compile-time true and vanishes. StaticSequence
+  // == 0 keeps the fully guarded fallback for unpadded direct callers.
   const int sequence =
-      StaticSequence == 0 ? runtime_sequence : StaticSequence;
+      StaticSequence > 0 ? StaticSequence : runtime_sequence;
   constexpr bool kExact = StaticSequence != 0;
   constexpr int kStride = HeadDim + 8;
   const int tid = threadIdx.x;
@@ -250,9 +254,24 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     }
 
     // Elementwise: P^T = exp(S^T*scale + mask + bias - LSE[q]);
-    // dS^T = P^T * (dP^T - delta[q]). Column index = query.
+    // dS^T = P^T * (dP^T - delta[q]). Column index = query. The bias row
+    // offset query*sequence is strength-reduced to one multiply per tile
+    // plus per-element adds (the static lanes used to get this for free
+    // from the constant length; the runtime lane must do it by hand --
+    // the address values are unchanged, so results stay bit-identical).
+    // D16 is issue-bound and needs the reduction; D32 is memory-bound and
+    // schedules better with the plain per-element form. Address values are
+    // identical either way.
+    constexpr bool kReduceBiasAddress = HeadDim == 16;
+    const int64_t bias_query_base = kReduceBiasAddress
+        ? bias_base + static_cast<int64_t>(query_start) * sequence
+        : bias_base;
+    const int pair_row_offset =
+        kReduceBiasAddress ? thread_in_group * 2 * sequence : 0;
 #pragma unroll
     for (int column = 0; column < kQueryTile / 8; ++column) {
+      const int column_row_offset =
+          kReduceBiasAddress ? column * 8 * sequence : 0;
 #pragma unroll
       for (int half = 0; half < 2; ++half) {
         const int key_row = half == 0 ? key_row_low : key_row_high;
@@ -268,8 +287,13 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
             const float value = score[column].v[index] * scale +
                 mask[mask_base + key_row] +
                 __bfloat162float(
-                    bias[bias_base +
-                         static_cast<int64_t>(query) * sequence + key_row]);
+                    bias[kReduceBiasAddress
+                             ? bias_query_base + column_row_offset +
+                                   pair_row_offset + pair * sequence +
+                                   key_row
+                             : bias_query_base +
+                                   static_cast<int64_t>(query) * sequence +
+                                   key_row]);
             const float lse = logsumexp[stats];
             probability = lse == -std::numeric_limits<float>::infinity()
                 ? 0.0F
@@ -441,27 +465,15 @@ void dispatch_sequence(
     int heads,
     int batch,
     cudaStream_t stream) {
-  // These lanes only remove bounds/address arithmetic for the three official
-  // training crops. They use the exact same tiles and reduction contract as
-  // the runtime-N fallback, which remains the functional production path for
-  // every other device-feasible sequence length.
-  switch (sequence) {
-    case 384:
-      launch<HeadDim, 384>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dk, out_dv, sequence, heads, batch, stream);
-      break;
-    case 640:
-      launch<HeadDim, 640>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dk, out_dv, sequence, heads, batch, stream);
-      break;
-    case 768:
-      launch<HeadDim, 768>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                           out_dk, out_dv, sequence, heads, batch, stream);
-      break;
-    default:
-      launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
-                         out_dk, out_dv, sequence, heads, batch, stream);
-      break;
+  // One lane for every length: the exact-tiles contract (sequence padded
+  // to the tile quantum by the facade) folds all guards at compile time
+  // with sequence still runtime. Unpadded lengths take the guarded lane.
+  if (sequence % kKeyBlock == 0 && sequence % kQueryTile == 0) {
+    launch<HeadDim, -1>(q, k, v, d_output, logsumexp, delta, mask, bias,
+                        out_dk, out_dv, sequence, heads, batch, stream);
+  } else {
+    launch<HeadDim, 0>(q, k, v, d_output, logsumexp, delta, mask, bias,
+                       out_dk, out_dv, sequence, heads, batch, stream);
   }
 }
 

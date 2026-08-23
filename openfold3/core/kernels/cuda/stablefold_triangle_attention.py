@@ -23,6 +23,10 @@ _SUPPORTED_HEAD_DIMS = frozenset((16, 32))
 _MAX_GRID_X = 2_147_483_647
 _MAX_GRID_YZ = 65_535
 _SMALLEST_QUERY_BLOCK = 32
+# LCM of every kernel tile axis (forward 64x64 blocks, dK/dV 64-key blocks,
+# dQ/dBias 32-row query blocks and 4-outer leaves): padded sequences hit
+# the exact-tiles lanes in all three kernels.
+_PAD_QUANTUM = 64
 _MAX_BROADCAST_PREFIX_RANK = 16
 
 _FORWARD: Any = None
@@ -228,6 +232,31 @@ def stablefold_triangle_attention(
     global _INVOCATIONS
     _INVOCATIONS += 1
     prefix = q.shape[:-4]
+    sequence = int(q.shape[-2])
+
+    # Pad-to-tile contract: sequences are padded to the kernel tile quantum
+    # so the single exact-tiles lane (no tail guards) serves every length.
+    # Padded key columns carry a -inf mask, so every real-region value and
+    # gradient is bit-identical to an unpadded computation; padded rows are
+    # sliced away below and their gradients are exact zeros. F.pad/slice are
+    # autograd-native, so q/k/v/bias gradients flow back unpadded.
+    padding = (-sequence) % _PAD_QUANTUM
+    if padding:
+        pad_qkv = (0, 0, 0, padding, 0, 0, 0, padding)
+        q = torch.nn.functional.pad(q, pad_qkv)
+        k = torch.nn.functional.pad(k, pad_qkv)
+        v = torch.nn.functional.pad(v, pad_qkv)
+        pair_bias = torch.nn.functional.pad(
+            pair_bias, (0, padding, 0, padding)
+        )
+        padded = sequence + padding
+        padded_mask = res_mask.new_full(
+            tuple(res_mask.shape[:-4]) + (padded, 1, 1, padded),
+            float("-inf"),
+        )
+        padded_mask[..., :sequence, :, :, :sequence] = res_mask
+        res_mask = padded_mask
+
     shape = tuple(q.shape[-4:])
     batch = 1
     for dim in prefix:
@@ -262,6 +291,8 @@ def stablefold_triangle_attention(
         tuple(prefix),
         tuple(pair_bias.shape[:-4]),
     )
+    if padding:
+        output_internal = output_internal[:, :sequence, :, :sequence, :]
     output = output_internal.transpose(-2, -3).contiguous()
     return output.reshape(prefix + output.shape[1:])
 
