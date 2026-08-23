@@ -70,6 +70,7 @@ def load_extension(*, verbose: bool | None = None) -> Any:
             expected_symbols=(
                 "stablefold_triangle_dq_dbias_out",
                 "stablefold_reduce_broadcast_dbias_out",
+                "stablefold_triangle_sr_backward_out",
             ),
             verbose=bool(verbose),
         )

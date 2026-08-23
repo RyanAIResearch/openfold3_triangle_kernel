@@ -33,6 +33,7 @@ def load_extension(*, verbose: bool | None = None) -> Any:
             expected_symbols=(
                 "stablefold_triangle_forward_out",
                 "stablefold_pack_qkv",
+                "stablefold_triangle_forward_shadow_out",
             ),
             verbose=bool(verbose),
         )
