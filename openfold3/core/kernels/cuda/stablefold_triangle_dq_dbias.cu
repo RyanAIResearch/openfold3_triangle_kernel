@@ -505,18 +505,77 @@ constexpr int kQueryBlockWg = 64;
 // threads = 16 warps) while staging traffic per query row stays halved.
 constexpr int kThreadsWg = 2 * kThreads;
 constexpr int kSlotsPerWarpgroup = 2;
+// Padded shared strides: the FP32 tree at a raw kKeyTile stride wraps the
+// 32 banks exactly (128B) so every row hits one bank; +1 float staggers
+// rows across banks.  The BF16 bias slab gets +4 halves for the same
+// reason (64B rows alias two bank halves).
+constexpr int kTreeStride = kKeyTile + 1;
+constexpr int kBiasStride = kKeyTile + 4;
 
+// Compact swizzled tiles (stride == HeadDim elements) feed the ss-wgmma
+// descriptors.  The universal swizzle law (dump-probe verified in the dkdv
+// campaign): the 16B-atom XOR advances once per 128 bytes of tile offset.
 template <int HeadDim>
-__device__ __forceinline__ __nv_bfloat16* shared_bias_cell_wg(
-    __nv_bfloat16* sq, int query, int key) {
-  constexpr int kQStride = HeadDim + 8;
-  const int owner_slot = key >> 3;
-  return sq + owner_slot * kQueryBlockWg * kQStride + query * kQStride +
-      HeadDim + (key & 7);
+__device__ __forceinline__ int wg_swz_col(int row, int col) {
+  constexpr int kAtoms = HeadDim / 8;
+  const int atom = (col >> 3) ^ (((row * HeadDim) >> 6) & (kAtoms - 1));
+  return atom * 8 + (col & 7);
 }
 
+// B for dS@K over a compact swizzled K tile: contraction over 16 keys,
+// n = 8 dims (the legacy keytrans read, swizzle-aware).
+template <int HeadDim>
+__device__ __forceinline__ void ldmatrix_b_keytrans_sw(
+    const __nv_bfloat16* tile, int key_start, int dim_start, int lane,
+    uint32_t (&frag)[2]) {
+  const int key = key_start + (lane & 15);
+  const uint32_t addr = shared_u32(
+      tile + key * HeadDim + wg_swz_col<HeadDim>(key, dim_start));
+  asm volatile(
+      "ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n"
+      : "=r"(frag[0]), "=r"(frag[1])
+      : "r"(addr));
+}
+
+// ss m64n32k16 with both operands from compact swizzled-tile descriptors;
+// the universal (LBO=64, SBO=HeadDim/16B, trans=0) encoding serves the
+// A-m64 and B-k16n32 interpretations (probe: bitwise vs the mma.sync
+// chain).  Accumulator layout equals the per-warp m16n8 fragments.
+__device__ __forceinline__ void wg_ss_wgmma_m64n32k16(
+    Acc (&o)[4], uint64_t descriptor_a, uint64_t descriptor_b,
+    int accumulate) {
+  asm volatile(
+      "{\n"
+      "  .reg .pred use_acc;\n"
+      "  setp.ne.b32 use_acc, %18, 0;\n"
+      "  wgmma.mma_async.sync.aligned.m64n32k16.f32.bf16.bf16 "
+      "  {%0,%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15},"
+      "  %16, %17, use_acc, 1, 1, 0, 0;\n"
+      "}\n"
+      : "+f"(o[0].v[0]), "+f"(o[0].v[1]), "+f"(o[0].v[2]), "+f"(o[0].v[3]),
+        "+f"(o[1].v[0]), "+f"(o[1].v[1]), "+f"(o[1].v[2]), "+f"(o[1].v[3]),
+        "+f"(o[2].v[0]), "+f"(o[2].v[1]), "+f"(o[2].v[2]), "+f"(o[2].v[3]),
+        "+f"(o[3].v[0]), "+f"(o[3].v[1]), "+f"(o[3].v[2]), "+f"(o[3].v[3])
+      : "l"(descriptor_a), "l"(descriptor_b), "r"(accumulate));
+}
+
+__device__ __forceinline__ void wg_wgmma_fence() {
+  asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void wg_wgmma_commit() {
+  asm volatile("wgmma.commit_group.sync.aligned;\n" ::: "memory");
+}
+
+__device__ __forceinline__ void wg_wgmma_wait_zero() {
+  asm volatile("wgmma.wait_group.sync.aligned 0;\n" ::: "memory");
+}
+
+// minBlocksPerMultiprocessor=2 keeps ptxas at <=128 registers: without it
+// the wgmma async live-ranges push allocation to 164 regs and occupancy
+// collapses to one CTA per SM (measured).
 template <int HeadDim, bool TaskInGridZ, bool OuterEqSeq>
-__global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
+__global__ __launch_bounds__(kThreadsWg, 2) void stablefold_dq_dbias_wg_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -538,8 +597,6 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
     int leaf_base,
     int io_dim,
     float scale) {
-  constexpr int kQStride = HeadDim + 8;
-  constexpr int kKVStride = HeadDim + 8;
   const int lane = threadIdx.x & (kWarpSize - 1);
   const int warp = threadIdx.x / kWarpSize;
   const int warpgroup = warp / kWarpsPerBlock;
@@ -556,12 +613,18 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
   const int group = lane >> 2;
   const int thread_in_group = lane & 3;
 
-  extern __shared__ __align__(16) unsigned char smem_raw[];
+  // Compact swizzled tiles (stride == HeadDim): the ss-wgmma descriptors
+  // and their ldmatrix co-consumers share one layout.  1024-byte base
+  // alignment keeps the written swizzle pattern congruent with the
+  // hardware's descriptor view (the dkdv misalignment lesson).
+  extern __shared__ __align__(1024) unsigned char smem_raw[];
   __nv_bfloat16* sq = reinterpret_cast<__nv_bfloat16*>(smem_raw);
-  __nv_bfloat16* sdo = sq + kOuterLeaf * kQueryBlockWg * kQStride;
-  __nv_bfloat16* skv = sdo + kOuterLeaf * kQueryBlockWg * kQStride;
-  float* sbias_acc = reinterpret_cast<float*>(
-      skv + kOuterLeaf * 2 * kKeyTile * kKVStride);
+  __nv_bfloat16* sdo = sq + kOuterLeaf * kQueryBlockWg * HeadDim;
+  __nv_bfloat16* skv = sdo + kOuterLeaf * kQueryBlockWg * HeadDim;
+  __nv_bfloat16* sbias_tile = skv + kOuterLeaf * 2 * kKeyTile * HeadDim;
+  float* smask_tiles = reinterpret_cast<float*>(
+      sbias_tile + kQueryBlockWg * kBiasStride);
+  float* sbias_acc = smask_tiles + kOuterLeaf * kKeyTile;
 
   const int64_t plane_base =
       (((static_cast<int64_t>(wave_leaf) * batch_capacity + local_batch) *
@@ -575,46 +638,45 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
        query_start) *
       static_cast<int64_t>(sequence);
 
+  // Per-slot global bases are recomputed at each (infrequent) staging use:
+  // four resident int64[4] arrays cost ~32 registers against the 128-cap
+  // and buy nothing in the hot loop.
   const int oc = OuterEqSeq ? sequence : outer_count;
+  const auto slot_plane = [&](int slot) -> int64_t {
+    const int outer = leaf * kOuterLeaf + slot;
+    const int outer_load = outer < oc ? outer : oc - 1;
+    return static_cast<int64_t>(batch_index) * oc + outer_load;
+  };
   float outer_mult[kOuterLeaf];
-  int64_t row_stats_base_arr[kOuterLeaf];
-  int64_t tensor_base_arr[kOuterLeaf];
-  int64_t dout_base_arr[kOuterLeaf];
-  int64_t mask_base_arr[kOuterLeaf];
 #pragma unroll
   for (int slot = 0; slot < kOuterLeaf; ++slot) {
-    const int outer = leaf * kOuterLeaf + slot;
-    const bool outer_valid = outer < oc;
-    outer_mult[slot] = outer_valid ? 1.0F : 0.0F;
-    const int outer_load = outer_valid ? outer : oc - 1;
-    const int64_t plane =
-        static_cast<int64_t>(batch_index) * oc + outer_load;
-    row_stats_base_arr[slot] =
-        (plane * heads + head) * static_cast<int64_t>(sequence);
-    tensor_base_arr[slot] = row_stats_base_arr[slot] * io_dim;
-    dout_base_arr[slot] =
-        plane * static_cast<int64_t>(sequence) * heads * io_dim +
-        static_cast<int64_t>(head) * io_dim;
-    mask_base_arr[slot] = plane * sequence;
+    outer_mult[slot] = leaf * kOuterLeaf + slot < oc ? 1.0F : 0.0F;
   }
 
   // q/dO are key-invariant: stage all four outers once, block-cooperatively.
 #pragma unroll 1
   for (int slot = 0; slot < kOuterLeaf; ++slot) {
-    __nv_bfloat16* dst_q = sq + slot * kQueryBlockWg * kQStride;
-    __nv_bfloat16* dst_do = sdo + slot * kQueryBlockWg * kQStride;
+    __nv_bfloat16* dst_q = sq + slot * kQueryBlockWg * HeadDim;
+    __nv_bfloat16* dst_do = sdo + slot * kQueryBlockWg * HeadDim;
+    const int64_t plane = slot_plane(slot);
+    const int64_t tensor_base =
+        (plane * heads + head) * static_cast<int64_t>(sequence) * io_dim;
+    const int64_t dout_base =
+        plane * static_cast<int64_t>(sequence) * heads * io_dim +
+        static_cast<int64_t>(head) * io_dim;
     for (int element = threadIdx.x; element < kQueryBlockWg * HeadDim;
          element += kThreadsWg) {
       const int row = element / HeadDim;
       const int col = element - row * HeadDim;
       const int gq = query_start + row;
-      const int64_t src = tensor_base_arr[slot] +
+      const int64_t src = tensor_base +
           static_cast<int64_t>(gq) * io_dim + col;
-      const int64_t dout_src = dout_base_arr[slot] +
+      const int64_t dout_src = dout_base +
           static_cast<int64_t>(gq) * heads * io_dim + col;
-      dst_q[row * kQStride + col] =
+      const int dst_index = row * HeadDim + wg_swz_col<HeadDim>(row, col);
+      dst_q[dst_index] =
           col < io_dim ? q[src] : __float2bfloat16_rn(0.0F);
-      dst_do[row * kQStride + col] =
+      dst_do[dst_index] =
           col < io_dim ? d_output[dout_src] : __float2bfloat16_rn(0.0F);
     }
   }
@@ -627,11 +689,13 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
 #pragma unroll
   for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
     const int slot = warpgroup * kSlotsPerWarpgroup + local;
+    const int64_t row_stats_base = (slot_plane(slot) * heads + head) *
+        static_cast<int64_t>(sequence);
 #pragma unroll
     for (int half = 0; half < 2; ++half) {
       const int qrow =
           query_start + warp_in_group * kQueryTile + group + half * 8;
-      const int64_t stats = row_stats_base_arr[slot] + qrow;
+      const int64_t stats = row_stats_base + qrow;
       lse_arr[local][half] = logsumexp[stats];
       delta_arr[local][half] = delta[stats];
     }
@@ -649,18 +713,21 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
   const auto stage_kv_and_bias = [&](int key_start) {
 #pragma unroll 1
     for (int slot = 0; slot < kOuterLeaf; ++slot) {
-      __nv_bfloat16* dst_k = skv + slot * 2 * kKeyTile * kKVStride;
-      __nv_bfloat16* dst_v = dst_k + kKeyTile * kKVStride;
+      __nv_bfloat16* dst_k = skv + slot * 2 * kKeyTile * HeadDim;
+      __nv_bfloat16* dst_v = dst_k + kKeyTile * HeadDim;
+      const int64_t tensor_base = (slot_plane(slot) * heads + head) *
+          static_cast<int64_t>(sequence) * io_dim;
       for (int element = threadIdx.x; element < kKeyTile * HeadDim;
            element += kThreadsWg) {
         const int row = element / HeadDim;
         const int col = element - row * HeadDim;
         const int gk = key_start + row;
-        const int64_t src = tensor_base_arr[slot] +
+        const int64_t src = tensor_base +
             static_cast<int64_t>(gk) * io_dim + col;
-        dst_k[row * kKVStride + col] =
+        const int dst_index = row * HeadDim + wg_swz_col<HeadDim>(row, col);
+        dst_k[dst_index] =
             col < io_dim ? k[src] : __float2bfloat16_rn(0.0F);
-        dst_v[row * kKVStride + col] =
+        dst_v[dst_index] =
             col < io_dim ? v[src] : __float2bfloat16_rn(0.0F);
       }
     }
@@ -668,9 +735,18 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
          element += kThreadsWg) {
       const int row = element / kKeyTile;
       const int key = element - row * kKeyTile;
-      *shared_bias_cell_wg<HeadDim>(sq, row, key) =
+      sbias_tile[row * kBiasStride + key] =
           bias[bias_base + static_cast<int64_t>(row) * sequence +
                key_start + key];
+    }
+    // Additive mask depends only on (outer plane, key): one FP32 row per
+    // slot replaces sixteen per-thread global reads per slot-tile.
+    for (int element = threadIdx.x; element < kOuterLeaf * kKeyTile;
+         element += kThreadsWg) {
+      const int slot = element / kKeyTile;
+      const int key = element - slot * kKeyTile;
+      smask_tiles[element] =
+          mask[slot_plane(slot) * sequence + key_start + key];
     }
   };
 
@@ -688,42 +764,57 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
 #pragma unroll
     for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
       const int slot = warpgroup * kSlotsPerWarpgroup + local;
-      const __nv_bfloat16* tile_q = sq + slot * kQueryBlockWg * kQStride +
-          warp_in_group * kQueryTile * kQStride;
-      const __nv_bfloat16* tile_do = sdo + slot * kQueryBlockWg * kQStride +
-          warp_in_group * kQueryTile * kQStride;
-      const __nv_bfloat16* tile_k = skv + slot * 2 * kKeyTile * kKVStride;
-      const __nv_bfloat16* tile_v = tile_k + kKeyTile * kKVStride;
+      const __nv_bfloat16* tile_q = sq + slot * kQueryBlockWg * HeadDim;
+      const __nv_bfloat16* tile_do = sdo + slot * kQueryBlockWg * HeadDim;
+      const __nv_bfloat16* tile_k = skv + slot * 2 * kKeyTile * HeadDim;
+      const __nv_bfloat16* tile_v = tile_k + kKeyTile * HeadDim;
 
-      uint32_t q_frags[HeadDim / 16][4];
-      uint32_t do_frags[HeadDim / 16][4];
-#pragma unroll
-      for (int chain = 0; chain < HeadDim / 16; ++chain) {
-        ldmatrix_a16x16(tile_q, kQStride, chain * 16, lane, q_frags[chain]);
-        ldmatrix_a16x16(tile_do, kQStride, chain * 16, lane, do_frags[chain]);
-      }
-
+      // S = Q.K^T and dP = dO.V^T as chained ss m64n32k16 issued by this
+      // warpgroup: A = the slot's 64-row q/dO tile, B = its 32-key K/V
+      // tile, all via the universal descriptor encoding.  The accumulator
+      // rows land on this warp's 16 query rows, matching the legacy
+      // per-warp m16n8 fragment layout, so the elementwise recompute and
+      // the dQ mma below are untouched.
+      constexpr uint64_t kSsMode =
+          HeadDim == 16 ? 3 : (HeadDim == 32 ? 2 : 1);
+      constexpr uint64_t kSsLbo = 64;
+      constexpr uint64_t kSsSbo = HeadDim;
       Acc score[kKeyTile / 8];
       Acc dp[kKeyTile / 8];
 #pragma unroll
       for (int column = 0; column < kKeyTile / 8; ++column) {
         score[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
         dp[column] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
-#pragma unroll
-        for (int chain = 0; chain < HeadDim / 16; ++chain) {
-          uint32_t b_frag[2];
-          ldmatrix_b_dimpair(
-              tile_k, kKVStride, column * 8, chain * 16, lane, b_frag);
-          mma_m16n8k16(score[column], q_frags[chain], b_frag);
-          ldmatrix_b_dimpair(
-              tile_v, kKVStride, column * 8, chain * 16, lane, b_frag);
-          mma_m16n8k16(dp[column], do_frags[chain], b_frag);
-        }
       }
+      wg_wgmma_fence();
+#pragma unroll
+      for (int chain = 0; chain < HeadDim / 16; ++chain) {
+        const uint64_t chain_off = static_cast<uint64_t>(chain) * 32;
+        const uint64_t desc_q =
+            ((static_cast<uint64_t>(shared_u32(tile_q)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        const uint64_t desc_k =
+            ((static_cast<uint64_t>(shared_u32(tile_k)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        wg_ss_wgmma_m64n32k16(score, desc_q, desc_k, chain != 0);
+      }
+#pragma unroll
+      for (int chain = 0; chain < HeadDim / 16; ++chain) {
+        const uint64_t chain_off = static_cast<uint64_t>(chain) * 32;
+        const uint64_t desc_do =
+            ((static_cast<uint64_t>(shared_u32(tile_do)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        const uint64_t desc_v =
+            ((static_cast<uint64_t>(shared_u32(tile_v)) + chain_off) >> 4) |
+            (kSsLbo << 16) | (kSsSbo << 32) | (kSsMode << 62);
+        wg_ss_wgmma_m64n32k16(dp, desc_do, desc_v, chain != 0);
+      }
+      wg_wgmma_commit();
+      wg_wgmma_wait_zero();
 
-      float* tree = sbias_acc + warpgroup * (kQueryBlockWg * kKeyTile);
+      float* tree = sbias_acc + warpgroup * (kQueryBlockWg * kTreeStride);
       const float slot_mult = outer_mult[slot];
-      const int64_t slot_mask_base = mask_base_arr[slot];
+      const float* slot_mask = smask_tiles + slot * kKeyTile;
 #pragma unroll
       for (int column = 0; column < kKeyTile / 8; ++column) {
 #pragma unroll
@@ -732,18 +823,14 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
           const float dlt = delta_arr[local][half];
 #pragma unroll
           for (int pair = 0; pair < 2; ++pair) {
-            const int key = key_start + column * 8 + thread_in_group * 2 +
-                pair;
+            const int tile_key = column * 8 + thread_in_group * 2 + pair;
             const int block_row =
                 warp_in_group * kQueryTile + group + half * 8;
             const int index = half * 2 + pair;
             const float value = score[column].v[index] * scale +
-                mask[slot_mask_base + key] +
+                slot_mask[tile_key] +
                 __bfloat162float(
-                    *shared_bias_cell_wg<HeadDim>(
-                        sq,
-                        block_row,
-                        column * 8 + thread_in_group * 2 + pair));
+                    sbias_tile[block_row * kBiasStride + tile_key]);
             const float probability =
                 lse == -std::numeric_limits<float>::infinity()
                 ? 0.0F
@@ -753,8 +840,7 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
               d_score *= slot_mult;
             }
             score[column].v[index] = d_score;
-            const int cell = block_row * kKeyTile + column * 8 +
-                thread_in_group * 2 + pair;
+            const int cell = block_row * kTreeStride + tile_key;
             if (local == 0) {
               tree[cell] = d_score;
             } else {
@@ -778,8 +864,8 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
 #pragma unroll
         for (int tile = 0; tile < HeadDim / 8; ++tile) {
           uint32_t k_frag[2];
-          ldmatrix_b_keytrans(
-              tile_k, kKVStride, chunk * 16, tile * 8, lane, k_frag);
+          ldmatrix_b_keytrans_sw<HeadDim>(
+              tile_k, chunk * 16, tile * 8, lane, k_frag);
           mma_m16n8k16(dq_acc[local][tile], ds_frag, k_frag);
         }
       }
@@ -794,9 +880,10 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
          index += kThreadsWg) {
       const int row = index / kKeyTile;
       const int key = index - row * kKeyTile;
+      const int cell = row * kTreeStride + key;
       const float tile_sum = __fadd_rn(
-          sbias_acc[index],
-          sbias_acc[kQueryBlockWg * kKeyTile + index]);
+          sbias_acc[cell],
+          sbias_acc[kQueryBlockWg * kTreeStride + cell]);
       workspace[plane_tile_base + static_cast<int64_t>(row) * sequence +
                 key] = __float2bfloat16_rn(tile_sum);
     }
@@ -812,7 +899,8 @@ __global__ __launch_bounds__(kThreadsWg) void stablefold_dq_dbias_wg_kernel(
     if (outer_mult[slot] == 0.0F) {
       continue;
     }
-    const int64_t dq_row_base = tensor_base_arr[slot] +
+    const int64_t dq_row_base = (slot_plane(slot) * heads + head) *
+        static_cast<int64_t>(sequence) * io_dim +
         static_cast<int64_t>(query_start) * io_dim;
 #pragma unroll
     for (int tile = 0; tile < HeadDim / 8; ++tile) {
@@ -1178,13 +1266,14 @@ void launch_wg(
     int batch_chunk,
     int io_dim,
     cudaStream_t stream) {
-  constexpr int kQStride = HeadDim + 8;
-  constexpr int kKVStride = HeadDim + 8;
   constexpr int kSharedBytesWg =
-      (2 * kOuterLeaf * kQueryBlockWg * kQStride +
-       kOuterLeaf * 2 * kKeyTile * kKVStride) *
+      (2 * kOuterLeaf * kQueryBlockWg * HeadDim +
+       kOuterLeaf * 2 * kKeyTile * HeadDim +
+       kQueryBlockWg * kBiasStride) *
           static_cast<int>(sizeof(__nv_bfloat16)) +
-      2 * kQueryBlockWg * kKeyTile * static_cast<int>(sizeof(float));
+      (kOuterLeaf * kKeyTile +
+       2 * kQueryBlockWg * kTreeStride) *
+          static_cast<int>(sizeof(float));
   const float scale = 1.0F / std::sqrt(static_cast<float>(io_dim));
   const int leaves = (outer_count + kOuterLeaf - 1) / kOuterLeaf;
   const bool outer_eq = outer_count == sequence;
@@ -1351,7 +1440,11 @@ void dispatch_sequence(
   // to the tile quantum by the facade) folds all guards at compile time
   // with sequence still a pure runtime value. Unpadded lengths from direct
   // ABI callers take the guarded fallback.
-  if (sequence % kQueryBlockWg == 0 && query_span % kQueryBlockWg == 0) {
+  if (HeadDim <= 64 && sequence % kQueryBlockWg == 0 &&
+      query_span % kQueryBlockWg == 0) {
+    // D=128 keeps the legacy lanes: the warpgroup lane's swizzle-descriptor
+    // encoding covers the shipped {16,32,64} storage dims (capability
+    // routing, not a shape specialization).
     launch_wg<HeadDim>(q, k, v, d_output, logsumexp, delta, mask, bias,
                        out_dq, out_dbias, workspace, sequence, outer_count,
                        heads, batch, query_span, resident_leaves,
