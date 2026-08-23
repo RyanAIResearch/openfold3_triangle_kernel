@@ -136,7 +136,6 @@ class TriangleAttention(nn.Module):
             if any(
                 (
                     use_deepspeed_evo_attention,
-                    use_cueq_triangle_kernels,
                     use_triton_triangle_kernels,
                     use_lma,
                 )
@@ -145,6 +144,10 @@ class TriangleAttention(nn.Module):
                     "stable Triangle Attention is mutually exclusive with all "
                     "other attention backends"
                 )
+            # use_cueq_triangle_kernels composes: it keeps governing the
+            # non-attention triangle kernels (multiplicative update), while
+            # stable Triangle Attention owns the attention site.
+            use_cueq_triangle_kernels = False
 
         if mask is None:
             # [*, I, J]
