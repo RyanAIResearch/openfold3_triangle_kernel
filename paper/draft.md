@@ -30,8 +30,11 @@ $\delta=dO\cdot O_{\mathrm{bf16}}$ carries a coherent row bias that
 surfaces on trained checkpoints, and a compressed rounding-residual saved
 by the forward recovers the perfect-delta floor. On H100, StableFold's
 backward runs 21–26% faster than our production baseline across
-OpenFold3 crops, trains real OpenFold3 steps faster than NVIDIA
-cuEquivariance end to end [F5: n-block CI pending], and replays bitwise.
+OpenFold3 crops, trains real OpenFold3 steps 3.5–4.5% faster (steady-state) than NVIDIA
+cuEquivariance end to end — mean wall margin −9.5 s per 30 steps, bootstrap
+95% CI [−11.5, −6.5] s over four order-balanced blocks, with the same-seed
+loss gap inside cuEquivariance's own run-to-run scatter — and replays
+bitwise.
 
 ---
 
@@ -151,5 +154,30 @@ serving a single kernel.
 
 ---
 
-TODO next: §2 Background, §3 model+invariance statement. Keep §1 numbers
-in sync with F5/T5 once sr_stats_blocks lands.
+## Results notes (data landed 2026-08-22, feeds F4/F5/F6/T5)
+
+- F5/T5: scratch blocks cueq {736.5, 739.8, 739.3, 739.6} vs SR {731.6,
+  728.1, 729.3, 728.4}; margins {−4.9, −11.7, −10.0, −11.3}; mean −9.46 s
+  (−1.28%); bootstrap 95% CI [−11.46, −6.50]; steady-state per-step
+  cueq 8.824–8.842 vs SR 8.517–8.540 (SR spread 23 ms across runs).
+  Pretrained: 785.6 vs 777.8 (−7.8 s); steady 8.962 vs 8.556 (−4.5%).
+- F6 (referee): cueq 4-run self-envelope mean 3.64e-3 / max 1.49e-2;
+  SR 4-run envelope mean 2.29e-3 (−37%); SR-vs-cueq same-seed |dloss|
+  mean 8.76e-4 scratch / 9.69e-4 pretrained — inside the envelope, both
+  regimes. Full-model bitwise collapse is NOT claimed: surrounding stock
+  ops are nondeterministic (known: official-arm self-replay fails ~half
+  its steps); scoped claim = our kernels replay bitwise, model scatter
+  tightens.
+- F4 new columns: D=32 sites @640 (skip20/60): classic dq 0.0059–0.0195
+  (brackets the archived 0.0121 pre-fix D32 baseline — second
+  cross-validation), shadow 0.0035–0.0057, perfect 0.0033–0.0042.
+  384/D=16: classic 0.0061–0.0092, shadow 0.0038–0.0085, perfect ~0.0035.
+- **APB-site discovery** (case [1,O=1,H=16,N=640,D=24], skip60): classic
+  delta corrupts dQ by 0.81 RELATIVE (dbias 0.12); bf16 shadow recovers
+  to 0.17; fp32 shadow = perfect (0.0036). Mechanism: saturated softmax
+  makes the true gradient tiny, so the coherent delta bias dominates
+  relatively. Report relative AND absolute; this is the strongest case
+  for the fp32-shadow tier and a new failure-mode datapoint for classic
+  delta far beyond the known 1e-2 class.
+
+TODO next: §2 Background, §3 model+invariance statement.
