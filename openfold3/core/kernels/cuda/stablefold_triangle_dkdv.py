@@ -26,7 +26,7 @@ def load_extension(*, verbose: bool | None = None) -> Any:
 
         _EXTENSION = load_extension_module(
             module_key="stablefold_dkdv",
-            aot_module="openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
+            aot_module="openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
             source=Path(__file__).with_suffix(".cu"),
             expected_symbols=(
                 "stablefold_triangle_dkdv_out",
@@ -70,13 +70,14 @@ def stablefold_triangle_dkdv(
     tuple[torch.Tensor, torch.Tensor]
     | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 ):
-    """dK/dV; optionally also the consistent delta_true = sum_k P_k dP_k.
+    """dK/dV; optionally also the recomputed delta_true row scalar.
 
     With ``emit_delta_true`` the kernel additionally folds the row scalars
-    T = sum_k w dP and Z = sum_k w per key block (fixed order, single
-    writer, zero atomics) and a follow-up reduce produces
-    ``delta_true = T/Z`` in the lse/delta row layout. dK/dV bits are
-    identical in both modes.
+    ``T = sum_k w dP`` per key block (fixed order, single writer, zero
+    atomics), and a follow-up reduce produces ``delta_true = T`` in the
+    lse/delta row layout. The normalization divide is intentionally omitted:
+    the recomputed ``sum(w)`` was measured within 1.3e-6 of one. dK/dV bits
+    are identical in both modes.
     """
 
     if out_dk is None:

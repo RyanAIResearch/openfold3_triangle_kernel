@@ -1,7 +1,7 @@
 # Modified by RyanAIResearch in 2026 to package StableFold Triangle Attention.
 
 [build-system]
-# CUDAExtension imports the exact runtime Torch ABI.  The canonical sm_90
+# CUDAExtension imports the exact runtime Torch ABI.  The canonical sm_90a
 # builder therefore uses ``pip wheel --no-build-isolation`` inside the
 # pinned Python 3.14 / Torch 2.10 / CUDA 12.9 environment.
 requires = ["setuptools", "wheel", "setuptools-scm>=8"]

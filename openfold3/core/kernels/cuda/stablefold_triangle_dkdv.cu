@@ -1426,6 +1426,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
       "stablefold_triangle_dkdv_delta_true_out",
       &stablefold_triangle_dkdv_delta_true_out,
-      "StableFold dK/dV plus the consistent delta_true = sum(P*dP) row "
+      "StableFold dK/dV plus the recomputed delta_true = sum(P*dP) row "
       "scalars (fixed-order key-block fold, zero atomics)");
 }

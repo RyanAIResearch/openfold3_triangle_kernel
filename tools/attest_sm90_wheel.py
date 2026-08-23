@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify and hash the ABI-locked sm_90 wheel."""
+"""Verify and hash the ABI-locked sm_90a wheel."""
 
 from __future__ import annotations
 
@@ -17,19 +17,25 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 EXPECTED_EXTENSIONS = {
     "stablefold_forward": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90",
-        "symbols": ["stablefold_triangle_forward_out"],
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
+        "symbols": [
+            "stablefold_triangle_forward_out",
+            "stablefold_pack_qkv",
+        ],
     },
     "stablefold_delta": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
         "symbols": ["stablefold_triangle_delta_out"],
     },
     "stablefold_dkdv": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
-        "symbols": ["stablefold_triangle_dkdv_out"],
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
+        "symbols": [
+            "stablefold_triangle_dkdv_out",
+            "stablefold_triangle_dkdv_delta_true_out",
+        ],
     },
     "stablefold_dq_dbias": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
         "symbols": [
             "stablefold_triangle_dq_dbias_out",
             "stablefold_reduce_broadcast_dbias_out",
@@ -84,8 +90,8 @@ def verify_binary_tools(
                 raise RuntimeError(f"duplicate initializer: {initializer}")
             initializers.add(initializer)
             elf_listing = command("cuobjdump", "--list-elf", str(binary))
-            if "sm_90" not in elf_listing:
-                raise RuntimeError(f"{member} has no sm_90 cubin")
+            if "sm_90a" not in elf_listing:
+                raise RuntimeError(f"{member} has no sm_90a cubin")
             ptx = command("cuobjdump", "--dump-ptx", str(binary))
             if ".version" in ptx:
                 raise RuntimeError(f"{member} unexpectedly embeds PTX")
@@ -121,11 +127,11 @@ def main() -> None:
         if manifest.get("schema_version") != 1 or not manifest.get("built"):
             raise RuntimeError("wheel contains an unbuilt manifest")
         if manifest.get("target") != {
-            "cuda_arch": "sm_90",
+            "cuda_arch": "sm_90a",
             "ptx_embedded": False,
-            "torch_cuda_arch_list": "9.0",
+            "torch_cuda_arch_list": "9.0a",
         }:
-            raise RuntimeError("wheel target contract is not sm_90 SASS-only")
+            raise RuntimeError("wheel target contract is not sm_90a SASS-only")
         abi = manifest.get("abi", {})
         if not str(abi.get("python_soabi", "")).startswith("cpython-314"):
             raise RuntimeError("wheel was not built for CPython 3.14")

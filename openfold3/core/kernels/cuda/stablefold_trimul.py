@@ -20,8 +20,9 @@ fixed-order kernels below.
 
 All reductions fixed-order, zero atomics, bitwise replay-deterministic.
 Contract (explicit reject, no silent specialization): c_hidden == c_z,
-C % 32 == 0, C <= 128, arbitrary N and batch.  This module also hosts the
-attention facade's fused QKV pack/gather (pack_rows3 / gather_rows1).
+C % 32 == 0, C <= 128, arbitrary N and batch.  Legacy pack/gather helpers
+remain for benchmark compatibility; production attention owns its fused QKV
+pack in the forward AOT extension and does not import this JIT module.
 """
 import torch
 from torch.utils.cpp_extension import load_inline

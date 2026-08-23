@@ -13,10 +13,10 @@ from pathlib import Path
 import torch
 
 MODULES = (
-    "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90",
-    "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90",
-    "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90",
-    "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90",
+    "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
+    "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
+    "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
+    "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
 )
 
 
@@ -43,7 +43,10 @@ def main() -> None:
 
     torch.manual_seed(20260809)
     device = torch.device("cuda:0")
-    prefix, sequence, heads, head_dim = 1, 65, 4, 32
+    # Exact 64-key tiles deliberately exercise the non-contiguous fused QKV
+    # pack. The old N=65 smoke padded Q/K/V first and missed this production
+    # fast path entirely.
+    prefix, sequence, heads, head_dim = 1, 64, 4, 32
 
     def projection_view() -> torch.Tensor:
         base = torch.randn(
@@ -58,6 +61,10 @@ def main() -> None:
         return base.transpose(-2, -3).detach().requires_grad_(True)
 
     q, k, v = projection_view(), projection_view(), projection_view()
+    q_contiguous, k_contiguous, v_contiguous = (
+        tensor.contiguous().detach().requires_grad_(True)
+        for tensor in (q, k, v)
+    )
     mask = torch.zeros(
         prefix,
         sequence,
@@ -77,10 +84,23 @@ def main() -> None:
         dtype=torch.bfloat16,
         requires_grad=True,
     )
+    bias_contiguous = bias.detach().clone().requires_grad_(True)
     before = invocation_count()
     output = stablefold_triangle_attention(q, k, v, mask, bias)
+    output_contiguous = stablefold_triangle_attention(
+        q_contiguous,
+        k_contiguous,
+        v_contiguous,
+        mask,
+        bias_contiguous,
+    )
     d_output = torch.randn_like(output)
     gradients = torch.autograd.grad(output, (q, k, v, bias), d_output)
+    gradients_contiguous = torch.autograd.grad(
+        output_contiguous,
+        (q_contiguous, k_contiguous, v_contiguous, bias_contiguous),
+        d_output,
+    )
     torch.cuda.synchronize()
     named = {
         "output": output,
@@ -89,10 +109,26 @@ def main() -> None:
         "dV": gradients[2],
         "dBias": gradients[3],
     }
-    if invocation_count() - before != 1:
-        raise RuntimeError("public facade route counter did not advance exactly once")
+    if invocation_count() - before != 2:
+        raise RuntimeError("public facade route counter did not advance twice")
     if not all(torch.isfinite(value).all().item() for value in named.values()):
         raise RuntimeError("AOT full F+B produced a non-finite result")
+    reference = {
+        "output": output_contiguous,
+        "dQ": gradients_contiguous[0],
+        "dK": gradients_contiguous[1],
+        "dV": gradients_contiguous[2],
+        "dBias": gradients_contiguous[3],
+    }
+    mismatched = [
+        name for name, value in named.items()
+        if not torch.equal(value, reference[name])
+    ]
+    if mismatched:
+        raise RuntimeError(
+            "non-contiguous fused pack differs from the contiguous path: "
+            + ", ".join(mismatched)
+        )
 
     forbidden_cache_value = os.environ.get("TORCH_EXTENSIONS_DIR")
     if forbidden_cache_value and Path(forbidden_cache_value).exists():

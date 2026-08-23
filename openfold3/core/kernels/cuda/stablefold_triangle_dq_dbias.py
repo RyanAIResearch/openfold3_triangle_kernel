@@ -64,7 +64,7 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         _EXTENSION = load_extension_module(
             module_key="stablefold_dq_dbias",
             aot_module=(
-                "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90"
+                "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a"
             ),
             source=Path(__file__).with_suffix(".cu"),
             expected_symbols=(

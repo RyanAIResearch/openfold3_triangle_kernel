@@ -74,8 +74,8 @@ def _preflight_aot_artifact(module_key: str, aot_module: str) -> Path:
             "the installed package contains a source-tree manifest rather than "
             "an AOT build manifest"
         )
-    if manifest.get("target", {}).get("cuda_arch") != "sm_90":
-        raise AOTExtensionError("the extension wheel is not an sm_90 artifact")
+    if manifest.get("target", {}).get("cuda_arch") != "sm_90a":
+        raise AOTExtensionError("the extension wheel is not an sm_90a artifact")
 
     expected_abi = manifest.get("abi", {})
     actual_abi = _runtime_abi()
@@ -88,11 +88,11 @@ def _preflight_aot_artifact(module_key: str, aot_module: str) -> Path:
         raise AOTExtensionError(f"AOT extension ABI mismatch: {mismatches}")
 
     if not torch.cuda.is_available():
-        raise AOTExtensionError("the sm_90 extension requires an available CUDA GPU")
+        raise AOTExtensionError("the sm_90a extension requires an available CUDA GPU")
     capability = torch.cuda.get_device_capability(torch.cuda.current_device())
     if capability != (9, 0):
         raise AOTExtensionError(
-            f"the sm_90 extension requires compute capability 9.0, got {capability}"
+            f"the sm_90a extension requires compute capability 9.0, got {capability}"
         )
 
     extension = manifest.get("extensions", {}).get(module_key)
@@ -188,7 +188,7 @@ def load_extension_module(
             if not _development_jit_enabled():
                 raise AOTExtensionError(
                     f"unable to load production AOT extension {aot_module}; install "
-                    "the Python 3.14 / Torch 2.10 / CUDA 12.9 sm_90 wheel. "
+                    "the Python 3.14 / Torch 2.10 / CUDA 12.9 sm_90a wheel. "
                     f"Source-tree developers may explicitly set {_DEVELOPMENT_JIT_ENV}=1."
                 ) from error
             module = _load_development_jit(

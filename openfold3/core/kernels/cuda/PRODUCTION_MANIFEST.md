@@ -2,8 +2,8 @@
 
 本文件描述当前由 `use_stable_triangle_attention=true` 选择的 StableFold
 Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；StableFold 路径必须
-显式启用，并且对不支持的输入直接报错，不会静默回退 PyTorch、AQLab Triton
-或 NVIDIA cuEquivariance。
+显式启用。公开 facade 对不支持的输入直接报错；模型级 blanket-coverage 路由会对
+不满足 facade 契约的站点记录一次原因并回退官方 PyTorch attention。
 
 ## 当前发布状态
 
@@ -38,9 +38,10 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 
 ## 运行时支持范围
 
-- GPU：Hopper `sm_90`（当前发布门禁设备为 H100 80GB）；
+- GPU：Hopper `sm_90a`（当前发布门禁设备为 H100 80GB）；
 - dtype：Q/K/V 与 pair bias 为 BF16；mask 为 FP32/BF16/FP16；
-- head dimension：production 只接受 `D in {16, 32}`；
+- head dimension：`1 <= D <= 64`；8 的倍数原生走 io-dim 车道，其余维度
+  zero-pad 到下一个 8 的倍数并保持有效区域梯度；
 - sequence/head：设备可行范围内的 runtime `N > 0`、`H > 0`；
 - CUDA grid 边界：`ceil(N/32) <= 65535`、`H <= 65535`、flatten 后
   `B*N <= 2^31-1`；实际可用上限还受 `O(N^2)` 输入/输出显存与运行时间限制；
@@ -57,14 +58,14 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 
 | 文件 | 职责 |
 |---|---|
-| `openfold3/core/model/primitives/attention.py` | 显式 StableFold 路由；unsupported fail-closed |
+| `openfold3/core/model/primitives/attention.py` | 显式 StableFold 路由；unsupported 模型站点回退 stock |
 | `stablefold_triangle_attention.py` | public facade、broadcast/prefix 编排、自定义 autograd |
 | `_aot_runtime.py` | AOT import、ABI/device/hash/symbol 核验；production 禁止自动 JIT |
-| `_ext/_stablefold_forward_sm90*.so` | 独立 forward AOT module |
-| `_ext/_stablefold_delta_sm90*.so` | 独立 delta AOT module |
-| `_ext/_stablefold_dkdv_sm90*.so` | 独立 dK+dV AOT module |
-| `_ext/_stablefold_dq_dbias_sm90*.so` | 独立 dQ+dBias/reduce AOT module |
-| `stablefold_triangle_forward.{py,cu}` | online-softmax forward 与 LSE |
+| `_ext/_stablefold_forward_sm90a*.so` | forward 与 fused physical-layout QKV pack AOT module |
+| `_ext/_stablefold_delta_sm90a*.so` | 独立 delta AOT module |
+| `_ext/_stablefold_dkdv_sm90a*.so` | 独立 dK+dV AOT module |
+| `_ext/_stablefold_dq_dbias_sm90a*.so` | 独立 dQ+dBias/reduce AOT module |
+| `stablefold_triangle_forward.{py,cu}` | fused QKV pack、online-softmax forward 与 LSE |
 | `stablefold_triangle_delta.{py,cu}` | backward delta 预计算 |
 | `stablefold_triangle_dkdv.{py,cu}` | generic/runtime dK+dV |
 | `stablefold_triangle_dq_dbias.{py,cu}` | fixed-tree dQ+dBias |
@@ -76,7 +77,7 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 `scripts/benchmarks` 或任何历史 backward loader。
 
 发布 wheel ABI 固定为 CPython 3.14、Torch 2.10.0、Torch CUDA 12.9 与
-H100 `sm_90` SASS；不包含 PTX。build manifest 必须记录 commit、dirty 状态、
+H100 `sm_90a` SASS；不包含 PTX。build manifest 必须记录 commit、dirty 状态、
 ABI/toolchain、所有生产源 SHA-256 以及四个 `.so` 的 SHA-256 和导出符号。
 canonical builder 必须使用 fresh clone，并通过 `nm`、`cuobjdump` 和只读、
 无 NVCC clean-install 的 public-facade F+B smoke。
@@ -89,6 +90,8 @@ StableFold 与官方 PyTorch 使用相同实数公式，但浮点执行契约不
 - mask 与 pair bias 在 FP32 中加入；
 - forward 使用在线 softmax；
 - backward 由保存的 LSE 重算概率；
+- dQ/dBias 使用重算的 `T=sum(P*dP)` 行标量；基于实测
+  `sum(P)=1 ± 1.3e-6`，当前执行契约省略 `T/Z` 的除法；
 - dBias 使用固定归约树，不使用浮点 atomic accumulation；
 - query slab、batch chunk 与 leaf wave 只划分互相独立的输出或已定义的
   leaf 区间；跨 wave 的 FP32 root 始终按全局 leaf index 左折叠，因此 workspace
