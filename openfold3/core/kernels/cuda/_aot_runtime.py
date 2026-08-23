@@ -152,6 +152,9 @@ def _load_development_jit(
     # branch.  Production import never touches cpp_extension or a build cache.
     from torch.utils.cpp_extension import load
 
+    # The kernels use warpgroup MMA, which ptxas only accepts for the
+    # arch-specific sm_90a target; plain "9.0" builds fail to assemble.
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "9.0a")
     source_hash = _sha256(source)[:12]
     return load(
         name=f"openfold3_triangle_dev_{module_key}_{source_hash}",
