@@ -1,8 +1,8 @@
 # Binds every headline number to its code version, environment, and run
 # directory. Update on every campaign; canonical_commit/tag advance only
 # via explicit decision.
-canonical_commit: TBD-post-terminology-pass  # tag iclr27-stablefold-rc1 at freeze
-base_commit: a94b9562e
+canonical_commit: 4be8da30152591ff94c8b95cbe84dda0c3ebb37a  # final H100 kernel campaign
+base_commit: 029f76f5  # authorship-rewritten equivalent of a94b9562e
 branch: sr/dq-warpgroup
 worktree: /home/ubuntu/xzz/of3_sr_dq
 tags:
@@ -17,14 +17,24 @@ environment:
   arch_flags: TORCH_CUDA_ARCH_LIST=9.0a
   pixi_env: openfold3_workspace/src/.pixi/envs/openfold3-cuda12
 arms:
-  DR-Prod: {commit: a94b9562e, desc: production two-pass baseline (wheel_env_a94b AOT)}
-  DR-WG:   {commit: f85490b25+, desc: modernized two-pass (warpgroup + ss-wgmma), env flags off}
+  DR-Prod: {commit: a94b9562e, desc: archived production cuEq baseline (wheel_env_a94b AOT)}
+  DR-WG:   {commit: 4be8da301, desc: same-commit modernized two-pass, env flags off}
   SR-C:    {flags: OPENFOLD3_SR_BACKWARD=1, desc: single reconstruction, classic delta}
   SR-R:    {flags: OPENFOLD3_SR_BACKWARD=1 OPENFOLD3_SR_SHADOW=1, desc: SR + residual-corrected delta}
 kernel_numbers_provenance:
   pre_fence: [bwd 5.845ms@640 and earlier ladder entries]
-  post_fence: [bwd 5.912ms@640 (03b488d8c); FINAL tables must be re-measured post-fence at freeze]
+  post_fence: [final H100 ABCCBA matrix at 4be8da301; N640 D32 baseline 7.0715ms, SR-C 5.3864ms, SR-R 5.4098ms]
 runs:
+  h100_final_4be8da301:
+    path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/h100_4be8da301_20260823T205450Z
+    commit: 4be8da30152591ff94c8b95cbe84dda0c3ebb37a
+    status: done
+    correctness: [workspace/oracle matrix bitwise pass, SR-C replay/referee pass, SR-R shadow pass, memcheck/synccheck/racecheck pass]
+    kernel_matrix: "ABCCBA, 60 samples/arm/shape; N128/N384/N640/N768, D16/D32/D64, outer24"
+    causal_abba: "same-commit two-pass vs SR-R, 4 paired blocks AB/BA/BA/AB, mean -2.05%, descriptive 95% CI [-2.18%, -1.94%]"
+    production_abba: "archived cuEq system vs SR-R, 4 paired blocks AB/BA/BA/AB, mean -3.83%, descriptive 95% CI [-3.89%, -3.73%]"
+    production_telemetry: "mean peak memory -1460MiB; full-process energy -3.71% (descriptive, includes initialization/teardown)"
+    profiler: "NCU 2025.1 basic + focused detailed pass; Nsys 2024.6 agent-launch timeout retained as negative receipt"
   scratch_abba_blocks:
     path: /home/ubuntu/xzz/of3_perf_runs/sr_stats_blocks
     arms: 4x paired (cueq wheel_a94b vs SR-R at f284f6133-era build), orders AB/BA/BA/AB
@@ -53,17 +63,17 @@ invalid_for_performance:
   - prefix_cueq 0->1000 (per-tensor Python grad-norm callback; 21.1 s/step vs 8.7 clean) — checkpoint-producer only
   - all fork/srfull walls (instrumented with OF3_OPTIM_METRICS) — learning evidence only; speed claims come from clean block campaigns
 pending_before_freeze:
-  - post-fence re-measurement of all headline kernel tables
   - .cu terminology pass (residual-corrected) — deferred until fork_sr locked its build hash
-  - atomic-twin re-run, workspace 64<->512MiB trainer demo
+  - workspace 64<->512MiB trainer demo (kernel-level sweep done; trainer-level demo pending)
   - AOT wheel + clean-install + binary receipts
   - direct delta-vs-delta (fp32-shadow vs perfect) comparison
+  - repair/upgrade host Nsys installation if a system timeline is required; NCU mechanism evidence is complete
 
 
 authorship_note: |
   2026-08-23 FINAL: every Evan810828 commit repo-wide rewritten to
   RyanAIResearch (three branches; upstream openfold-3 history untouched).
-  Canonical hashes after the final rewrite: sr/dq-warpgroup tip dfb26b85,
+  Canonical hashes after the final rewrite: H100 kernel commit 4be8da301,
   base(a94b equivalent) 029f76f5, sr-v1-classic-delta=3d37258c,
   sr-v2-shadow-delta=84e85725, rebuild/fa3-generic-n tip c80088f8.
   All hashes cited in earlier session notes/memory predate this and are
