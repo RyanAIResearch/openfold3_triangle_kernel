@@ -559,6 +559,13 @@ __device__ __forceinline__ void wg_ss_wgmma_m64n32k16(
       : "l"(descriptor_a), "l"(descriptor_b), "r"(accumulate));
 }
 
+// Generic-proxy shared writes (plain stores, non-bulk cp.async) must be
+// fenced into the async proxy before wgmma descriptor reads: the PTX
+// ordering contract, not optional (racecheck cannot see it).
+__device__ __forceinline__ void wg_proxy_fence() {
+  asm volatile("fence.proxy.async.shared::cta;\n" ::: "memory");
+}
+
 __device__ __forceinline__ void wg_wgmma_fence() {
   asm volatile("wgmma.fence.sync.aligned;\n" ::: "memory");
 }
@@ -755,7 +762,10 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_dq_dbias_wg_kernel(
 #pragma unroll 1
   for (int key_start = 0; key_start < sequence; key_start += kKeyTile) {
     // Publishes the tile staged behind the previous combine (or the
-    // prologue stage) and proves every warp left the prior tile.
+    // prologue stage) and proves every warp left the prior tile.  The
+    // proxy fence orders this thread's generic-proxy staging writes
+    // before the warpgroup's async-proxy descriptor reads.
+    wg_proxy_fence();
     __syncthreads();
     // Fully unrolled so dq_acc/lse/delta local indices stay compile-time
     // constants -- a rolled loop demotes the accumulators to local memory
@@ -1151,6 +1161,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
        query_start += kSrQueryTile) {
     const int parity = ((query_start - query_base) / kSrQueryTile) & 1;
     sr_cp_async_wait_all();
+    wg_proxy_fence();
     __syncthreads();
     if (query_start + kSrQueryTile < query_end) {
       stage_qdo_and_bias(query_start + kSrQueryTile, parity ^ 1);
