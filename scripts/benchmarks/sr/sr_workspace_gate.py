@@ -23,8 +23,8 @@ from openfold3.core.kernels.cuda.stablefold_triangle_dkdv import (
     stablefold_triangle_dkdv,
 )
 from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
+    sr_workspace_plan,
     stablefold_triangle_sr_backward,
-    workspace_plan,
 )
 
 CASES = {
@@ -159,9 +159,10 @@ def run_case(name: str) -> None:
     reference_digests: dict[str, str] | None = None
     keys = ("dq", "dk", "dv", "dbias")
     for index, config in enumerate(configurations(name)):
-        plan = workspace_plan(
+        plan = sr_workspace_plan(
             sequence=int(q.shape[3]),
             heads=int(q.shape[2]),
+            dim=int(q.shape[4]),
             outer=int(q.shape[1]),
             batch=int(q.shape[0]),
             **config,

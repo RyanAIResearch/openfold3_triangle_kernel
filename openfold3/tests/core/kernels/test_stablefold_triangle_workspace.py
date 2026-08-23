@@ -6,6 +6,7 @@ from pathlib import Path
 
 from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
     outer_leaf_for,
+    sr_workspace_plan,
     workspace_elements,
     workspace_plan,
 )
@@ -173,6 +174,24 @@ class StableFoldTriangleWorkspaceTest(unittest.TestCase):
         self.assertIn("const bool final_query_stripe", source)
         self.assertIn("dk_continuation[index] =", source)
         self.assertIn("dv_continuation[index] =", source)
+
+    def test_sr_plan_promotes_only_when_full_span_reduces_total_scratch(self):
+        promoted = sr_workspace_plan(640, 4, 32, outer=640, batch=1)
+        self.assertEqual(promoted.query_span, 640)
+        self.assertEqual(promoted.query_stripes, 1)
+        self.assertEqual(promoted.elements * 2, 500 * 1024 * 1024)
+
+        bounded = sr_workspace_plan(640, 4, 16, outer=640, batch=1)
+        self.assertEqual(bounded.query_span, 320)
+        self.assertEqual(bounded.query_stripes, 2)
+        bounded_total = bounded.elements * 2 + 2 * 640 * 4 * 640 * 16 * 4
+        self.assertLess(bounded_total, promoted.elements * 2)
+
+        forced = sr_workspace_plan(
+            640, 4, 32, outer=640, batch=1, query_span=320
+        )
+        self.assertEqual(forced.query_span, 320)
+        self.assertEqual(forced.query_stripes, 2)
 
     def test_invalid_dimensions_fail_closed(self):
         for kwargs in (

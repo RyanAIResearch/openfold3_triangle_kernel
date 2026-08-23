@@ -19,7 +19,9 @@ Scripts:
   dQ/dBias tolerance.
 - `sr_workspace_gate.py` — workspace/query-span/leaf-wave/batch-chunk bitwise
   invariance, including the crop-640 trunk and an independent two-pass dK/dV
-  oracle.
+  oracle. Automatic SR plans compare bounded dBias slabs plus FP32 dK/dV
+  continuation against a full-query slab and choose the smaller total scratch;
+  forced spans remain exact diagnostic controls.
 - `sr_shadowgate.py` — three-delta-contract kill-shot on sharp softmax
   (+ dV invariant under shadow).
 - `sr_ladder.py [--capture DIR]` — full delta ladder

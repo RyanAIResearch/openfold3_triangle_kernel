@@ -443,9 +443,10 @@ def stablefold_triangle_sr_backward(
     batch = int(q.shape[0])
     if sequence % 64 != 0 or dim > 64 or dim % 8 != 0:
         raise ValueError("SR backward requires sequence % 64 == 0 and D <= 64")
-    plan = workspace_plan(
+    plan = sr_workspace_plan(
         sequence,
         heads,
+        dim,
         outer=outer,
         batch=batch,
         workspace_budget_bytes=workspace_budget_bytes,
@@ -503,6 +504,61 @@ def stablefold_triangle_sr_backward(
     return out_dq, out_dk, out_dv, out_dbias
 
 
+def sr_workspace_plan(
+    sequence: int,
+    heads: int,
+    dim: int,
+    *,
+    outer: int | None = None,
+    batch: int = 1,
+    workspace_budget_bytes: int = _DEFAULT_WORKSPACE_BUDGET_BYTES,
+    query_span: int | None = None,
+    batch_chunk: int | None = None,
+) -> WorkspacePlan:
+    """Plan SR scratch while accounting for striped dK/dV continuation.
+
+    ``workspace_budget_bytes`` is the preferred dBias-slab cap.  For an
+    automatic plan, SR may promote to a full-query slab when doing so uses no
+    more total scratch than the bounded slab plus two q-shaped FP32 dK/dV
+    continuation tensors.  Explicit query spans or batch chunks are honored
+    exactly for diagnostics and controlled experiments.
+    """
+
+    if dim <= 0:
+        raise ValueError("dim must be positive")
+    if outer is None:
+        outer = sequence
+    plan = workspace_plan(
+        sequence,
+        heads,
+        outer=outer,
+        batch=batch,
+        workspace_budget_bytes=workspace_budget_bytes,
+        query_span=query_span,
+        batch_chunk=batch_chunk,
+    )
+    if (
+        plan.query_stripes == 1
+        or query_span is not None
+        or batch_chunk is not None
+    ):
+        return plan
+
+    continuation_bytes = 2 * batch * outer * heads * sequence * dim * 4
+    full_workspace_bytes = batch * plan.leaves * heads * sequence * sequence * 2
+    full = workspace_plan(
+        sequence,
+        heads,
+        outer=outer,
+        batch=batch,
+        workspace_budget_bytes=max(workspace_budget_bytes, full_workspace_bytes),
+        query_span=sequence,
+        batch_chunk=batch,
+    )
+    bounded_total_bytes = plan.elements * 2 + continuation_bytes
+    return full if full.elements * 2 <= bounded_total_bytes else plan
+
+
 __all__ = [
     "stablefold_triangle_dq_dbias",
     "stablefold_triangle_sr_backward",
@@ -510,6 +566,7 @@ __all__ = [
     "stablefold_reduce_broadcast_dbias",
     "source_sha256",
     "WorkspacePlan",
+    "sr_workspace_plan",
     "workspace_elements",
     "workspace_plan",
 ]
