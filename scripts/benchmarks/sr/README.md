@@ -17,6 +17,9 @@ Scripts:
   Reference golden sha256 (2026-08-22): 96b1281420e0a5651fd2e75424ce1de481e28cf1ff5c97b2f6144ad8df8ffdad
 - `sr_srgate.py` — SR vs two-pass: dK/dV bitwise + replay + fp64-referenced
   dQ/dBias tolerance.
+- `sr_workspace_gate.py` — workspace/query-span/leaf-wave/batch-chunk bitwise
+  invariance, including the crop-640 trunk and an independent two-pass dK/dV
+  oracle.
 - `sr_shadowgate.py` — three-delta-contract kill-shot on sharp softmax
   (+ dV invariant under shadow).
 - `sr_ladder.py [--capture DIR]` — full delta ladder
@@ -27,8 +30,9 @@ Scripts:
 - `sr_stats_analyze.py` — paired-block stats + loss referee for the
   sr_stats_blocks campaign layout.
 - `sr_time.py`, `sr_step0_bench.py`, `sr_build.py`,
-  `sr_sanitize_target.py` — timing, per-kernel decomposition, prewarm,
-  sanitizer target.
+  `sr_sanitize_target.py`, `sr_workspace_sanitize_target.py` — timing,
+  per-kernel decomposition, prewarm, and standard/query-striped sanitizer
+  targets.
 
 Known debts (recorded, not yet cleaned): session-absolute default paths,
 campaign shell drivers live under /home/ubuntu/xzz/of3_perf_runs/*/, and

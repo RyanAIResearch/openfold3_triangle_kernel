@@ -26,8 +26,8 @@ class StableFoldTriangleWorkspaceTest(unittest.TestCase):
                     4,
                     workspace_budget_bytes=budget,
                 )
-                minimum_tile_bytes = 4 * 32 * sequence * 2
-                self.assertEqual(plan.query_span % 32, 0)
+                minimum_tile_bytes = 4 * 64 * sequence * 2
+                self.assertEqual(plan.query_span % 64, 0)
                 self.assertGreaterEqual(plan.resident_leaves, 1)
                 self.assertLessEqual(
                     plan.elements * 2,
@@ -67,7 +67,7 @@ class StableFoldTriangleWorkspaceTest(unittest.TestCase):
         )
         old_plane_elements = 4 * sequence * sequence
         self.assertLess(plan.elements, old_plane_elements)
-        self.assertEqual(plan.query_span, 32)
+        self.assertEqual(plan.query_span, 64)
         self.assertLessEqual(plan.elements * 2, 256 * 1024 * 1024)
 
     def test_long_n_plans_reduce_root_waves_without_extra_launch_pairs(self):
@@ -97,7 +97,7 @@ class StableFoldTriangleWorkspaceTest(unittest.TestCase):
     def test_forced_query_spans_retain_the_same_global_leaf_order(self):
         sequence = 257
         expected_leaves = list(range((sequence + 3) // 4))
-        for query_span in (32, 64, 128, 288):
+        for query_span in (64, 128, 256, 320):
             with self.subTest(query_span=query_span):
                 plan = workspace_plan(
                     sequence,
@@ -162,13 +162,25 @@ class StableFoldTriangleWorkspaceTest(unittest.TestCase):
         self.assertNotIn("atomicAdd", source)
         self.assertNotIn("semaphore", source.lower())
 
+    def test_sr_query_stripes_preserve_fp32_dkdv_continuation(self):
+        source = (
+            Path(__file__).parents[3]
+            / "core/kernels/cuda/stablefold_triangle_dq_dbias.cu"
+        ).read_text()
+        self.assertIn("float* __restrict__ dk_continuation", source)
+        self.assertIn("float* __restrict__ dv_continuation", source)
+        self.assertIn("if (query_base != 0)", source)
+        self.assertIn("const bool final_query_stripe", source)
+        self.assertIn("dk_continuation[index] =", source)
+        self.assertIn("dv_continuation[index] =", source)
+
     def test_invalid_dimensions_fail_closed(self):
         for kwargs in (
             {"sequence": 0, "heads": 4},
             {"sequence": 64, "heads": 0},
             {"sequence": 64, "heads": 4, "batch": 0},
             {"sequence": 64, "heads": 65_536},
-            {"sequence": 65_535 * 32 + 1, "heads": 4},
+            {"sequence": 65_535 * 64 + 1, "heads": 4},
             {"sequence": 65_536, "heads": 4, "batch": 65_536},
             {
                 "sequence": 64,

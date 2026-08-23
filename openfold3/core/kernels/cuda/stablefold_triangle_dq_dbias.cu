@@ -995,6 +995,8 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
     const __nv_bfloat16* __restrict__ bias,
     __nv_bfloat16* __restrict__ out_dk,
     __nv_bfloat16* __restrict__ out_dv,
+    float* __restrict__ dk_continuation,
+    float* __restrict__ dv_continuation,
     __nv_bfloat16* __restrict__ dq_partials,
     __nv_bfloat16* __restrict__ workspace,
     int sequence,
@@ -1097,6 +1099,37 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
     for (int tile = 0; tile < HeadDim / 8; ++tile) {
       dk_acc[local][tile] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
       dv_acc[local][tile] = Acc{{0.0F, 0.0F, 0.0F, 0.0F}};
+    }
+  }
+  if (query_base != 0) {
+#pragma unroll
+    for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
+      const int slot = warpgroup * kSlotsPerWarpgroup + local;
+      if (outer_mult[slot] == 0.0F) {
+        continue;
+      }
+      const int64_t out_base = (slot_plane(slot) * heads + head) *
+              static_cast<int64_t>(sequence) * io_dim +
+          static_cast<int64_t>(key_start + warp_key) * io_dim;
+#pragma unroll
+      for (int tile = 0; tile < HeadDim / 8; ++tile) {
+#pragma unroll
+        for (int half = 0; half < 2; ++half) {
+          const int row = group + half * 8;
+          const int column = tile * 8 + thread_in_group * 2;
+          if (column >= io_dim) {
+            continue;
+          }
+          const int64_t index =
+              out_base + static_cast<int64_t>(row) * io_dim + column;
+          dv_acc[local][tile].v[half * 2] = dv_continuation[index];
+          dv_acc[local][tile].v[half * 2 + 1] =
+              dv_continuation[index + 1];
+          dk_acc[local][tile].v[half * 2] = dk_continuation[index];
+          dk_acc[local][tile].v[half * 2 + 1] =
+              dk_continuation[index + 1];
+        }
+      }
     }
   }
 
@@ -1393,7 +1426,9 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
   }
 
   // Epilogue: dK/dV for this warp's 16 key rows, both slots of its
-  // warpgroup.  dK scaled once; both stored BF16.
+  // warpgroup.  Intermediate query stripes preserve the raw FP32 MMA
+  // accumulators; the final stripe scales dK once and stores both BF16.
+  const bool final_query_stripe = query_base + query_rows == sequence;
 #pragma unroll
   for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
     const int slot = warpgroup * kSlotsPerWarpgroup + local;
@@ -1412,15 +1447,25 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
         if (column >= io_dim) {
           continue;
         }
-        out_dv[out_base + static_cast<int64_t>(row) * io_dim + column] =
-            __float2bfloat16_rn(dv_acc[local][tile].v[half * 2]);
-        out_dv[out_base + static_cast<int64_t>(row) * io_dim + column + 1] =
-            __float2bfloat16_rn(dv_acc[local][tile].v[half * 2 + 1]);
-        out_dk[out_base + static_cast<int64_t>(row) * io_dim + column] =
-            __float2bfloat16_rn(dk_acc[local][tile].v[half * 2] * scale);
-        out_dk[out_base + static_cast<int64_t>(row) * io_dim + column + 1] =
-            __float2bfloat16_rn(
-                dk_acc[local][tile].v[half * 2 + 1] * scale);
+        const int64_t index =
+            out_base + static_cast<int64_t>(row) * io_dim + column;
+        if (final_query_stripe) {
+          out_dv[index] =
+              __float2bfloat16_rn(dv_acc[local][tile].v[half * 2]);
+          out_dv[index + 1] =
+              __float2bfloat16_rn(dv_acc[local][tile].v[half * 2 + 1]);
+          out_dk[index] = __float2bfloat16_rn(
+              dk_acc[local][tile].v[half * 2] * scale);
+          out_dk[index + 1] = __float2bfloat16_rn(
+              dk_acc[local][tile].v[half * 2 + 1] * scale);
+        } else {
+          dv_continuation[index] = dv_acc[local][tile].v[half * 2];
+          dv_continuation[index + 1] =
+              dv_acc[local][tile].v[half * 2 + 1];
+          dk_continuation[index] = dk_acc[local][tile].v[half * 2];
+          dk_continuation[index + 1] =
+              dk_acc[local][tile].v[half * 2 + 1];
+        }
       }
     }
   }
@@ -1988,6 +2033,8 @@ void launch_sr(
     torch::Tensor& out_dbias,
     torch::Tensor& workspace,
     torch::Tensor& dq_partials,
+    torch::Tensor& dk_continuation,
+    torch::Tensor& dv_continuation,
     int sequence,
     int outer_count,
     int heads,
@@ -2039,6 +2086,11 @@ void launch_sr(
   TORCH_CHECK(
       dq_partials.numel() >= required_partials,
       "dq_partials is smaller than the key-block plan");
+  const int64_t required_continuation = query_span < sequence ? q.numel() : 0;
+  TORCH_CHECK(
+      dk_continuation.numel() >= required_continuation &&
+          dv_continuation.numel() >= required_continuation,
+      "dK/dV continuation state is smaller than the query-stripe plan");
 #define SET_SR_SMEM_ATTRIBUTE(TaskInZ)                                      \
   do {                                                                     \
     const cudaError_t status = cudaFuncSetAttribute(                       \
@@ -2106,6 +2158,8 @@ void launch_sr(
           reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),        \
           reinterpret_cast<__nv_bfloat16*>(out_dk.data_ptr()),            \
           reinterpret_cast<__nv_bfloat16*>(out_dv.data_ptr()),            \
+          dk_continuation.data_ptr<float>(),                              \
+          dv_continuation.data_ptr<float>(),                              \
           reinterpret_cast<__nv_bfloat16*>(                               \
               dq_partials.data_ptr()),                                    \
           reinterpret_cast<__nv_bfloat16*>(workspace.data_ptr()),         \
@@ -2197,6 +2251,8 @@ void stablefold_triangle_sr_backward_out(
     torch::Tensor& out_dbias,
     torch::Tensor& workspace,
     torch::Tensor& dq_partials,
+    torch::Tensor& dk_continuation,
+    torch::Tensor& dv_continuation,
     int64_t query_span64,
     int64_t resident_leaves64,
     int64_t batch_chunk64) {
@@ -2260,6 +2316,14 @@ void stablefold_triangle_sr_backward_out(
   TORCH_CHECK(
       dq_partials.is_cuda() && dq_partials.dtype() == torch::kBFloat16 &&
       dq_partials.is_contiguous());
+  const auto check_continuation = [&](const torch::Tensor& tensor) {
+    TORCH_CHECK(
+        tensor.is_cuda() && tensor.device() == q.device() &&
+            tensor.dtype() == torch::kFloat32 && tensor.is_contiguous(),
+        "dK/dV continuation state must be contiguous FP32 on q.device");
+  };
+  check_continuation(dk_continuation);
+  check_continuation(dv_continuation);
   const int query_span = static_cast<int>(query_span64);
   const int resident_leaves = static_cast<int>(resident_leaves64);
   const int batch_chunk = static_cast<int>(batch_chunk64);
@@ -2272,18 +2336,21 @@ void stablefold_triangle_sr_backward_out(
     case 16:
       launch_sr<16>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                     out_dk, out_dv, out_dbias, workspace, dq_partials,
+                    dk_continuation, dv_continuation,
                     sequence, outer_count, heads, batch, query_span,
                     resident_leaves, batch_chunk, io_dim, stream);
       break;
     case 32:
       launch_sr<32>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                     out_dk, out_dv, out_dbias, workspace, dq_partials,
+                    dk_continuation, dv_continuation,
                     sequence, outer_count, heads, batch, query_span,
                     resident_leaves, batch_chunk, io_dim, stream);
       break;
     default:
       launch_sr<64>(q, k, v, d_output, logsumexp, delta, mask, bias, out_dq,
                     out_dk, out_dv, out_dbias, workspace, dq_partials,
+                    dk_continuation, dv_continuation,
                     sequence, outer_count, heads, batch, query_span,
                     resident_leaves, batch_chunk, io_dim, stream);
       break;

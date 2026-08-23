@@ -461,6 +461,15 @@ def stablefold_triangle_sr_backward(
         device=q.device,
         dtype=torch.bfloat16,
     )
+    # dK/dV are reduced across the query axis.  When the bounded dBias
+    # workspace forces multiple query stripes, preserve their FP32 MMA
+    # accumulators between launches so a launch boundary remains a pure
+    # store/reload and does not change (or discard) arithmetic.
+    continuation_elements = q.numel() if plan.query_stripes > 1 else 0
+    dk_continuation = torch.empty(
+        continuation_elements, device=q.device, dtype=torch.float32
+    )
+    dv_continuation = torch.empty_like(dk_continuation)
     out_dq = torch.empty_like(q)
     out_dk = torch.empty_like(q)
     out_dv = torch.empty_like(q)
@@ -485,6 +494,8 @@ def stablefold_triangle_sr_backward(
             out_dbias,
             workspace,
             dq_partials,
+            dk_continuation,
+            dv_continuation,
             plan.query_span,
             plan.resident_leaves,
             plan.batch_chunk,
