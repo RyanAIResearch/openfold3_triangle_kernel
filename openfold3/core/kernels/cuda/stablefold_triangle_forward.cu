@@ -248,6 +248,10 @@ __device__ __forceinline__ float quad_sum(float value) {
 // ExactTiles is the production lane: under the facade's pad-to-tile
 // contract every tile divides the sequence exactly, so all tail guards
 // fold away at compile time with sequence still a runtime parameter.
+// io_dim <= HeadDim: global tensors carry io_dim head channels; the kernel
+// zero-extends them to the HeadDim compute lane at staging time (padded dot
+// terms are +0.0 — exact) and reads/writes global memory at io_dim strides.
+// io_dim == HeadDim is the plain lane; the ternaries stay out of hot loops.
 template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq>
 __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     const __nv_bfloat16* __restrict__ q,
@@ -261,6 +265,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     int outer_count,
     int heads,
     int batch,
+    int io_dim,
     float scale) {
   constexpr int kKVStride = HeadDim + 8;
   static_assert(HeadDim % 16 == 0 && (kKVStride * 2) % 16 == 0);
@@ -299,15 +304,15 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t plane_row_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
-  const int64_t head_base = plane_row_base * HeadDim;
+  const int64_t head_base = plane_row_base * io_dim;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
   const int64_t mask_base = plane * sequence;
-  // Output is written in the PUBLIC [B, O, N, H, D] layout directly.
+  // Output is written in the PUBLIC [B, O, N, H, io_dim] layout directly.
   const int64_t out_plane_base =
-      plane * static_cast<int64_t>(sequence) * heads * HeadDim +
-      static_cast<int64_t>(head) * HeadDim;
+      plane * static_cast<int64_t>(sequence) * heads * io_dim +
+      static_cast<int64_t>(head) * io_dim;
 
   // Stage this warp's Q rows (guarded rows load row 0; their stores are
   // guarded at the epilogue, and their softmax state is discarded).
@@ -318,8 +323,9 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     const int gq = ExactTiles || warp_query + row < sequence
         ? warp_query + row
         : 0;
-    sq[row * kKVStride + col] =
-        q[head_base + static_cast<int64_t>(gq) * HeadDim + col];
+    sq[row * kKVStride + col] = col < io_dim
+        ? q[head_base + static_cast<int64_t>(gq) * io_dim + col]
+        : __float2bfloat16_rn(0.0F);
   }
   __syncwarp();
 
@@ -357,9 +363,17 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
       const int gk = ExactTiles || key_start + row < sequence
           ? key_start + row
           : 0;
-      const int64_t src = head_base + static_cast<int64_t>(gk) * HeadDim + col;
-      cp_async_16(bk + row * kKVStride + col, k + src);
-      cp_async_16(bv + row * kKVStride + col, v + src);
+      if (col < io_dim) {
+        const int64_t src =
+            head_base + static_cast<int64_t>(gk) * io_dim + col;
+        cp_async_16(bk + row * kKVStride + col, k + src);
+        cp_async_16(bv + row * kKVStride + col, v + src);
+      } else {
+        *reinterpret_cast<uint4*>(bk + row * kKVStride + col) =
+            uint4{0U, 0U, 0U, 0U};
+        *reinterpret_cast<uint4*>(bv + row * kKVStride + col) =
+            uint4{0U, 0U, 0U, 0U};
+      }
     }
     cp_async_commit();
   };
@@ -506,9 +520,11 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
 #pragma unroll
       for (int pair = 0; pair < 2; ++pair) {
         const int dim = tile * 8 + thread_in_group * 2 + pair;
-        out[out_plane_base +
-            static_cast<int64_t>(row) * heads * HeadDim + dim] =
-            __float2bfloat16_rn(o_acc[tile].v[half * 2 + pair] * inv_l);
+        if (dim < io_dim) {
+          out[out_plane_base +
+              static_cast<int64_t>(row) * heads * io_dim + dim] =
+              __float2bfloat16_rn(o_acc[tile].v[half * 2 + pair] * inv_l);
+        }
       }
     }
     if (thread_in_group == 0) {
@@ -971,8 +987,9 @@ void launch_forward(
     int outer_count,
     int heads,
     int batch,
+    int io_dim,
     cudaStream_t stream) {
-  const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
+  const float scale = 1.0F / std::sqrt(static_cast<float>(io_dim));
   const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
   const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
   const bool tile_major_grid = outer_tasks <= 65535;
@@ -1011,6 +1028,7 @@ void launch_forward(
             outer_count,                                                      \
             heads,                                                         \
             batch,                                                         \
+            io_dim,                                                        \
             scale);                                                        \
   } while (false)
   const bool outer_eq = outer_count == sequence;
@@ -1101,50 +1119,56 @@ void stablefold_triangle_forward_out(
 
   const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
-  // TMA lanes need the flattened (batch, outer, head) plane coordinate to
-  // fit the tensor map's int32 contract; the legacy lane covers the rest.
+  // TMA lanes need io_dim == storage lane AND the flattened (batch, outer,
+  // head) plane coordinate inside the tensor map's int32 contract; the
+  // legacy lane zero-extends any io_dim % 8 == 0 head dim to its storage
+  // lane at staging time and covers every remaining shape.
   const bool tma_planes_ok = batch64 * outer64 * heads64 <= 2147483647LL;
-  switch (head_dim) {
+  TORCH_CHECK(
+      head_dim % 8 == 0 && head_dim <= 128,
+      "head_dim must be a multiple of 8 and <= 128, got ", head_dim);
+  const int storage = head_dim <= 16
+      ? 16
+      : (head_dim <= 32 ? 32 : (head_dim <= 64 ? 64 : 128));
+  switch (storage) {
     case 16:
-      if (tma_planes_ok) {
+      if (tma_planes_ok && head_dim == 16) {
         launch_forward_tma<16>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
             batch, stream);
       } else {
         launch_forward<16>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+            batch, head_dim, stream);
       }
       break;
     case 32:
-      if (tma_planes_ok) {
+      if (tma_planes_ok && head_dim == 32) {
         launch_forward_tma<32>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
             batch, stream);
       } else {
         launch_forward<32>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+            batch, head_dim, stream);
       }
       break;
     case 64:
-      if (tma_planes_ok) {
+      if (tma_planes_ok && head_dim == 64) {
         launch_forward_tma<64>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
             batch, stream);
       } else {
         launch_forward<64>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+            batch, head_dim, stream);
       }
       break;
-    case 128:
+    default:
       launch_forward<128>(
           q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch,
-          stream);
+          head_dim, stream);
       break;
-    default:
-      TORCH_CHECK(false, "unsupported head_dim: ", head_dim);
   }
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "launch failed");
 }

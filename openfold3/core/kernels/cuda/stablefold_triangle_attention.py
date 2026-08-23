@@ -345,7 +345,14 @@ def stablefold_triangle_attention(
     #  * outer / sequence: padded to the tile quantum so the single
     #    exact-tiles lane (no tail guards) serves every length. Padded key
     #    columns carry a -inf mask; padded query rows are sliced away.
-    lane = next(l for l in _PAD_HEAD_LANES if l >= head_dim)
+    # Multiples of 8 run natively: the kernels zero-extend io_dim to the
+    # storage lane at staging time (half the global traffic of tensor-level
+    # padding, no q pre-scale rounding). Other dims pad to the next
+    # multiple of 8.
+    if head_dim % 8 == 0:
+        lane = head_dim
+    else:
+        lane = head_dim + (-head_dim) % 8
     d_padding = lane - head_dim
     if d_padding:
         # The kernel's internal softmax scale is 1/sqrt(lane); pre-scaling q
