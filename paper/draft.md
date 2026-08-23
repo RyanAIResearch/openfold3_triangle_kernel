@@ -116,8 +116,11 @@ mechanism: evaluating $\delta=dO\cdot O$ from a low-precision saved
 output injects structured, biased gradient error (Qiu & Yao, ICLR 2026).
 We characterize this known defect where it matters for structure
 prediction — real pretrained OpenFold3 activations, where it inflates
-dQ error 2–3× at trunk triangle sites and to 0.81 *relative* at a
-saturated attention-pair-bias site — and we connect it to
+dQ error 2–3× at the trunk triangle sites that carry the gradient
+signal (and, as a limit-case illustration, corrupts gradient
+*direction* to cosine 0.78 at a saturated attention-pair-bias site
+whose true gradient has already vanished to 10⁻⁷-norm) — and we
+connect it to
 single-reconstruction's dependency structure: the probability-derived
 $\delta$ is unavailable until a full key scan completes, so repairing
 $\delta$ by recomputation reintroduces the second reconstruction this
@@ -163,9 +166,10 @@ serving a single kernel.
    including the negative results that locate the crossover (§4).
 4. A finite-precision state frontier for single-reconstruction
    backward: characterizing the known output-delta defect on pretrained
-   AF3 activations (including a saturated-site failure far beyond
-   previously reported magnitudes) and a BF16 rounding-residual state
-   that corrects delta without restoring a second reconstruction (§5).
+   AF3 activations — including its saturation limit, where relative
+   corruption grows precisely as the true gradient vanishes — and a
+   BF16 rounding-residual state that corrects delta without restoring
+   a second reconstruction (§5).
 5. An open, fail-closed, bitwise-replayable artifact evaluated on real
    OpenFold3 training against cuEquivariance, Triton, and stock PyTorch
    (§6–7).
@@ -198,12 +202,15 @@ serving a single kernel.
   (brackets the archived 0.0121 pre-fix D32 baseline — second
   cross-validation), shadow 0.0035–0.0057, perfect 0.0033–0.0042.
   384/D=16: classic 0.0061–0.0092, shadow 0.0038–0.0085, perfect ~0.0035.
-- **APB-site discovery** (case [1,O=1,H=16,N=640,D=24], skip60): classic
-  delta corrupts dQ by 0.81 RELATIVE (dbias 0.12); bf16 shadow recovers
-  to 0.17; fp32 shadow = perfect (0.0036). Mechanism: saturated softmax
-  makes the true gradient tiny, so the coherent delta bias dominates
-  relatively. Report relative AND absolute; this is the strongest case
-  for the fp32-shadow tier and a new failure-mode datapoint for classic
-  delta far beyond the known 1e-2 class.
+- **APB-site forensic (CLOSED — small-denominator critique confirmed and
+  absorbed):** case [1,O=1,H=16,N=640,D=24]. FP64 exact: dQ_ref l2 =
+  2.45e-7 (trunk sites ~7e-4 — 3,000× larger), maxabs 5.1e-8, |dO| l2
+  2.2e-6; softmax saturation mean max-prob 0.96, 78% of rows >0.99.
+  Relative errors: classic 0.81 / shadow 0.17 / perfect 0.0035; cosine
+  0.779 / 0.986 / 0.99999. VERDICT: absolute update-level effect ~2e-7 =
+  negligible; the site is a MECHANISM ILLUSTRATION (relative corruption
+  → large exactly as saturation drives the true gradient → 0), NOT harm
+  evidence. The harm claim rests on trunk sites (2–3× relative on
+  1e-3-norm gradients). Never headline the 0.81 without this framing.
 
 TODO next: §2 Background, §3 model+invariance statement.
