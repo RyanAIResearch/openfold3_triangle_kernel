@@ -310,6 +310,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
     const __nv_bfloat16* __restrict__ bias,
     __nv_bfloat16* __restrict__ out,
     float* __restrict__ lse,
+    __nv_bfloat16* __restrict__ shadow_residual,
     int sequence,
     int outer_count,
     int heads,
@@ -570,9 +571,15 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
       for (int pair = 0; pair < 2; ++pair) {
         const int dim = tile * 8 + thread_in_group * 2 + pair;
         if (dim < io_dim) {
-          out[out_plane_base +
-              static_cast<int64_t>(row) * heads * io_dim + dim] =
-              __float2bfloat16_rn(o_acc[tile].v[half * 2 + pair] * inv_l);
+          const float o_value = o_acc[tile].v[half * 2 + pair] * inv_l;
+          const __nv_bfloat16 o_rounded = __float2bfloat16_rn(o_value);
+          const int64_t out_index = out_plane_base +
+              static_cast<int64_t>(row) * heads * io_dim + dim;
+          out[out_index] = o_rounded;
+          if (shadow_residual != nullptr) {
+            shadow_residual[out_index] = __float2bfloat16_rn(
+                o_value - __bfloat162float(o_rounded));
+          }
         }
       }
     }
@@ -598,6 +605,7 @@ stablefold_triangle_forward_tma_kernel(
     const __nv_bfloat16* __restrict__ bias,
     __nv_bfloat16* __restrict__ out,
     float* __restrict__ lse,
+    __nv_bfloat16* __restrict__ shadow_residual,
     int sequence,
     int outer_count,
     int heads,
@@ -854,9 +862,17 @@ stablefold_triangle_forward_tma_kernel(
 #pragma unroll
       for (int pair = 0; pair < 2; ++pair) {
         const int dim = tile * 8 + thread_in_group * 2 + pair;
-        out[out_plane_base +
-            static_cast<int64_t>(row) * heads * HeadDim + dim] =
-            __float2bfloat16_rn(o_acc[tile].v[half * 2 + pair] * inv_l);
+        const float o_value = o_acc[tile].v[half * 2 + pair] * inv_l;
+        const __nv_bfloat16 o_rounded = __float2bfloat16_rn(o_value);
+        const int64_t out_index = out_plane_base +
+            static_cast<int64_t>(row) * heads * HeadDim + dim;
+        out[out_index] = o_rounded;
+        if (shadow_residual != nullptr) {
+          // Rounding residual of the public BF16 output; consumed by the
+          // shadow delta so delta ~= sum P*dP without a second recompute.
+          shadow_residual[out_index] = __float2bfloat16_rn(
+              o_value - __bfloat162float(o_rounded));
+        }
       }
     }
     if (thread_in_group == 0) {
@@ -954,6 +970,7 @@ void launch_forward_tma(
     int outer_count,
     int heads,
     int batch,
+    __nv_bfloat16* shadow_residual,
     cudaStream_t stream) {
   const int64_t planes =
       static_cast<int64_t>(batch) * outer_count * heads;
@@ -997,6 +1014,7 @@ void launch_forward_tma(
             reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),        \
             reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),               \
             lse.data_ptr<float>(),                                          \
+            shadow_residual,                                          \
             sequence,                                                       \
             outer_count,                                                    \
             heads,                                                          \
@@ -1037,6 +1055,7 @@ void launch_forward(
     int heads,
     int batch,
     int io_dim,
+    __nv_bfloat16* shadow_residual,
     cudaStream_t stream) {
   const float scale = 1.0F / std::sqrt(static_cast<float>(io_dim));
   const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
@@ -1073,6 +1092,7 @@ void launch_forward(
             reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),       \
             reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),              \
             lse.data_ptr<float>(),                                         \
+            shadow_residual,                                         \
             sequence,                                         \
             outer_count,                                                      \
             heads,                                                         \
@@ -1168,14 +1188,15 @@ std::vector<torch::Tensor> stablefold_pack_qkv(
   return {out_q, out_k, out_v};
 }
 
-void stablefold_triangle_forward_out(
+void stablefold_triangle_forward_impl(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
     const torch::Tensor& mask,
     const torch::Tensor& bias,
     torch::Tensor& out,
-    torch::Tensor& lse) {
+    torch::Tensor& lse,
+    __nv_bfloat16* shadow_residual) {
   TORCH_CHECK(q.is_cuda() && q.dtype() == torch::kBFloat16);
   TORCH_CHECK(q.dim() == 5 && q.size(2) >= 1);
   const int64_t batch64 = q.size(0);
@@ -1251,42 +1272,78 @@ void stablefold_triangle_forward_out(
       if (tma_planes_ok && head_dim == 16) {
         launch_forward_tma<16>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+            batch, shadow_residual, stream);
       } else {
         launch_forward<16>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, head_dim, stream);
+            batch, head_dim, shadow_residual, stream);
       }
       break;
     case 32:
       if (tma_planes_ok && head_dim == 32) {
         launch_forward_tma<32>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+            batch, shadow_residual, stream);
       } else {
         launch_forward<32>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, head_dim, stream);
+            batch, head_dim, shadow_residual, stream);
       }
       break;
     case 64:
       if (tma_planes_ok && head_dim == 64) {
         launch_forward_tma<64>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, stream);
+            batch, shadow_residual, stream);
       } else {
         launch_forward<64>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads,
-            batch, head_dim, stream);
+            batch, head_dim, shadow_residual, stream);
       }
       break;
     default:
       launch_forward<128>(
           q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch,
-          head_dim, stream);
+          head_dim, shadow_residual, stream);
       break;
   }
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "launch failed");
+}
+
+void stablefold_triangle_forward_out(
+    const torch::Tensor& q,
+    const torch::Tensor& k,
+    const torch::Tensor& v,
+    const torch::Tensor& mask,
+    const torch::Tensor& bias,
+    torch::Tensor& out,
+    torch::Tensor& lse) {
+  stablefold_triangle_forward_impl(q, k, v, mask, bias, out, lse, nullptr);
+}
+
+// Shadow variant: additionally emits the BF16 rounding residual of the
+// output (same [B,O,N,H,D] layout) -- the compressed state that lets the
+// backward evaluate a probability-consistent delta without a second
+// reconstruction.
+void stablefold_triangle_forward_shadow_out(
+    const torch::Tensor& q,
+    const torch::Tensor& k,
+    const torch::Tensor& v,
+    const torch::Tensor& mask,
+    const torch::Tensor& bias,
+    torch::Tensor& out,
+    torch::Tensor& lse,
+    torch::Tensor& shadow_residual) {
+  TORCH_CHECK(
+      shadow_residual.is_cuda() &&
+          shadow_residual.device() == out.device() &&
+          shadow_residual.dtype() == torch::kBFloat16 &&
+          shadow_residual.is_contiguous() &&
+          shadow_residual.sizes() == out.sizes(),
+      "shadow_residual must be contiguous BF16 matching out");
+  stablefold_triangle_forward_impl(
+      q, k, v, mask, bias, out, lse,
+      reinterpret_cast<__nv_bfloat16*>(shadow_residual.data_ptr()));
 }
 
 }  // namespace
@@ -1300,4 +1357,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       "stablefold_triangle_forward_out",
       &stablefold_triangle_forward_out,
       "StableFold Triangle Attention forward (online softmax)");
+  module.def(
+      "stablefold_triangle_forward_shadow_out",
+      &stablefold_triangle_forward_shadow_out,
+      "Forward + BF16 rounding-residual shadow for the SR delta");
 }

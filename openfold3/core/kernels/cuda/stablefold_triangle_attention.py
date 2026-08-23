@@ -245,10 +245,31 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
                 dtype=q.dtype,
             )
             lse = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
-            _forward_extension().stablefold_triangle_forward_out(
-                q, k, v, mask, expanded_bias, out, lse
+            shadow = None
+            if (
+                os.environ.get("OPENFOLD3_SR_BACKWARD") == "1"
+                and os.environ.get("OPENFOLD3_SR_SHADOW") == "1"
+                and q.shape[-2] % 64 == 0
+                and q.shape[-1] <= 64
+            ):
+                # SR shadow lane: the forward also emits the BF16 rounding
+                # residual of the output, the compressed state that lets
+                # the backward evaluate a probability-consistent delta.
+                shadow = torch.empty_like(out)
+                _forward_extension().stablefold_triangle_forward_shadow_out(
+                    q, k, v, mask, expanded_bias, out, lse, shadow
+                )
+            else:
+                _forward_extension().stablefold_triangle_forward_out(
+                    q, k, v, mask, expanded_bias, out, lse
+                )
+        if shadow is None:
+            ctx.save_for_backward(q, k, v, mask, expanded_bias, out, lse)
+        else:
+            ctx.save_for_backward(
+                q, k, v, mask, expanded_bias, out, lse, shadow
             )
-        ctx.save_for_backward(q, k, v, mask, expanded_bias, out, lse)
+        ctx.has_shadow = shadow is not None
         ctx.sequence = int(sequence)
         ctx.target_prefix = tuple(int(value) for value in target_prefix)
         ctx.bias_prefix = tuple(int(value) for value in bias_prefix)
@@ -268,14 +289,24 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
             stablefold_triangle_dkdv as dkdv,
         )
 
-        q, k, v, mask, expanded_bias, out, lse = ctx.saved_tensors
+        saved = ctx.saved_tensors
+        q, k, v, mask, expanded_bias, out, lse = saved[:7]
+        shadow = saved[7] if getattr(ctx, "has_shadow", False) else None
+        use_sr = os.environ.get("OPENFOLD3_SR_BACKWARD") == "1" and (
+            q.shape[-2] % 64 == 0 and q.shape[-1] <= 64
+        )
         with torch.cuda.device(q.device):
             d_output = d_output.contiguous()
             delta = torch.empty_like(lse)
-            _delta_extension().stablefold_triangle_delta_out(d_output, out, delta)
-            if os.environ.get("OPENFOLD3_SR_BACKWARD") == "1" and (
-                q.shape[-2] % 64 == 0 and q.shape[-1] <= 64
-            ):
+            if use_sr and shadow is not None:
+                _delta_extension().stablefold_triangle_delta_shadow_out(
+                    d_output, out, shadow, delta
+                )
+            else:
+                _delta_extension().stablefold_triangle_delta_out(
+                    d_output, out, delta
+                )
+            if use_sr:
                 # Experimental single-reconstruction lane: one kernel
                 # reconstructs P/dS and produces all four gradients with
                 # the classic delta everywhere (v1 perf-experiment
