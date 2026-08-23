@@ -110,6 +110,7 @@ class MSAAttention(nn.Module):
         chunk_size: int,
         use_deepspeed_evo_attention: bool,
         use_cueq_triangle_kernels: bool,
+        use_stable_triangle_attention: bool,
         use_triton_triangle_kernels: bool,
         use_lma: bool,
     ) -> torch.Tensor:
@@ -121,6 +122,7 @@ class MSAAttention(nn.Module):
                 biases=biases,
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_lma=use_lma,
             )
@@ -234,6 +236,7 @@ class MSAAttention(nn.Module):
         chunk_size: int | None = None,
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_triton_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
@@ -278,6 +281,7 @@ class MSAAttention(nn.Module):
                 chunk_size,
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_lma=use_lma,
             )
@@ -289,6 +293,7 @@ class MSAAttention(nn.Module):
                 biases=biases,
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_lma=use_lma,
             )
@@ -389,6 +394,7 @@ class MSAColumnAttention(nn.Module):
         chunk_size: int | None = None,
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_triton_triangle_kernels: bool = False,
         use_lma: bool = False,
     ) -> torch.Tensor:
@@ -414,6 +420,7 @@ class MSAColumnAttention(nn.Module):
             chunk_size=chunk_size,
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_lma=use_lma,
         )

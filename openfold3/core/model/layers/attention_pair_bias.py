@@ -173,6 +173,7 @@ class AttentionPairBias(nn.Module):
         mask: torch.Tensor | None = None,
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_triton_triangle_kernels: bool = False,
         use_lma: bool = False,
         use_high_precision_attention: bool = False,
@@ -209,6 +210,7 @@ class AttentionPairBias(nn.Module):
         batch_dims = a.shape[:-2]
         reshape_for_ds_kernel = (
             use_deepspeed_evo_attention
+            or use_stable_triangle_attention
             or use_cueq_triangle_kernels
             or use_triton_triangle_kernels
         ) and len(batch_dims) == 1
@@ -222,6 +224,7 @@ class AttentionPairBias(nn.Module):
             biases=biases,
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_lma=use_lma,
             use_high_precision=use_high_precision_attention,
@@ -388,6 +391,7 @@ class CrossAttentionPairBias(nn.Module):
         mask: torch.Tensor | None = None,
         use_high_precision_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
+        use_stable_triangle_attention: bool = False,
         use_triton_triangle_kernels: bool = False,
     ) -> torch.Tensor:
         """
@@ -433,6 +437,7 @@ class CrossAttentionPairBias(nn.Module):
             biases=biases,
             use_high_precision=use_high_precision_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+            use_stable_triangle_attention=use_stable_triangle_attention,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
         )
 

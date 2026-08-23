@@ -204,6 +204,7 @@ class PairFormerBlock(nn.Module):
                 mask=single_mask,
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_lma=use_lma,
             ),
