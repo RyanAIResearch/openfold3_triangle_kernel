@@ -157,8 +157,8 @@ def _is_stablefold_supported_uncached(
         return False, "res_mask tail must be (N,1,1,N)"
     if tuple(pair_bias.shape[-4:]) != (1, heads, sequence, sequence):
         return False, "pair_bias tail must be (1,H,N,N)"
-    if pair_bias.dtype != torch.bfloat16:
-        return False, "pair_bias must be BF16"
+    if pair_bias.dtype not in (torch.bfloat16, torch.float32):
+        return False, "pair_bias must be BF16 or FP32"
     devices = {tensor.device for tensor in (q, k, v, res_mask, pair_bias)}
     if len(devices) != 1:
         return False, "q/k/v, res_mask, and pair_bias must share one device"
@@ -325,6 +325,12 @@ def stablefold_triangle_attention(
         raise ValueError(f"unsupported StableFold case: {reason}")
     global _INVOCATIONS
     _INVOCATIONS += 1
+    # Hopper kernels store the bias tile as BF16. Accept the model's native
+    # FP32 pair-bias contract and make the precision boundary explicit here;
+    # autograd owns the inverse cast, so an FP32 source receives an FP32
+    # gradient. This is dtype-generic routing, not a shape/site specialization.
+    if pair_bias.dtype == torch.float32:
+        pair_bias = pair_bias.to(torch.bfloat16)
     prefix = q.shape[:-4]
     outer = int(q.shape[-4])
     sequence = int(q.shape[-2])

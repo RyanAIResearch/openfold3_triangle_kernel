@@ -216,10 +216,14 @@ class StableFoldTriangleAttentionSupportTest(unittest.TestCase):
                 self.assertFalse(supported)
                 self.assertIn("q/k/v must be BF16", reason)
 
-    def test_rejects_non_bf16_pair_bias(self):
+    def test_accepts_fp32_pair_bias(self):
         supported, reason = self.support(bias=self.bias.float())
+        self.assertTrue(supported, reason)
+
+    def test_rejects_fp16_pair_bias(self):
+        supported, reason = self.support(bias=self.bias.half())
         self.assertFalse(supported)
-        self.assertIn("pair_bias must be BF16", reason)
+        self.assertIn("pair_bias must be BF16 or FP32", reason)
 
     def test_rejects_cross_device_inputs(self):
         supported, reason = self.support(bias=self.bias.cpu())

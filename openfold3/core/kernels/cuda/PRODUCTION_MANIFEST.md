@@ -39,7 +39,9 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 ## 运行时支持范围
 
 - GPU：Hopper `sm_90a`（当前发布门禁设备为 H100 80GB）；
-- dtype：Q/K/V 与 pair bias 为 BF16；mask 为 FP32/BF16/FP16；
+- dtype：Q/K/V 为 BF16；pair bias 接受 BF16 或 FP32，FP32 在 facade 的
+  Hopper 内核边界显式转为 BF16（其梯度由 autograd 转回 FP32）；mask 接受
+  FP32/BF16/FP16；
 - head dimension：`1 <= D <= 64`；8 的倍数原生走 io-dim 车道，其余维度
   zero-pad 到下一个 8 的倍数并保持有效区域梯度；
 - sequence/head：设备可行范围内的 runtime `N > 0`、`H > 0`；
@@ -50,9 +52,9 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 - pair bias：若确实需要 broadcast，target prefix rank 必须 `<=16`；若 bias
   prefix 已与 target prefix 完全一致，则没有这一 broadcast bookkeeping 限制。
 
-`N=384/640/768` 是编译期快车道，不是功能白名单。其他长度走
-`StaticSequence=0` generic kernel，并使用显式尾块 guard；不会因为长度不同而
-回退其他后端。
+生产 facade 对所有 sequence 统一 pad-to-64，并走 `StaticSequence=-1` 的
+runtime exact-tile lane；没有 `N=384/640/768` 或 `N=640` 的分发表。只有绕过
+facade 的未填充 direct ABI 调用才走 `StaticSequence=0` 的显式尾块 guard。
 
 ## 生产调用链
 
@@ -87,7 +89,7 @@ canonical builder 必须使用 fresh clone，并通过 `nm`、`cuobjdump` 和只
 StableFold 与官方 PyTorch 使用相同实数公式，但浮点执行契约不同：
 
 - raw BF16 Q/K 进入 HMMA，FP32 accumulator 后乘 scale；
-- mask 与 pair bias 在 FP32 中加入；
+- mask 以 FP32 加入；pair bias 从 BF16 内核存储提升到 FP32 后加入；
 - forward 使用在线 softmax；
 - backward 由保存的 LSE 重算概率；
 - dQ/dBias 使用重算的 `T=sum(P*dP)` 行标量；基于实测
