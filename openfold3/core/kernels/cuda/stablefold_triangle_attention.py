@@ -180,6 +180,40 @@ def _is_stablefold_supported_uncached(
     return True, "supported"
 
 
+class _PackQKV(torch.autograd.Function):
+    """Fused q/k/v gather into kernel layout; backward is the inverse gather.
+
+    Forward reads the [.., N, H, D]-major producer views in one launch and
+    emits three contiguous [.., H, N, D] tensors. Backward regathers the
+    contiguous grads back into the producer view layout (a pure permutation,
+    bitwise-preserving) in one launch.
+    """
+
+    @staticmethod
+    def forward(ctx, q, k, v, bo, heads, seq, dim):
+        from openfold3.core.kernels.cuda.stablefold_trimul import (
+            _get_ext as _misc_ext,
+        )
+
+        ctx.dims = (bo, heads, seq, dim)
+        ctx.view_shapes = (q.shape, k.shape, v.shape)
+        packed = _misc_ext().pack_rows3(
+            q.reshape(-1), k.reshape(-1), v.reshape(-1),
+            bo, heads, seq, dim, True,
+        )
+        return packed[0], packed[1], packed[2]
+
+    @staticmethod
+    def backward(ctx, dq, dk, dv):
+        # Same contract as .contiguous(): identity pass-through. The upstream
+        # permute's own backward inverts the layout symbolically.
+        sq, sk, sv = ctx.view_shapes
+        return (
+            dq.reshape(sq), dk.reshape(sk), dv.reshape(sv),
+            None, None, None, None,
+        )
+
+
 class _StableFoldTriangleAttention(torch.autograd.Function):
     @staticmethod
     def forward(  # noqa: D102
@@ -311,9 +345,35 @@ def stablefold_triangle_attention(
     # materialized exactly once; its backward reduction is owned by the CUDA
     # extension and therefore has one fixed order rather than ExpandBackward's
     # framework-dependent tree.
-    q_flat = q.reshape((batch,) + shape).contiguous()
-    k_flat = k.reshape((batch,) + shape).contiguous()
-    v_flat = v.reshape((batch,) + shape).contiguous()
+    def _is_swapped_hn_view(tensor):
+        # producer layout [.., N, H, D] viewed as [.., H, N, D]: one fused
+        # gather replaces three separate copy kernels.
+        outer_, heads_, seq_, dim_ = tensor.shape[-4:]
+        strides = tensor.stride()
+        return (
+            tensor.dtype == torch.bfloat16
+            and dim_ % 2 == 0
+            and strides[-1] == 1
+            and strides[-2] == heads_ * dim_
+            and strides[-3] == dim_
+        )
+
+    if (
+        _is_swapped_hn_view(q)
+        and _is_swapped_hn_view(k)
+        and _is_swapped_hn_view(v)
+    ):
+        outer_, heads_, seq_, dim_ = shape
+        q_flat, k_flat, v_flat = _PackQKV.apply(
+            q, k, v, batch * outer_, heads_, seq_, dim_
+        )
+        q_flat = q_flat.view((batch,) + shape)
+        k_flat = k_flat.view((batch,) + shape)
+        v_flat = v_flat.view((batch,) + shape)
+    else:
+        q_flat = q.reshape((batch,) + shape).contiguous()
+        k_flat = k.reshape((batch,) + shape).contiguous()
+        v_flat = v.reshape((batch,) + shape).contiguous()
     mask_flat = (
         res_mask.expand(prefix + tuple(res_mask.shape[-4:]))
         .reshape((batch,) + tuple(res_mask.shape[-4:]))

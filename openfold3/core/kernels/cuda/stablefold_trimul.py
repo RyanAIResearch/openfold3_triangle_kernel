@@ -21,6 +21,7 @@ _CUDA_SRC = r"""
 #include <torch/extension.h>
 #include <cuda_bf16.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <algorithm>
 
 using bf16 = __nv_bfloat16;
 
@@ -46,9 +47,17 @@ __global__ void ln_fwd_kernel(
   int lane = threadIdx.x % WARP;
   const bf16* base = input + row * row_stride;
   float sum = 0.f, sq = 0.f;
-  for (int c = lane; c < C; c += WARP) {
-    float v = __bfloat162float(base[c * col_stride]);
-    sum += v; sq += v * v;
+  if (col_stride == 1) {
+    for (int c2 = lane * 2; c2 < C; c2 += WARP * 2) {
+      __nv_bfloat162 v2 = *reinterpret_cast<const __nv_bfloat162*>(base + c2);
+      float v0 = __bfloat162float(v2.x), v1 = __bfloat162float(v2.y);
+      sum += v0 + v1; sq += v0 * v0 + v1 * v1;
+    }
+  } else {
+    for (int c = lane; c < C; c += WARP) {
+      float v = __bfloat162float(base[c * col_stride]);
+      sum += v; sq += v * v;
+    }
   }
   sum = warp_sum(sum); sq = warp_sum(sq);
   float mean = sum / C;
@@ -56,9 +65,21 @@ __global__ void ln_fwd_kernel(
   float rstd = rsqrtf(var + 1e-5f);
   if (lane == 0) { save_mean[row] = mean; save_rstd[row] = rstd; }
   bf16* out = output + row * (long)C;
-  for (int c = lane; c < C; c += WARP) {
-    float v = __bfloat162float(base[c * col_stride]);
-    out[c] = __float2bfloat16((v - mean) * rstd * gamma[c] + beta[c]);
+  if (col_stride == 1) {
+    for (int c2 = lane * 2; c2 < C; c2 += WARP * 2) {
+      __nv_bfloat162 v2 = *reinterpret_cast<const __nv_bfloat162*>(base + c2);
+      __nv_bfloat162 res;
+      res.x = __float2bfloat16((__bfloat162float(v2.x) - mean) * rstd
+                               * gamma[c2] + beta[c2]);
+      res.y = __float2bfloat16((__bfloat162float(v2.y) - mean) * rstd
+                               * gamma[c2 + 1] + beta[c2 + 1]);
+      *reinterpret_cast<__nv_bfloat162*>(out + c2) = res;
+    }
+  } else {
+    for (int c = lane; c < C; c += WARP) {
+      float v = __bfloat162float(base[c * col_stride]);
+      out[c] = __float2bfloat16((v - mean) * rstd * gamma[c] + beta[c]);
+    }
   }
 }
 
@@ -228,15 +249,24 @@ __global__ void gate_split_fwd_tiled_kernel(
     if (pos < NN) {
       const bf16* p = pbase + (long)pp * 5 * H;
       float m = mask[b_idx * NN + pos];
-      int h = h0 + tx;
-      float ap = __bfloat162float(p[h]);
-      float ag = __bfloat162float(p[H + h]);
-      float bp = __bfloat162float(p[2 * H + h]);
-      float bg = __bfloat162float(p[3 * H + h]);
-      sa[pp][tx] = ap / (1.f + __expf(-ag)) * m;
-      sb[pp][tx] = bp / (1.f + __expf(-bg)) * m;
-    } else {
-      sa[pp][tx] = 0.f; sb[pp][tx] = 0.f;
+      if (tx < 16) {                       // 16 threads x bf16x2 = 32 h
+        int h = h0 + tx * 2;
+        __nv_bfloat162 ap2 = *reinterpret_cast<const __nv_bfloat162*>(p + h);
+        __nv_bfloat162 ag2 = *reinterpret_cast<const __nv_bfloat162*>(p + H + h);
+        __nv_bfloat162 bp2 = *reinterpret_cast<const __nv_bfloat162*>(p + 2 * H + h);
+        __nv_bfloat162 bg2 = *reinterpret_cast<const __nv_bfloat162*>(p + 3 * H + h);
+        sa[pp][tx * 2] = __bfloat162float(ap2.x)
+            / (1.f + __expf(-__bfloat162float(ag2.x))) * m;
+        sa[pp][tx * 2 + 1] = __bfloat162float(ap2.y)
+            / (1.f + __expf(-__bfloat162float(ag2.y))) * m;
+        sb[pp][tx * 2] = __bfloat162float(bp2.x)
+            / (1.f + __expf(-__bfloat162float(bg2.x))) * m;
+        sb[pp][tx * 2 + 1] = __bfloat162float(bp2.y)
+            / (1.f + __expf(-__bfloat162float(bg2.y))) * m;
+      }
+    } else if (tx < 16) {
+      sa[pp][tx * 2] = 0.f; sa[pp][tx * 2 + 1] = 0.f;
+      sb[pp][tx * 2] = 0.f; sb[pp][tx * 2 + 1] = 0.f;
     }
   }
   __syncthreads();
@@ -317,12 +347,26 @@ __global__ void transpose_ln_fwd_kernel(
   int tid = threadIdx.x;            // 256
   int lane = tid % 32, warp = tid / 32;
   // load: each warp handles rows h = warp, warp+8, ... coalesced across pos
-  for (int h = warp; h < H; h += 8) {
-    long row = (b_idx * H + h) * NN + pos0;
+  {
     long pos_left = NN - pos0;
-    float v = (pos_left >= 32 || lane < pos_left)
-        ? __bfloat162float(x[row + lane]) : 0.f;
-    tile[h * 33 + lane] = v;
+    bool full = pos_left >= 32;
+    // bf16x2 path requires 4-byte alignment: row offsets stay even only
+    // when NN is even. Odd NN takes the scalar path uniformly.
+    bool vec = full && ((NN & 1L) == 0);
+    for (int h = warp; h < H; h += 8) {
+      long row = (b_idx * H + h) * NN + pos0;
+      if (vec) {
+        if (lane < 16) {
+          __nv_bfloat162 v2 =
+              *reinterpret_cast<const __nv_bfloat162*>(x + row + lane * 2);
+          tile[h * 33 + lane * 2] = __bfloat162float(v2.x);
+          tile[h * 33 + lane * 2 + 1] = __bfloat162float(v2.y);
+        }
+      } else {
+        tile[h * 33 + lane] = (full || lane < pos_left)
+            ? __bfloat162float(x[row + lane]) : 0.f;
+      }
+    }
   }
   __syncthreads();
   // per position LN: warp w handles pos = w, w+8, ...
@@ -449,31 +493,75 @@ __global__ void transpose_ln_bwd_kernel(
   }
 }
 
+// ---- row-regather: contiguous D-rows remapped between [.,H,N,.] layouts ----
+__global__ void gather_rows_kernel(
+    const bf16* __restrict__ s0, bf16* __restrict__ d0,
+    const bf16* __restrict__ s1, bf16* __restrict__ d1,
+    const bf16* __restrict__ s2, bf16* __restrict__ d2,
+    long rows, int H, int N, int D, bool src_h_inner) {
+  long row = blockIdx.x * (long)blockDim.y + threadIdx.y;
+  if (row >= rows) return;
+  long bo = row / ((long)H * N);
+  long rem = row % ((long)H * N);
+  long h = rem / N, n = rem % N;
+  long src_row = src_h_inner
+      ? (bo * N + n) * (long)H + h
+      : (bo * H + h) * (long)N + n;
+  const bf16* srcs[3] = {s0, s1, s2};
+  bf16* dsts[3] = {d0, d1, d2};
+  int lane = threadIdx.x;
+  for (int t = 0; t < 3; ++t) {
+    if (srcs[t] == nullptr) break;
+    const __nv_bfloat162* sp = reinterpret_cast<const __nv_bfloat162*>(
+        srcs[t] + src_row * (long)D);
+    __nv_bfloat162* dp = reinterpret_cast<__nv_bfloat162*>(
+        dsts[t] + row * (long)D);
+    for (int c = lane; c < D / 2; c += blockDim.x) dp[c] = sp[c];
+  }
+}
+
 // ---------------- K4: sigmoid-gate multiply ----------------
 __global__ void sig_mul_fwd_kernel(
     const bf16* __restrict__ raw, const bf16* __restrict__ gate,
-    long total, int H, long gate_row_stride, bf16* __restrict__ out) {
-  long idx = blockIdx.x * (long)blockDim.x + threadIdx.x;
-  if (idx >= total) return;
-  long row = idx / H; int h = idx % H;
-  float gv = __bfloat162float(gate[row * gate_row_stride + h]);
-  float g = 1.f / (1.f + __expf(-gv));
-  out[idx] = __float2bfloat16(__bfloat162float(raw[idx]) * g);
+    long rows, int H, long gate_row_stride, bf16* __restrict__ out) {
+  // grid: (row-blocks, h-pair) ; each thread handles 2 consecutive h (bf16x2)
+  long row = blockIdx.x * (long)blockDim.y + threadIdx.y;
+  int h2 = (blockIdx.y * blockDim.x + threadIdx.x) * 2;
+  if (row >= rows || h2 >= H) return;
+  const __nv_bfloat162* raw2 =
+      reinterpret_cast<const __nv_bfloat162*>(raw + row * (long)H + h2);
+  const __nv_bfloat162* gate2 =
+      reinterpret_cast<const __nv_bfloat162*>(gate + row * gate_row_stride + h2);
+  __nv_bfloat162 rv = *raw2, gv = *gate2;
+  float g0 = 1.f / (1.f + __expf(-__bfloat162float(gv.x)));
+  float g1 = 1.f / (1.f + __expf(-__bfloat162float(gv.y)));
+  __nv_bfloat162 res;
+  res.x = __float2bfloat16(__bfloat162float(rv.x) * g0);
+  res.y = __float2bfloat16(__bfloat162float(rv.y) * g1);
+  *reinterpret_cast<__nv_bfloat162*>(out + row * (long)H + h2) = res;
 }
 
 __global__ void sig_mul_bwd_kernel(
     const bf16* __restrict__ raw, const bf16* __restrict__ gate,
-    const bf16* __restrict__ grad_out, long total, int H,
+    const bf16* __restrict__ grad_out, long rows, int H,
     long gate_row_stride, bf16* __restrict__ draw, bf16* __restrict__ dgate) {
-  long idx = blockIdx.x * (long)blockDim.x + threadIdx.x;
-  if (idx >= total) return;
-  long row = idx / H; int h = idx % H;
-  float gv = __bfloat162float(gate[row * gate_row_stride + h]);
-  float g = 1.f / (1.f + __expf(-gv));
-  float dy = __bfloat162float(grad_out[idx]);
-  float r = __bfloat162float(raw[idx]);
-  draw[idx] = __float2bfloat16(dy * g);
-  dgate[row * gate_row_stride + h] = __float2bfloat16(dy * r * g * (1.f - g));
+  long row = blockIdx.x * (long)blockDim.y + threadIdx.y;
+  int h2 = (blockIdx.y * blockDim.x + threadIdx.x) * 2;
+  if (row >= rows || h2 >= H) return;
+  long base = row * (long)H + h2;
+  long gbase = row * gate_row_stride + h2;
+  __nv_bfloat162 rv = *reinterpret_cast<const __nv_bfloat162*>(raw + base);
+  __nv_bfloat162 gv = *reinterpret_cast<const __nv_bfloat162*>(gate + gbase);
+  __nv_bfloat162 dy = *reinterpret_cast<const __nv_bfloat162*>(grad_out + base);
+  float g0 = 1.f / (1.f + __expf(-__bfloat162float(gv.x)));
+  float g1 = 1.f / (1.f + __expf(-__bfloat162float(gv.y)));
+  __nv_bfloat162 dr, dg;
+  dr.x = __float2bfloat16(__bfloat162float(dy.x) * g0);
+  dr.y = __float2bfloat16(__bfloat162float(dy.y) * g1);
+  dg.x = __float2bfloat16(__bfloat162float(dy.x) * __bfloat162float(rv.x) * g0 * (1.f - g0));
+  dg.y = __float2bfloat16(__bfloat162float(dy.y) * __bfloat162float(rv.y) * g1 * (1.f - g1));
+  *reinterpret_cast<__nv_bfloat162*>(draw + base) = dr;
+  *reinterpret_cast<__nv_bfloat162*>(dgate + gbase) = dg;
 }
 
 // ------------------------- host wrappers -------------------------
@@ -668,13 +756,51 @@ std::vector<torch::Tensor> transpose_ln_bwd(torch::Tensor x, torch::Tensor d_xln
   return {d_x, dgamma, dbeta};
 }
 
+std::vector<torch::Tensor> pack_rows3(torch::Tensor q, torch::Tensor k,
+                                      torch::Tensor v, long bo, int H, int N,
+                                      int D, bool src_h_inner) {
+  TORCH_CHECK(D % 2 == 0, "stablefold gather: head dim must be even");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  long rows = bo * (long)H * N;
+  auto opts = torch::TensorOptions().dtype(torch::kBFloat16).device(q.device());
+  auto oq = torch::empty({rows, (long)D}, opts);
+  auto ok = torch::empty({rows, (long)D}, opts);
+  auto ov = torch::empty({rows, (long)D}, opts);
+  dim3 block(std::min(D / 2, 32), 8);
+  dim3 grid((unsigned)((rows + 7) / 8));
+  gather_rows_kernel<<<grid, block, 0, stream>>>(
+      (const bf16*)q.data_ptr(), (bf16*)oq.data_ptr(),
+      (const bf16*)k.data_ptr(), (bf16*)ok.data_ptr(),
+      (const bf16*)v.data_ptr(), (bf16*)ov.data_ptr(),
+      rows, H, N, D, src_h_inner);
+  return {oq, ok, ov};
+}
+
+torch::Tensor gather_rows1(torch::Tensor src, long bo, int H, int N, int D,
+                           bool src_h_inner) {
+  TORCH_CHECK(D % 2 == 0, "stablefold gather: head dim must be even");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  long rows = bo * (long)H * N;
+  auto dst = torch::empty({rows, (long)D},
+      torch::TensorOptions().dtype(torch::kBFloat16).device(src.device()));
+  dim3 block(std::min(D / 2, 32), 8);
+  dim3 grid((unsigned)((rows + 7) / 8));
+  gather_rows_kernel<<<grid, block, 0, stream>>>(
+      (const bf16*)src.data_ptr(), (bf16*)dst.data_ptr(),
+      nullptr, nullptr, nullptr, nullptr,
+      rows, H, N, D, src_h_inner);
+  return dst;
+}
+
 torch::Tensor sig_mul_fwd(torch::Tensor raw, torch::Tensor gate, int H,
                           long gate_row_stride) {
   auto stream = at::cuda::getCurrentCUDAStream();
   auto out = torch::empty_like(raw);
-  long total = raw.numel();
-  sig_mul_fwd_kernel<<<cdiv(total, 256), 256, 0, stream>>>(
-      (const bf16*)raw.data_ptr(), (const bf16*)gate.data_ptr(), total, H,
+  long rows = raw.numel() / H;
+  dim3 block(std::min(H / 2, 64), 4);
+  dim3 grid((unsigned)((rows + 3) / 4), (unsigned)((H / 2 + block.x - 1) / block.x));
+  sig_mul_fwd_kernel<<<grid, block, 0, stream>>>(
+      (const bf16*)raw.data_ptr(), (const bf16*)gate.data_ptr(), rows, H,
       gate_row_stride, (bf16*)out.data_ptr());
   return out;
 }
@@ -684,10 +810,12 @@ torch::Tensor sig_mul_bwd(torch::Tensor raw, torch::Tensor gate,
                           int H, long gate_row_stride) {
   auto stream = at::cuda::getCurrentCUDAStream();
   auto draw = torch::empty_like(raw);
-  long total = raw.numel();
-  sig_mul_bwd_kernel<<<cdiv(total, 256), 256, 0, stream>>>(
+  long rows = raw.numel() / H;
+  dim3 block(std::min(H / 2, 64), 4);
+  dim3 grid((unsigned)((rows + 3) / 4), (unsigned)((H / 2 + block.x - 1) / block.x));
+  sig_mul_bwd_kernel<<<grid, block, 0, stream>>>(
       (const bf16*)raw.data_ptr(), (const bf16*)gate.data_ptr(),
-      (const bf16*)grad_out.data_ptr(), total, H, gate_row_stride,
+      (const bf16*)grad_out.data_ptr(), rows, H, gate_row_stride,
       (bf16*)draw.data_ptr(), (bf16*)dgate_dst.data_ptr());
   return draw;
 }
@@ -704,6 +832,8 @@ std::vector<torch::Tensor> transpose_ln_fwd(torch::Tensor x, int N, int H, int B
 std::vector<torch::Tensor> transpose_ln_bwd(torch::Tensor x, torch::Tensor d_xln, int N, int H, int B, torch::Tensor gamma, torch::Tensor mean, torch::Tensor rstd);
 torch::Tensor transpose_rows_to_channel(torch::Tensor src, int N, int H, int B);
 torch::Tensor gate_split_bwd(torch::Tensor proj, torch::Tensor mask, torch::Tensor da, torch::Tensor db, int N, int H, bool outgoing, int B);
+std::vector<torch::Tensor> pack_rows3(torch::Tensor q, torch::Tensor k, torch::Tensor v, long bo, int H, int N, int D, bool src_h_inner);
+torch::Tensor gather_rows1(torch::Tensor src, long bo, int H, int N, int D, bool src_h_inner);
 torch::Tensor sig_mul_fwd(torch::Tensor raw, torch::Tensor gate, int H, long gate_row_stride);
 torch::Tensor sig_mul_bwd(torch::Tensor raw, torch::Tensor gate, torch::Tensor grad_out, torch::Tensor dgate_dst, int H, long gate_row_stride);
 """
@@ -723,7 +853,7 @@ def _get_ext():
                 "gate_split_fwd", "gate_split_bwd",
                 "gate_split_fwd_tiled", "gate_split_bwd_tiled_into",
                 "transpose_ln_fwd", "transpose_ln_bwd", "transpose_rows_to_channel",
-                "sig_mul_fwd", "sig_mul_bwd",
+                "sig_mul_fwd", "sig_mul_bwd", "pack_rows3", "gather_rows1",
             ],
             extra_cuda_cflags=["-O3"],
             verbose=False,
