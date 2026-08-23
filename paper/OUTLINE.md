@@ -67,10 +67,27 @@ tree invariant to workspace scheduling.
 6. **Implementation** (1pp) — warpgroup/ss-wgmma encodings; register-cliff
    engineering; AOT fail-closed loader; env-gated contracts.
 7. **Evaluation** (3pp) — see figures/tables below.
-8. **Related work** (0.75pp) — DASH (ICLR'26: deterministic FA scheduling —
-   they optimize *for* a fixed order; we make results order-invariant to
-   scheduling), ELSA (associative monoid forward, exact in reals only; our
-   claim is bitwise in fp), MegaFold, FastFold/ScaleFold, cuEq/DS4S, FA2/3.
+8. **Related work** (0.75pp) — five paragraphs (survey verified 2026-08-22):
+   (a) Efficient exact attention: FA2/FA3/FA4 + attention I/O complexity
+   (ICML'24) — we do NOT challenge standard-attention bounds; different
+   computational graph.
+   (b) Biomolecular/bias-aware systems: MegaFold/EvoFlash-3D (CLOSEST
+   competitor: knows the dBias outer reduction, two-phase backward,
+   atomic dBias in reported version — our diff: single producer, fixed
+   trees, replay contract), FlashBias (structured-bias cost reduction ≠
+   exact backward ownership), FastFold/ScaleFold, PairMixer et al.
+   ("they change the model to avoid the operator; we change the
+   execution of the original operator").
+   (c) Deterministic execution & contracts: DASH (schedules an existing
+   deterministic backward; we move the recompute/materialize boundary),
+   TBIK (unified trees across TP sizes — cite, don't claim
+   first-decoupling), Kernel Contracts (bits-as-API framing precedes us;
+   we are a concrete AF3 instance), ELSA (forward scan, reals-exact).
+   (d) Finite-precision backward: Qiu & Yao ICLR'26 (THE delta-defect
+   mechanism paper — we cite, characterize on AF3, add residual state +
+   SR dependency link), SageAttention3.
+   (e) Programmable attention: FlexAttention, Flashlight, TileLang,
+   QiMeng-Attention — mechanisms vs our specialized algorithm/contract.
 9. **Discussion & limitations** — forward remains ~3% behind cuDNN kernel-
    only (this paper is about backward); trimul path is experimental-tier;
    D=128 keeps two-pass; single-GPU scope (world-size-invariant reduction =
@@ -100,6 +117,17 @@ tree invariant to workspace scheduling.
 - **T4** Memory: workspace + partials + shadow state per crop. [HAVE calc]
 - **T5** e2e stats: n-block mean/CI, both orders, bootstrap. [PENDING F5 data]
 
+## Must-cite list (verified where marked)
+
+FA2 (ICLR'24), FA3 (NeurIPS'24), FA4 (MLSys'26), Attention I/O complexity
+(ICML'24), MegaFold/EvoFlash-3D (arXiv 2506.20686, VERIFIED), DASH
+(arXiv 2601.21824, ICLR'26, VERIFIED), Qiu & Yao low-precision FA
+(arXiv 2510.04212, ICLR'26, VERIFIED), FlashBias (NeurIPS'25), TBIK
+(arXiv 2511.17826, verify at citation pass), Kernel Contracts (arXiv
+2604.22032, verify), FastFold (PPoPP'24), ScaleFold (DAC'24).
+Recommended: ELSA (2604.23798, VERIFIED), SageAttention3, DualKV,
+FlexAttention, Flashlight, TileLang, PairMixer.
+
 ## Claims discipline (agreed wording)
 
 - "residual-corrected output delta", NOT "probability-consistent/oracle"
@@ -110,6 +138,24 @@ tree invariant to workspace scheduling.
   in F6, scoped to horizon actually measured.
 - Trimul: "performance-validated, engineering contract below the attention
   path" — experimental tier.
+- NEVER claim first: three-axis identification (MegaFold exposed it — we
+  claim the unified single-producer FORMULATION), deterministic-DAG
+  (DASH), fixed reduction trees / logical-physical decoupling (TBIK),
+  bits-as-contract (Kernel Contracts), delta-defect discovery or
+  FP32-output fix (Qiu & Yao). Safe formula: "to our knowledge, no prior
+  work JOINTLY provides ..." over the full combination only.
+- Do NOT claim FlashAttention I/O-suboptimality on standard attention;
+  claim: FA's standard cost model does not cover the outer-shared bias
+  backward graph.
+- Triton atomic_add receipt must be COMMIT-PINNED (upstream removed it);
+  prefer our atomic twin as the primary receipt.
+- Defensible one-liner (the novelty sentence): "StableFold is a
+  single-reconstruction triangular-attention backward in which each
+  probability tile feeds all four gradient consumers, while bounded
+  logical reduction trees make dQ and the outer-shared pair-bias gradient
+  bitwise invariant to workspace scheduling; an optional BF16
+  rounding-residual state improves the output-based delta without
+  restoring a second reconstruction." 
 
 ## Evidence still owed before submission
 
@@ -121,3 +167,7 @@ tree invariant to workspace scheduling.
 4. Optional: workspace 64↔512MB trainer-level bitwise θ_t demo (cheap,
    uniquely ours — strengthens C2).
 5. Pin the artifact commit; wheel + receipts bundle for the SR branch.
+6. Incremental related-work search in the week before submission (watch
+   Aug–Sep 2026 arXiv, NeurIPS 2026 / EMNLP 2026 rollouts).
+7. Verify TBIK + Kernel Contracts + FlashBias + FA4 citations first-hand
+   at the citation pass (currently second-hand from the survey).

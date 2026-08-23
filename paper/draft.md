@@ -24,11 +24,11 @@ four gradients outperforms an aggressively optimized double-reconstruction
 baseline, but only after the scattered gradient's partials are held in
 BF16, staged transport is pipelined, and the fixed-order fold is
 vectorized: the recompute-versus-materialize inequality is decided by
-transport engineering, not FLOPs. We further show the backward's softmax
-row scalar is a numerical contract: the classic
-$\delta=dO\cdot O_{\mathrm{bf16}}$ carries a coherent row bias that
-surfaces on trained checkpoints, and a compressed rounding-residual saved
-by the forward recovers the perfect-delta floor. On H100, StableFold's
+transport engineering, not FLOPs. We further treat the backward's softmax
+row scalar as a contract choice: the known structured bias of the
+output-based $\delta=dO\cdot O_{\mathrm{bf16}}$ surfaces strongly on
+trained checkpoints, and a compressed rounding residual saved by the
+forward corrects it without restoring a second reconstruction. On H100, StableFold's
 backward runs 21–26% faster than our production baseline across
 OpenFold3 crops, trains real OpenFold3 steps 3.5–4.5% faster (steady-state) than NVIDIA
 cuEquivariance end to end — mean wall margin −9.5 s per 30 steps, bootstrap
@@ -47,14 +47,16 @@ arrives — and the dominant cost of these models is the pair stack, whose
 triangular attention and triangular multiplicative update scale cubically
 with sequence length. Two engineering communities have responded: fused
 production kernels (NVIDIA cuEquivariance, DeepSpeed4Science, Triton
-Evoformer kernels) that make the pair stack fast, and a reproducibility
+Evoformer kernels) and AF3-specific training systems (MegaFold) that
+make the pair stack fast, and a reproducibility
 community that increasingly asks that scientific training runs be exactly
 repeatable. Today these goals conflict. The fastest triangular-attention
 backwards resolve their gradient reductions with unordered floating-point
-atomics: in the Triton production path, the pair-bias gradient is an
-`atomic_add`; in our measurements, an atomic variant of our own kernel
-leaves up to 11.8% of pair-bias gradient elements changed between
-identical replays. FlashAttention-3's deterministic mode shows the
+atomics: the vendored OpenFold3 Triton path we build against accumulates
+the pair-bias gradient with `tl.atomic_add` (evoformer.py at our pinned
+commit; upstream has since revised this path), and an otherwise-identical
+atomic twin of our own kernel leaves up to 11.8% of pair-bias gradient
+elements changed between identical replays. FlashAttention-3's deterministic mode shows the
 accepted price: up to 37.9% backward throughput loss, and recent work
 (DASH) treats recovering that loss as a scheduling problem. Determinism,
 in current practice, is a tax.
@@ -107,19 +109,25 @@ recomputation beats materialization is decided by partial precision,
 transport pipelining, and reduction implementation — jointly — not by
 FLOP counting.
 
-Third, we identify the backward's softmax row scalar
-$\delta_q=\sum_k P_{qk}\,dP_{qk}$ as a numerical contract with
-consequences. The classic evaluation $\delta=dO\cdot O_{\mathrm{bf16}}$
-— used industry-wide — injects a coherent row-constant bias into dQ and
-dBias that is invisible on random weights and 2–3× on real pretrained
-checkpoints; we cross-validate the effect against an independent FP64
-oracle study to three significant figures. We then show the minimum
-state that repairs it: the forward's own BF16 rounding residual, saved
-as compressed shadow state at one extra store per element. A
-residual-corrected delta recovers 75–80% of the gap to a perfect FP64
-delta on real captures; an uncompressed FP32 output shadow equals the
-perfect delta on every case we measure. Delta choice becomes an explicit,
-priced menu rather than an implementation accident.
+Third, we treat the backward's softmax row scalar
+$\delta_q=\sum_k P_{qk}\,dP_{qk}$ as part of the numerical contract.
+Recent analysis of low-precision FlashAttention training identified the
+mechanism: evaluating $\delta=dO\cdot O$ from a low-precision saved
+output injects structured, biased gradient error (Qiu & Yao, ICLR 2026).
+We characterize this known defect where it matters for structure
+prediction — real pretrained OpenFold3 activations, where it inflates
+dQ error 2–3× at trunk triangle sites and to 0.81 *relative* at a
+saturated attention-pair-bias site — and we connect it to
+single-reconstruction's dependency structure: the probability-derived
+$\delta$ is unavailable until a full key scan completes, so repairing
+$\delta$ by recomputation reintroduces the second reconstruction this
+paper removes. Our contribution is the minimal state that breaks the
+dependency: the forward's own BF16 rounding residual, saved as
+compressed shadow state at one extra store per element, corrects the
+output-based delta *before* the sweep begins. It recovers 75–80% of the
+gap to a perfect FP64 delta on real captures; an uncompressed FP32
+output shadow equals the perfect delta on every case we measure. Delta
+choice becomes an explicit, priced state–accuracy menu.
 
 On an H100, across OpenFold3 crops 384/640/768, StableFold's
 single-reconstruction backward runs 21–26% faster than our production
@@ -152,9 +160,11 @@ serving a single kernel.
 3. A single-reconstruction backward and a measured cost model showing
    the recompute-vs-materialize decision is won by transport design;
    including the negative results that locate the crossover (§4).
-4. A taxonomy and measurement of backward delta contracts, and a
-   compressed shadow state that recovers perfect-delta accuracy at one
-   store per element (§5).
+4. A finite-precision state frontier for single-reconstruction
+   backward: characterizing the known output-delta defect on pretrained
+   AF3 activations (including a saturated-site failure far beyond
+   previously reported magnitudes) and a BF16 rounding-residual state
+   that corrects delta without restoring a second reconstruction (§5).
 5. An open, fail-closed, bitwise-replayable artifact evaluated on real
    OpenFold3 training against cuEquivariance, Triton, and stock PyTorch
    (§6–7).
