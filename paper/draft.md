@@ -135,8 +135,8 @@ choice becomes an explicit, priced state–accuracy menu.
 On an H100, across OpenFold3 crops 384/640/768, StableFold's
 single-reconstruction backward runs 21–26% faster than our production
 baseline and 11–17% faster than the modernized two-pass; in real
-OpenFold3 training at crop 640 it beats NVIDIA cuEquivariance in every
-one of ten paired same-session arms across three campaigns: four
+OpenFold3 training at crop 640 it wins every one of five paired
+same-session comparisons (four scratch blocks and one pretrained): four
 order-balanced scratch blocks give a mean margin of −9.5 s per 30 steps
 (bootstrap 95% CI [−11.5, −6.5] s; steady-state 8.52 vs 8.83 s/step,
 −3.5%), and a pretrained-weights block — within the official 1,000-step

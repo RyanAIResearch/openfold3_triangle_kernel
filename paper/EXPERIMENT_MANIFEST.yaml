@@ -1,0 +1,60 @@
+# Binds every headline number to its code version, environment, and run
+# directory. Update on every campaign; canonical_commit/tag advance only
+# via explicit decision.
+canonical_commit: TBD-post-terminology-pass  # tag iclr27-stablefold-rc1 at freeze
+base_commit: a94b9562e
+branch: sr/dq-warpgroup
+worktree: /home/ubuntu/xzz/of3_sr_dq
+tags:
+  sr-v1-classic-delta: 76ab6493d   # PRE-FENCE; historical (F2 ladder only)
+  sr-v2-shadow-delta: f284f6133    # PRE-FENCE; historical (F2 ladder only)
+environment:
+  gpu: H100-80GB (single)
+  driver: 570.195.03
+  cuda_torch: "12.9"
+  torch: 2.10.0
+  python: 3.14.6
+  arch_flags: TORCH_CUDA_ARCH_LIST=9.0a
+  pixi_env: openfold3_workspace/src/.pixi/envs/openfold3-cuda12
+arms:
+  DR-Prod: {commit: a94b9562e, desc: production two-pass baseline (wheel_env_a94b AOT)}
+  DR-WG:   {commit: 92b2bd586+, desc: modernized two-pass (warpgroup + ss-wgmma), env flags off}
+  SR-C:    {flags: OPENFOLD3_SR_BACKWARD=1, desc: single reconstruction, classic delta}
+  SR-R:    {flags: OPENFOLD3_SR_BACKWARD=1 OPENFOLD3_SR_SHADOW=1, desc: SR + residual-corrected delta}
+kernel_numbers_provenance:
+  pre_fence: [bwd 5.845ms@640 and earlier ladder entries]
+  post_fence: [bwd 5.912ms@640 (03b488d8c); FINAL tables must be re-measured post-fence at freeze]
+runs:
+  scratch_abba_blocks:
+    path: /home/ubuntu/xzz/of3_perf_runs/sr_stats_blocks
+    arms: 4x paired (cueq wheel_a94b vs SR-R at f284f6133-era build), orders AB/BA/BA/AB
+    status: done; statistical unit = paired block (n=4, preliminary bootstrap)
+  warmup_400_pair:
+    path: /home/ubuntu/xzz/of3_perf_runs/sr_pre400
+    caveat: entirely inside the official 1000-step LR warmup (bare ckpt, fresh optimizer)
+    status: done
+  step1000_checkpoint:
+    path: /home/ubuntu/xzz/of3_perf_runs/sr_fork1000/prefix_cueq/metrics/metrics/version_0/checkpoints/last.ckpt
+    contents_verified: [global_step=1000, optimizer_states(4170 tensors), lr_schedulers, loops, ema, DataModule]
+    status: done
+  fullLR_fork:
+    path: /home/ubuntu/xzz/of3_perf_runs/sr_fork1000
+    arms: fork_cueq / fork_sr (SR-R), 1000->1500 full LR, OF3_OPTIM_METRICS=1
+    status: running
+  sr_full_schedule:
+    path: /home/ubuntu/xzz/of3_perf_runs/sr_srfull
+    status: queued
+    caveat: NO clean cueq 0->1500 counterpart yet (prefix was instrumentation-polluted) -> not usable alone for full-schedule speed claims
+  captures:
+    paths: [/home/ubuntu/xzz/of3_perf_runs/sr_capture_640/cases, /home/ubuntu/xzz/of3_perf_runs/sr_capture_matrix]
+    columns: [D16@640 x8, D32@640 skip20/skip60, D16@384, APB O1-H16-D24]
+    status: done (OpenBind + 768 pending)
+invalid_for_performance:
+  - prefix_cueq 0->1000 (per-tensor Python grad-norm callback; 21.1 s/step vs 8.7 clean) — checkpoint-producer only
+  - all fork/srfull walls (instrumented with OF3_OPTIM_METRICS) — learning evidence only; speed claims come from clean block campaigns
+pending_before_freeze:
+  - post-fence re-measurement of all headline kernel tables
+  - .cu terminology pass (residual-corrected) — deferred until fork_sr locked its build hash
+  - atomic-twin re-run, workspace 64<->512MiB trainer demo
+  - AOT wheel + clean-install + binary receipts
+  - direct delta-vs-delta (fp32-shadow vs perfect) comparison

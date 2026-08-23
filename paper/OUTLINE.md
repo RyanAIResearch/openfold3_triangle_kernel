@@ -12,8 +12,9 @@ repeated probability reconstruction; for triangular attention — which adds a
 third outer reduction axis and a shared pair bias — we show that a
 single-reconstruction reduction DAG with bounded BF16 partials and pipelined
 transport outperforms an aggressively optimized double-reconstruction
-baseline, while keeping every gradient bitwise replayable and the reduction
-tree invariant to workspace scheduling.
+baseline, while keeping all StableFold-produced gradients bitwise replayable under
+the pinned binary, inputs, device architecture, and execution contract,
+and the reduction tree invariant to workspace scheduling.
 
 ## Contributions (C1–C5)
 
@@ -37,14 +38,16 @@ tree invariant to workspace scheduling.
   reduce win 11–17%).
 - **C4 — Delta contracts.** The backward's softmax-gradient row scalar
   ("delta") is a contract choice: classic dO·O_bf16 carries a coherent
-  row-constant bias that appears on sharp (trained) attention;
+  row-scalar delta error that induces structured rowwise errors in dQ
+  and dBias, appearing on sharp (trained) attention;
   a *residual-corrected output delta* — the forward's BF16 rounding residual
   saved as compressed state — recovers most of the perfect-delta floor at
-  +|O| bf16 memory; an FP32 shadow equals the perfect delta in practice.
+  +|O| bf16 memory; an FP32-output shadow reaches the same observed
+  dQ/dBias error floor as the perfect-delta oracle across measured
+  captures (direct delta-vs-delta comparison still owed).
   Ladder measured on synthetic sharp cases and real pretrained captures.
-- **C5 — System & evaluation.** Fail-closed AOT binary contract; bitwise
-  self-replay gates at every level; kernel/op/e2e evaluation against
-  cuEquivariance, Triton, and stock PyTorch on real OpenFold3 training.
+  (The fail-closed AOT binary contract and replay gates fold into C4 and
+  the implementation section — four major contributions, not five.)
 
 ## Section plan
 
@@ -151,6 +154,17 @@ FlexAttention, Flashlight, TileLang, PairMixer.
   backward graph.
 - Triton atomic_add receipt must be COMMIT-PINNED (upstream removed it);
   prefer our atomic twin as the primary receipt.
+- Generality wording: "StableFold uses fixed algorithmic tiles and
+  capability-based dispatch, with no sequence-length-, crop-, or
+  call-site-specific kernels; arbitrary supported shapes are handled by
+  uniform padding, runtime guards, and a generic fallback." Never say
+  "no edge-case handling" (guards/padding/fallbacks ARE edge handling);
+  never claim the shape battery PROVES absence of specialization (it
+  evidences the mechanisms; the static routing table is the proof).
+- Statistics wording: the statistical unit is the PAIRED BLOCK (five
+  paired comparisons, 4 scratch + 1 pretrained — never "ten arms");
+  n=4 bootstrap is PRELIMINARY; per-step times are correlated within a
+  run and are never independent samples.
 - Defensible one-liner (the novelty sentence): "StableFold is a
   single-reconstruction triangular-attention backward in which each
   probability tile feeds all four gradient consumers, while bounded
