@@ -8,9 +8,10 @@
 //   * dS = P * (dP - delta) is pure elementwise on identical accumulator
 //     layouts, so the derivative never leaves registers;
 //   * one CTA owns one (query-tile, head, 4-outer leaf). K/V depend on the
-//     outer, so each warp stages its own K/V tile privately (warp-sync
-//     only); CTA barriers exist solely around the per-tile cross-warp
-//     dBias combine;
+//     outer, so each warp stages its own K/V tile privately. Bias is shared
+//     by the four outers and is staged once into unused Q-tile padding;
+//     steady-state next-tile staging is published by the existing trailing
+//     CTA barrier around the cross-warp dBias combine;
 //   * the CTA's dBias plane slice has exactly one writer -- zero cross-CTA
 //     coordination, zero atomics, and one leaf launch;
 //   * a bounded [leaf,batch,head,query-slab,key] workspace is reused. Query
@@ -118,6 +119,20 @@ __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
   const __nv_bfloat16 h = __float2bfloat16_rn(high);
   return static_cast<uint32_t>(__bfloat16_as_ushort(l)) |
       (static_cast<uint32_t>(__bfloat16_as_ushort(h)) << 16);
+}
+
+// The +8 columns in each warp's Q tile are intentionally outside every
+// ldmatrix operand.  Across four warps they form an exact 32x32 BF16 tile:
+// warp w owns bias key columns [8*w, 8*w+8).  Staging the batch/head bias
+// once per CTA removes four identical L1/TEX reads (one from each outer
+// warp) without increasing dynamic shared memory or changing arithmetic.
+template <int HeadDim>
+__device__ __forceinline__ __nv_bfloat16* shared_bias_cell(
+    __nv_bfloat16* sq, int query, int key) {
+  constexpr int kQStride = HeadDim + 8;
+  const int owner_warp = key >> 3;
+  return sq + owner_warp * kQueryBlock * kQStride +
+      query * kQStride + HeadDim + (key & 7);
 }
 
 template <
@@ -267,9 +282,8 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
       }
     }
 
-#pragma unroll 1
-    for (int key_start = 0; key_start < sequence; key_start += kKeyTile) {
-      // Private K/V tile stage for this warp's outer (warp-sync only).
+    const auto stage_key_and_bias = [&](int key_start) {
+      // K/V are outer-dependent, so each warp retains its private tile.
       for (int element = lane; element < kKeyTile * HeadDim;
            element += kWarpSize) {
         const int row = element / HeadDim;
@@ -284,8 +298,27 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
         my_v[row * kKVStride + col] =
             col < io_dim ? v[src] : __float2bfloat16_rn(0.0F);
       }
-      __syncwarp();
+      // Bias is shared by all four outer warps.  The full CTA cooperatively
+      // stages it into otherwise-unused Q padding.
+      for (int element = threadIdx.x; element < kQueryBlock * kKeyTile;
+           element += kThreads) {
+        const int row = element / kKeyTile;
+        const int key = element - row * kKeyTile;
+        const bool valid =
+            (FullQueryTiles || query_start + row < query_end) &&
+            (kSequenceExact || key_start + key < sequence);
+        *shared_bias_cell<HeadDim>(sq, row, key) = valid
+            ? bias[bias_base + static_cast<int64_t>(row) * sequence +
+                   key_start + key]
+            : __float2bfloat16_rn(0.0F);
+      }
+    };
 
+    stage_key_and_bias(0);
+    __syncthreads();
+
+#pragma unroll 1
+    for (int key_start = 0; key_start < sequence; key_start += kKeyTile) {
 #pragma unroll
       for (int sub = 0; sub < kQuerySubTiles; ++sub) {
         uint32_t q_frags[HeadDim / 16][4];
@@ -337,11 +370,10 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
                 const float value = score[column].v[index] * scale +
                     mask[mask_base + key] +
                     __bfloat162float(
-                        bias[bias_base +
-                             static_cast<int64_t>(
-                                 sub * kQueryTile + group + half * 8) *
-                                 sequence +
-                             key]);
+                        *shared_bias_cell<HeadDim>(
+                            sq,
+                            sub * kQueryTile + group + half * 8,
+                            column * 8 + thread_in_group * 2 + pair));
                 const float probability =
                     lse == -std::numeric_limits<float>::infinity()
                     ? 0.0F
@@ -410,6 +442,14 @@ __global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
           *destination = __float2bfloat16_rn(
               __fadd_rn(__bfloat162float(*destination), tile_sum));
         }
+      }
+      if (key_start + kKeyTile < sequence) {
+        // The first CTA barrier above proves every warp has finished reading
+        // the current K/V and bias tiles.  Prefetch the next operands while
+        // the same threads finish their disjoint workspace writes; the
+        // existing trailing barrier publishes both, so steady state gains no
+        // additional CTA barrier.
+        stage_key_and_bias(key_start + kKeyTile);
       }
       __syncthreads();
     }

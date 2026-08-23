@@ -94,6 +94,10 @@ StableFold 与官方 PyTorch 使用相同实数公式，但浮点执行契约不
 - backward 由保存的 LSE 重算概率；
 - dQ/dBias 使用重算的 `T=sum(P*dP)` 行标量；基于实测
   `sum(P)=1 ± 1.3e-6`，当前执行契约省略 `T/Z` 的除法；
+- dQ/dBias 的每个 CTA 将四个 outer 共用的 `32x32` BF16 bias tile 只读取
+  一次，存入 Q shared tile 未参与 MMA 的 `+8` padding；下一 tile 的 bias 与
+  各 warp 私有 K/V 在现有 dBias 尾部 barrier 前预取，不增加 dynamic shared
+  memory，不改变浮点运算或归约顺序，也没有 sequence 特判；
 - dBias 使用固定归约树，不使用浮点 atomic accumulation；
 - query slab、batch chunk 与 leaf wave 只划分互相独立的输出或已定义的
   leaf 区间；跨 wave 的 FP32 root 始终按全局 leaf index 左折叠，因此 workspace
