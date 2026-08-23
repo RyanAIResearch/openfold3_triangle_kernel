@@ -394,18 +394,23 @@ class Attention(nn.Module):
                 "lma_kv_chunk_size must be provided"
             )
 
+        # Product precedence: StableFold owns attention whenever its flag is
+        # on; a simultaneous cuEq/Triton request (the "cuEq keeps trimul"
+        # deployment) is simply ignored here rather than treated as a
+        # conflict. Genuinely incompatible modes still raise.
+        if use_stable_triangle_attention:
+            use_cueq_triangle_kernels = False
+            use_triton_triangle_kernels = False
         if use_stable_triangle_attention and any(
             (
                 use_deepspeed_evo_attention,
-                use_cueq_triangle_kernels,
-                use_triton_triangle_kernels,
                 use_lma,
                 use_high_precision,
             )
         ):
             raise ValueError(
-                "use_stable_triangle_attention is mutually exclusive with all "
-                "other attention backends and use_high_precision"
+                "use_stable_triangle_attention is mutually exclusive with "
+                "use_deepspeed_evo_attention, use_lma, and use_high_precision"
             )
 
         if cueq_is_installed and use_cueq_triangle_kernels:
