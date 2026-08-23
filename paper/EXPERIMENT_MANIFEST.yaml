@@ -6,8 +6,8 @@ base_commit: a94b9562e
 branch: sr/dq-warpgroup
 worktree: /home/ubuntu/xzz/of3_sr_dq
 tags:
-  sr-v1-classic-delta: 76ab6493d   # PRE-FENCE; historical (F2 ladder only)
-  sr-v2-shadow-delta: f284f6133    # PRE-FENCE; historical (F2 ladder only)
+  sr-v1-classic-delta: 778d89720   # pre-fence state, rewritten author 2026-08-23
+  sr-v2-shadow-delta: 26ebb0159    # pre-fence state, rewritten author 2026-08-23
 environment:
   gpu: H100-80GB (single)
   driver: 570.195.03
@@ -18,7 +18,7 @@ environment:
   pixi_env: openfold3_workspace/src/.pixi/envs/openfold3-cuda12
 arms:
   DR-Prod: {commit: a94b9562e, desc: production two-pass baseline (wheel_env_a94b AOT)}
-  DR-WG:   {commit: 92b2bd586+, desc: modernized two-pass (warpgroup + ss-wgmma), env flags off}
+  DR-WG:   {commit: f85490b25+, desc: modernized two-pass (warpgroup + ss-wgmma), env flags off}
   SR-C:    {flags: OPENFOLD3_SR_BACKWARD=1, desc: single reconstruction, classic delta}
   SR-R:    {flags: OPENFOLD3_SR_BACKWARD=1 OPENFOLD3_SR_SHADOW=1, desc: SR + residual-corrected delta}
 kernel_numbers_provenance:
@@ -58,3 +58,9 @@ pending_before_freeze:
   - atomic-twin re-run, workspace 64<->512MiB trainer demo
   - AOT wheel + clean-install + binary receipts
   - direct delta-vs-delta (fp32-shadow vs perfect) comparison
+
+authorship_note: |
+  2026-08-23: all commits after a94b9562e rewritten to author RyanAIResearch
+  (were Evan810828 via stale machine gitconfig). Old hashes cited in earlier
+  session notes map: bc79f56f6->0b751a87d (SR), 76ab6493d->778d89720 (reduce),
+  f284f6133->26ebb0159 (shadow), 03b488d8c->4fa564634 (fence).
