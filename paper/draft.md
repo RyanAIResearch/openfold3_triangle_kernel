@@ -28,13 +28,19 @@ transport engineering, not FLOPs. We further treat the backward's softmax
 row scalar as a contract choice: the known structured bias of the
 output-based $\delta=dO\cdot O_{\mathrm{bf16}}$ surfaces strongly on
 trained checkpoints, and a compressed rounding residual saved by the
-forward corrects it without restoring a second reconstruction. On H100, StableFold's
-backward runs 26.1–28.9% faster than cuEquivariance 0.10.0 across D=32
-OpenFold3 crops, trains real OpenFold3 steps 3.5–4.5% faster (steady-state) than NVIDIA
-cuEquivariance end to end — mean wall margin −9.5 s per 30 steps, bootstrap
-95% CI [−11.5, −6.5] s over four order-balanced blocks, with the same-seed
-loss gap inside cuEquivariance's own run-to-run scatter — and replays
-bitwise.
+forward corrects it without restoring a second reconstruction. On H100,
+StableFold's backward runs 26.1–28.9% faster than cuEquivariance 0.10.0
+across D=32 OpenFold3 crops. Against source-pinned public kernels on exact
+producer layouts at N=640 and 768, its forward plus backward reduces
+D16/D32 triangle time by 44.0–71.8% relative to MegaFold/EvoFlash-3D and
+42.4–48.7% relative to TriFast across eight independent-seed paired
+blocks, while retaining the negative boundary where MegaFold is 10.5%
+faster at the N=768/D48 diffusion site. In an
+attention-selector-only crop768 experiment, it reduces synchronized
+OpenFold3 step time by 6.78% and step energy by 7.35% over four
+order-balanced blocks, with a short-run same-seed loss gap inside
+cuEquivariance's self-envelope — and replays bitwise under the pinned
+execution contract.
 
 ---
 
@@ -143,8 +149,17 @@ cuEquivariance 0.10.0 and 19.4–23.2% faster than the same-artifact
 modernized two-pass. Forward plus backward is 21.3–23.5% faster than
 cuEquivariance. This is an applicability region, not an all-dimension
 claim: at N640/D64, SR-R is 41.9% slower than cuEquivariance in backward
-under the same timing contract. In real
-OpenFold3 training at crop 640 it wins every one of five paired
+under the same timing contract. In exact producer layouts, an eight-block
+public-kernel campaign additionally shows that SR-R reduces
+forward-plus-backward time by 44.0–71.8% versus MegaFold/EvoFlash-3D and
+42.4–48.7% versus TriFast across D16/D32 triangle sites at N640/N768, with
+every paired block favoring SR-R. This result has two explicit boundaries:
+TriFast does not implement the APB operator, and MegaFold is 10.5% faster
+at the N768/D48 diffusion APB site. SR-R also uses substantially more
+incremental operator memory on triangle sites (for example 3.17 GiB versus
+1.47 GiB MegaFold and 0.89 GiB TriFast at N768/D32), so this is a speed
+result, not a memory win. In real OpenFold3 training at crop 640 it wins
+every one of five paired
 same-session comparisons (four scratch blocks and one pretrained): four
 order-balanced scratch blocks give a mean margin of −9.5 s per 30 steps
 (bootstrap 95% CI [−11.5, −6.5] s; steady-state 8.52 vs 8.83 s/step,
@@ -180,8 +195,8 @@ serving a single kernel.
    BF16 rounding-residual state that corrects delta without restoring
    a second reconstruction (§5).
 5. An open, fail-closed, bitwise-replayable artifact evaluated on real
-   OpenFold3 training against cuEquivariance, Triton, and stock PyTorch
-   (§6–7).
+   OpenFold3 training and exact producer layouts against cuEquivariance,
+   MegaFold/EvoFlash-3D, TriFast, Triton, and stock PyTorch (§6–7).
 
 ---
 
@@ -235,6 +250,19 @@ serving a single kernel.
   is the n=4 statistical unit; no samples were excluded. The six-backend
   matrix retains the negative N640/D64 boundary: SR-R backward is 41.90%
   slower than cuEquivariance.
+- Closest public-kernel gate: source-pinned MegaFold/EvoFlash-3D and the
+  TriFast 0.1.13 wheel were run adapter-inclusive on exact OpenFold3
+  producer layouts. N640 and N768 each use eight independent-seed paired
+  process blocks, with site/backend order rotated and mirrored; every
+  process has 12 warmups and 30 CUDA-event samples. Across D16/D32
+  triangle sites, SR-R forward+backward time is 44.0–71.8% below MegaFold
+  and 42.4–48.7% below TriFast, with 8/8 wins in every cell. D24 APB is
+  23.3–29.3% below MegaFold. The retained negative cell is N768/D48
+  diffusion APB, where MegaFold is 10.5% faster in 8/8 blocks. TriFast is
+  triangle-only and is marked unsupported, not failed, for APB. Same-size
+  N640/N768 checks against cuEq keep all supported tensors finite at
+  relative L2 <= 0.004672; MegaFold's relaxed-atomic dBias may diverge on
+  replay, whereas TriFast is bitwise across the tested 20-run replays.
 - AOT release gate: the `acbc7a9ad` clean install disables compiler/JIT and
   passes the 7-shape DR-WG/SR-C/SR-R contract plus the 18-case public
   comparator correctness matrix. All public cases are finite with maximum

@@ -118,6 +118,17 @@ and the reduction tree invariant to workspace scheduling.
   ABBA gives a census-weighted attention-GPU-time reduction of 22.65%
   [22.57,22.74] vs cuEq and 9.30% [9.04,9.63] vs DR-WG. [HAVE:
   coverage_census_acbc7a9 campaign; keep separate from e2e step time]
+- **F3c** Closest published/open kernel comparison on exact producer
+  layouts. MegaFold/EvoFlash-3D runs all six sites; TriFast runs only the
+  four triangle-self-attention sites and is marked unsupported for APB.
+  Eight independent-seed, order-balanced process blocks at N640 and N768
+  show SR-R forward+backward reductions of 44.0--71.8% against MegaFold
+  and 42.4--48.7% against TriFast on D16/D32 triangle sites (every paired
+  block favors SR-R). D24 APB reductions against MegaFold are 23.3% and
+  29.3%. Preserve the negative boundary: at N768/D48 diffusion APB,
+  MegaFold is 10.5% faster in every block. Adapter transforms required by
+  each public API are included. [HAVE: published_comparators_acbc7a9;
+  n=8 is the paired-block unit, distinct from the crop768 e2e n=4]
 - **F4** Delta ladder bars, synthetic sharp + 8 real captures (classic /
   shadow / fp32-shadow / perfect). [HAVE: sr_ladder outputs; MORE COLUMNS
   PENDING: D=32 sites, 384/768 crops, OpenBind ckpt]
@@ -149,7 +160,8 @@ and the reduction tree invariant to workspace scheduling.
 ## Must-cite list (verified where marked)
 
 FA2 (ICLR'24), FA3 (NeurIPS'24), FA4 (MLSys'26), Attention I/O complexity
-(ICML'24), MegaFold/EvoFlash-3D (arXiv 2506.20686, VERIFIED), DASH
+(ICML'24), MegaFold/EvoFlash-3D (arXiv 2506.20686, VERIFIED), TriFast
+(public Triton triangle-attention software, v0.1.13, Apr. 2025), DASH
 (arXiv 2601.21824, ICLR'26, VERIFIED), Qiu & Yao low-precision FA
 (arXiv 2510.04212, ICLR'26, VERIFIED), FlashBias (NeurIPS'25), TBIK
 (arXiv 2511.17826, verify at citation pass), Kernel Contracts (arXiv
@@ -185,12 +197,14 @@ FlexAttention, Flashlight, TileLang, PairMixer.
   "no edge-case handling" (guards/padding/fallbacks ARE edge handling);
   never claim the shape battery PROVES absence of specialization (it
   evidences the mechanisms; the static routing table is the proof).
-- Statistics wording: the statistical unit is the PAIRED BLOCK (kernel
-  exact-layout and crop768 e2e campaigns each use four blocks; never call
-  the two arms separate replicates). At n=4, block-bootstrap intervals are
-  descriptive/preliminary; per-step times are correlated within a run and
-  are never independent samples. The 40 crop768 steady-step pairs are a
-  consistency diagnostic, not n=40 inferential units.
+- Statistics wording: the statistical unit is the PAIRED BLOCK. The older
+  exact-layout and crop768 e2e campaigns use n=4; the published-kernel
+  N640/N768 campaign uses n=8 independent-seed process blocks. Never call
+  the two arms or the 30 CUDA-event samples separate replicates. At n=4,
+  block-bootstrap intervals are descriptive/preliminary; per-step times
+  are correlated within a run and are never independent samples. The 40
+  crop768 steady-step pairs are a consistency diagnostic, not n=40
+  inferential units.
 - Defensible one-liner (the novelty sentence): "StableFold is a
   single-reconstruction triangular-attention backward in which each
   probability tile feeds all four gradient consumers, while bounded
@@ -222,6 +236,11 @@ single-SHA six-site exact-layout correctness matrix, order-balanced and
 four-block exact-layout performance matrices, and the final AOT
 attention-only crop768 e2e ABBA with synchronized time, NVML hardware
 energy, peak memory, loss referee, and a 595-file verified campaign seal.
+The closest executable public-kernel comparison is also complete:
+MegaFold/EvoFlash-3D and TriFast are source/wheel pinned, API-adapter costs
+are timed, N640/N768 use eight order-balanced independent-seed blocks, and
+same-size correctness/replay gates plus the D48/N768 negative crossover are
+retained in the sealed receipt.
 The workspace trainer
 sweep is deliberately a negative systems result: it shows no whole-model
 peak-memory reduction and no full-model bitwise trajectory, while the

@@ -21,6 +21,8 @@ environment:
 arms:
   DR-Prod: {commit: a94b9562e, desc: archived production cuEq baseline (wheel_env_a94b AOT)}
   cuEq-0.10.0: {version: 0.10.0, desc: public cuEquivariance comparator in the frozen Python 3.14 environment}
+  MegaFold-EvoFlash-3D: {commit: 845905e7c707cf4004404354156df97f2efc4fde, desc: public MegaFold Triton Evoformer attention, adapter-inclusive exact-layout comparator}
+  TriFast-0.1.13: {wheel_sha256: e96fc0224b85e98802b04c495380198387110e3e712ce2ca7d2e672a27e10496, desc: public triangle-self-attention-only Triton comparator; APB is out of scope}
   DR-WG:   {commit: 4be8da301, desc: same-commit modernized two-pass, env flags off}
   SR-C:    {flags: OPENFOLD3_SR_BACKWARD=1, desc: single reconstruction, classic delta}
   SR-R:    {flags: OPENFOLD3_SR_BACKWARD=1 OPENFOLD3_SR_SHADOW=1, desc: SR + residual-corrected delta}
@@ -30,6 +32,22 @@ kernel_numbers_provenance:
   final_planner_aot: [order-balanced 60-sample matrix at acbc7a9ad; D32 N384/N640/N768 SR-R bwd 1.3668/5.4396/9.4123ms]
   real_layout_coverage: [crop640 runtime census plus exact-stride N640 ABBA at acbc7a9ad; route-weighted SR-R attention GPU-time reduction 22.65% vs cuEq and 9.30% vs DR-WG]
 runs:
+  published_comparators_acbc7a9:
+    path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/published_comparators_acbc7a9_20260824T052246Z
+    runtime_commit: acbc7a9adfe792f7e4a03ccff01ec5a28e18b1b4
+    repo_head_before_docs: 8c3e39566852971f657cedd80d3d92b9781134ec
+    status: done
+    sources: "MegaFold git 845905e7c707cf4004404354156df97f2efc4fde (evoattention.py SHA256 3899e574...); TriFast PyPI 0.1.13 wheel SHA256 e96fc022... and official git 2d5251135c774d0585e9bc042d7209c6b7c470cf"
+    trifast_compatibility: "The public wheel and official git HEAD pass ensure_exists=False to pathlib.Path and fail before any kernel call. The campaign preserves the pristine wheel/source and applies one generic import-only patch (SHA256 5680d8e2...) removing that invalid keyword. torch.py and triton.py remain byte-identical to the wheel (SHA256 1c818e87... / fb6e4385...). No shape, dimension, crop, or kernel special case was added. jaxtyping 0.2.36 is target-installed outside the OpenFold environment."
+    scope: "MegaFold supports all six observed OpenFold3 sites. TriFast implements triangle self-attention only (outer == sequence), so D24/D48 APB are recorded as backend_unsupported rather than timed failures. Required public-API layout/mask conversions and contiguous output materialization are included in event timing."
+    correctness: "N128 against eager FP32-score stock reference plus N640/N768 against cuEq: every supported output/dQ/dK/dV/dBias finite and rel-L2 <= 0.004672. TriFast is bitwise across every 20-run replay. MegaFold output/dQ/dK/dV replay bitwise; its relaxed atomic dBias may diverge at triangle sites, while observed outer=1 APB replay is stable."
+    timing_design: "Single H100; final read-only acbc7a9ad AOT runtime; StableFold JIT forbidden and verified empty; CUDA events; 12 warmups + 30 samples/process; n=8 independent-seed paired process blocks; site and backend orders rotated and mirrored; paired block is the inferential unit; no timing exclusions. TriFast H100 autotune cache is tuned before timing, hash-frozen, read-only, and identical afterward."
+    n640_primary: "Representative D16/D24/D32/D48 sites. SR-R forward+backward paired time reduction vs MegaFold: 64.38/23.25/44.66/11.36%; vs TriFast on D16/D32: 45.92/42.35%. Every comparison favors SR-R in 8/8 blocks; two-sided sign p=0.0078125 per cell."
+    n768_six_site: "Both triangle start/end layouts plus D24/D48 APB. SR-R reduction vs MegaFold: D16 end/start 71.83/64.56%, D24 29.28%, D32 end/start 44.83/44.01%; all 8/8. Against TriFast: D16 end/start 48.69/46.81%, D32 end/start 43.35/42.73%; all 8/8. Negative boundary: MegaFold is 10.47% faster than SR-R at D48 diffusion APB, also 8/8."
+    memory_tradeoff: "Incremental peak at N768: SR-R 1725.8/3165.8 MiB for D16/D32 versus MegaFold 747.0/1467.0 and TriFast 460.1/892.1 MiB. The operator-level published-work speed win is not a memory win; keep distinct from the prior whole-model crop768 reserved-memory result."
+    seal: "3,056 files / 216,471,521 bytes; CAMPAIGN_SHA256SUMS SHA256 befd0336c67e193781cfb3f81b57e5fdbfa2fca1390b2082092b17005b5475ac"
+    analyses: [analysis/primary_n640_b8_summary.json, analysis/primary_n640_b8_summary.md, analysis/crop768_n8_six_sites_summary.json, analysis/crop768_n8_six_sites_summary.md]
+    claim_scope: "Exact-operator comparison, not an end-to-end MegaFold or TriFast system comparison. N768 operator n=8 does not change the separate crop768 end-to-end campaign's n=4 statistical unit."
   coverage_crop768_acbc7a9:
     path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/coverage_census_acbc7a9_20260824T024923Z
     commit: acbc7a9adfe792f7e4a03ccff01ec5a28e18b1b4
