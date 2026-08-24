@@ -8,6 +8,11 @@
   FP64-perfect comparison over 26 real pretrained captures.
 - `H100_AOT_eb013dd0c.md`: clean-source `sm_90a` wheel attestation and
   compiler-free/JIT-free clean-install smoke gate.
+- `H100_COVERAGE_CROP768_acbc7a9ad.md`: real crop640 D16/D24/D32/D48
+  runtime census, exact-layout six-backend correctness/performance and
+  route-weighted ABBA, plus the final AOT attention-only crop768 ABBA with
+  synchronized time, NVML energy, peak memory, loss referee, and campaign
+  seal.
 
 - `sr_results_bundle_20260823T0101.tar.gz` (1.2 MB)
   sha256: 048a96a3264d96b223bb1a8e7bb53ee891bbd79e6b0484fe09e3656a3ac391c4

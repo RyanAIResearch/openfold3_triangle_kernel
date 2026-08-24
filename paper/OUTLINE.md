@@ -109,14 +109,30 @@ and the reduction tree invariant to workspace scheduling.
   and shape order, 120 samples/arm/shape with paired block as n=4, no
   exclusions. Include D64 as the negative applicability boundary, not as
   a win. [HAVE: acbc7a9ad AOT receipts]
+- **F3b** Real-route coverage and weighted H100 result. A two-step crop640
+  runtime census observes D16/D24/D32/D48 with 2,184/2,184 support checks
+  and executions, zero fallbacks; D16/D24/D32 account for every observed
+  output-gradient hook, while D48 is forward-only in this workload.
+  Six exact producer layouts (including triangle start/end mask strides)
+  pass a 36-cell six-backend correctness gate. Four-block exact-layout
+  ABBA gives a census-weighted attention-GPU-time reduction of 22.65%
+  [22.57,22.74] vs cuEq and 9.30% [9.04,9.63] vs DR-WG. [HAVE:
+  coverage_census_acbc7a9 campaign; keep separate from e2e step time]
 - **F4** Delta ladder bars, synthetic sharp + 8 real captures (classic /
   shadow / fp32-shadow / perfect). [HAVE: sr_ladder outputs; MORE COLUMNS
   PENDING: D=32 sites, 384/768 crops, OpenBind ckpt]
-- **F5** e2e ABBA per-block walls + per-step time distributions.
-  [HAVE: sr_stats_blocks, numbers in draft Results notes; 400-step
-  pretrained pair running for the long-horizon panel]
-- **F6** Same-seed loss overlay cueq vs SR, scratch + pretrained.
-  [HAVE 30-step both regimes; 400-step pretrained running]
+- **F5** Final AOT crop768 attention-only e2e ABBA: both arms retain cuEq
+  trimul and differ only in the StableFold attention selector. Four paired
+  blocks, 8/8 runs and 96/96 step receipts; synchronized steady step-time
+  reduction 6.783% [6.748,6.818], throughput +7.277%, step-energy reduction
+  7.345% [7.238,7.435], and full-process-wall reduction 2.599%
+  [2.429,2.716]. Whole-run peak reserved memory is 81.038GB cuEq vs
+  80.977GB SR-R. [HAVE: final read-only AOT, JIT-forbidden receipts]
+- **F6** Same-seed loss overlay cueq vs SR, scratch + pretrained. The final
+  crop768 speed campaign adds a short-run loss referee: 48 paired points,
+  mean |gap| 7.25e-5 and max 4.90e-4, comparable to the cuEq four-run
+  self-envelope (mean 1.93e-4, max 4.81e-4). This is numerical sanity,
+  not convergence evidence. [HAVE: 30-step and 400-step/fork evidence]
 - **T1** Determinism cost: fixed-tree vs atomicAdd twin (+10–12% kernel /
   ~4.8% step; twin replay divergence up to 11.8% of elements).
   [HAVE (v8-era); RE-RUN on current kernels recommended]
@@ -125,7 +141,10 @@ and the reduction tree invariant to workspace scheduling.
 - **T3** Contract matrix: gates per lane (bitwise battery / replay /
   sanitizers / dV invariant). [HAVE]
 - **T4** Memory: workspace + partials + shadow state per crop. [HAVE calc]
-- **T5** e2e stats: n-block mean/CI, both orders, bootstrap. [HAVE]
+- **T5** e2e stats: four paired crop768 blocks, AB/BA/BA/AB, fixed-seed
+  block bootstrap; never treat the 40 within-run steps as independent.
+  Include synchronized time, hardware-counter energy, full-process wall,
+  and peak-memory rows. [HAVE]
 
 ## Must-cite list (verified where marked)
 
@@ -166,10 +185,12 @@ FlexAttention, Flashlight, TileLang, PairMixer.
   "no edge-case handling" (guards/padding/fallbacks ARE edge handling);
   never claim the shape battery PROVES absence of specialization (it
   evidences the mechanisms; the static routing table is the proof).
-- Statistics wording: the statistical unit is the PAIRED BLOCK (five
-  paired comparisons, 4 scratch + 1 pretrained — never "ten arms");
-  n=4 bootstrap is PRELIMINARY; per-step times are correlated within a
-  run and are never independent samples.
+- Statistics wording: the statistical unit is the PAIRED BLOCK (kernel
+  exact-layout and crop768 e2e campaigns each use four blocks; never call
+  the two arms separate replicates). At n=4, block-bootstrap intervals are
+  descriptive/preliminary; per-step times are correlated within a run and
+  are never independent samples. The 40 crop768 steady-step pairs are a
+  consistency diagnostic, not n=40 inferential units.
 - Defensible one-liner (the novelty sentence): "StableFold is a
   single-reconstruction triangular-attention backward in which each
   probability tile feeds all four gradient consumers, while bounded
@@ -196,7 +217,12 @@ twin, 64↔512 MiB trainer workspace sweep plus a 1/2/3/5/10-stripe bitwise
 kernel holdout, the 26-capture direct-delta comparison, the general Pareto
 workspace-planner cross-N sweep, and the clean `acbc7a9ad` `sm_90a` AOT
 wheel/attestation/no-JIT install plus six-backend correctness/performance
-gate. The workspace trainer
+gate. Also completed: the real crop640 D16/D24/D32/D48 route census, the
+single-SHA six-site exact-layout correctness matrix, order-balanced and
+four-block exact-layout performance matrices, and the final AOT
+attention-only crop768 e2e ABBA with synchronized time, NVML hardware
+energy, peak memory, loss referee, and a 595-file verified campaign seal.
+The workspace trainer
 sweep is deliberately a negative systems result: it shows no whole-model
 peak-memory reduction and no full-model bitwise trajectory, while the
 separate kernel holdout proves the scoped arithmetic-invariance claim.

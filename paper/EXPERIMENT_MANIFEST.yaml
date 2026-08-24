@@ -28,7 +28,27 @@ kernel_numbers_provenance:
   pre_fence: [bwd 5.845ms@640 and earlier ladder entries]
   post_fence: [final H100 ABCCBA matrix at 4be8da301; N640 D32 baseline 7.0715ms, SR-C 5.3864ms, SR-R 5.4098ms]
   final_planner_aot: [order-balanced 60-sample matrix at acbc7a9ad; D32 N384/N640/N768 SR-R bwd 1.3668/5.4396/9.4123ms]
+  real_layout_coverage: [crop640 runtime census plus exact-stride N640 ABBA at acbc7a9ad; route-weighted SR-R attention GPU-time reduction 22.65% vs cuEq and 9.30% vs DR-WG]
 runs:
+  coverage_crop768_acbc7a9:
+    path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/coverage_census_acbc7a9_20260824T024923Z
+    commit: acbc7a9adfe792f7e4a03ccff01ec5a28e18b1b4
+    repo_head_before_docs: 7742b79e98df27f1fd360b9d961b087fc24fc6fe
+    status: done
+    seal: "595 files / 5,071,492 bytes; COVERAGE_SHA256SUMS c911d360f3ac9a31780e2df0a3203dbaeaa8483453ea4de792eecc8b213f00fa; seal JSON 479965dfa0931a905cff8ec746ce801e3a491be71d4bcd56ce833154507e413f"
+    runtime_census: "two real crop640 training steps: 2184/2184 StableFold requests checked, supported, and executed; zero fallbacks/errors; D16/D24/D32/D48 execution shares 5.13/16.12/34.80/43.96%; backward-output-hook shares 8.89/28.89/62.22/0.00%"
+    shape_contract: "exact observed q/mask/pair-bias shapes, strides, and dtypes; D16/D32 start+end mask views, D24 pairformer APB, D48 diffusion APB; D48 is forward execution coverage because no output-gradient hook fired"
+    correctness: "single-harness-SHA 36/36 six-site x six-backend N128 gate passed; output/dQ/dK/dV/dBias finite and rel-L2 <= 0.01; SR-R worst 0.00346207; DR-WG/SR-R 30/30 replay fields bitwise"
+    screening: "N640 exact-layout primary+fully reversed mirror, 72/72 cells, 12 warmups+30 CUDA-event samples/cell; all timing metadata matched the census"
+    exact_layout_abba: "four paired blocks, 72/72 cells; SR-R total time reduction vs cuEq: D16 start/end 38.19/38.76%, D24 28.74%, D32 start/end 26.90/27.13%; D48 production forward 40.85% faster than cuEq but 4.39% slower than DR-WG"
+    route_weighted_attention: "observed forward-call plus backward-hook weighting: SR-R time reduction 22.65% vs cuEq, block-bootstrap 95% CI [22.57,22.74]; 9.30% vs DR-WG, CI [9.04,9.63]; attention GPU time only, not step time"
+    crop768_design: "attention-only AB/BA/BA/AB: both arms keep cuEq triangle multiplicative update, disable StableFold multiplicative update, and differ only in StableFold attention selector; final read-only AOT runtime; JIT forbidden; 12 steps/run, discard first 2; n=4 paired block is the statistical unit"
+    crop768_e2e: "8/8 runs and 96/96 receipts passed; all 40 steady step and energy pairs favor SR-R; synchronized step-time reduction 6.783%, block-bootstrap 95% CI [6.748,6.818], throughput +7.277%; step-energy reduction 7.345%, CI [7.238,7.435]; full-process-wall reduction 2.599%, CI [2.429,2.716]"
+    crop768_memory: "whole-run peak reserved memory cuEq 81.038GB vs SR-R 80.977GB; no memory-for-speed trade"
+    loss_referee: "48 paired train/loss points: mean absolute gap 7.250e-5, max 4.902e-4; cuEq four-run self-envelope mean 1.925e-4, max 4.807e-4; short-run numerical referee, not convergence evidence"
+    harness_forensic: "attempt1 transposed-mask input generator masked the pre-transpose column and created all-masked reference rows; fixed generically so the public final dimension remains the key dimension for either stride, retained attempt1 receipts, changed no project/CUDA code, then reran the full 36-cell final matrix under one new harness SHA"
+    analyses: [analysis/crop640_route_census_analysis.json, analysis/real_layout_correctness.json, analysis/real_layout_performance.json, analysis/real_layout_abba.json, analysis/crop768_e2e.json]
+    claim_scope: "kernel timings and route-weighted attention time are distinct from crop768 synchronized step time and full process wall; no validation batches or convergence claim in this speed campaign"
   headline_freeze_acbc7a9:
     path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/headline_freeze_b649de792_20260824T005158Z
     commit: acbc7a9adfe792f7e4a03ccff01ec5a28e18b1b4
