@@ -128,9 +128,14 @@ paper removes. Our contribution is the minimal state that breaks the
 dependency: the forward's own BF16 rounding residual, saved as
 compressed shadow state at one extra store per element, corrects the
 output-based delta *before* the sweep begins. It recovers 75–80% of the
-gap to a perfect FP64 delta on real captures; an uncompressed FP32
-output shadow equals the perfect delta on every case we measure. Delta
-choice becomes an explicit, priced state–accuracy menu.
+gap to a perfect FP64 delta in the original capture ladder. In a direct
+26-capture comparison, BF16 shadow recovers 83.3% of the dQ gap on
+average (88.1% median), while an uncompressed FP32 output shadow is not
+bitwise perfect but reaches the same observed downstream dQ error floor:
+its direct-delta relative L2 error is 4.22e-7 on average (7.84e-7 worst),
+and its dQ-error ratio to the perfect-delta oracle is 1.0014 on average
+(1.0323 worst). Delta choice becomes an explicit, priced state–accuracy
+menu.
 
 On an H100, across OpenFold3 crops 384/640/768, StableFold's
 single-reconstruction backward runs 21–26% faster than our production
@@ -180,12 +185,13 @@ serving a single kernel.
 
 - LR-SCHEDULE CAVEAT (verified in code + checkpoint): released ckpt is a
   bare state_dict (no global_step/optimizer) and restore_lr_scheduler
-  defaults false → EVERY pretrained run so far sits inside the official
-  1,000-step warmup (step 30 ≈ 3% of peak LR, step 400 ≈ 40%). All
-  pretrained loss statements are "warmup-horizon"; the 400-step pair is
-  the warmup-horizon referee. Post-warmup evidence = the fork experiment
-  (shared step-1000 checkpoint WITH optimizer state → cueq / SR-R forks
-  at full LR, 500 steps each; campaign sr_fork1000, queued).
+  defaults false → every pretrained run before the shared-checkpoint fork
+  sits inside the official 1,000-step warmup (step 30 ≈ 3% of peak LR,
+  step 400 ≈ 40%). Loss statements from those runs are "warmup-horizon";
+  the 400-step pair is the warmup-horizon referee. The post-warmup fork is
+  now complete: a shared step-1000 checkpoint WITH optimizer state fed
+  cueq-A / SR-R / cueq-B full-LR arms for 500 steps each. These instrumented
+  arms are learning evidence, not speed evidence.
 - F5/T5: scratch blocks cueq {736.5, 739.8, 739.3, 739.6} vs SR {731.6,
   728.1, 729.3, 728.4}; margins {−4.9, −11.7, −10.0, −11.3}; mean −9.46 s
   (−1.28%); bootstrap 95% CI [−11.46, −6.50]; steady-state per-step
@@ -202,6 +208,23 @@ serving a single kernel.
   (brackets the archived 0.0121 pre-fix D32 baseline — second
   cross-validation), shadow 0.0035–0.0057, perfect 0.0033–0.0042.
   384/D=16: classic 0.0061–0.0092, shadow 0.0038–0.0085, perfect ~0.0035.
+- Direct-delta gate (26 pretrained captures): FP32 shadow is not bitwise
+  identical to the FP64-perfect delta cast to FP32 (0/26 exact), but its
+  direct-delta relative L2 is 4.22e-7 mean / 7.84e-7 max and its downstream
+  dQ error-floor ratio is 1.00136 mean / 1.03227 max. BF16 shadow recovers
+  83.34% mean / 88.15% median of the classic-to-perfect dQ gap. Use "same
+  observed downstream error floor," never "equals perfect delta."
+- Workspace trainer gate (crop 640, mirrored 64/128/256/512 MiB order): all
+  eight runs retained identical whole-model peak allocation/reservation;
+  64 MiB was 1.62% slower than 256 MiB, while 128–512 MiB were within 0.2%.
+  A separate N640/D16 holdout spanning 1/2/3/5/10 stripes passed bitwise for
+  dQ/dK/dV/dBias and against the independent two-pass dK/dV oracle. Thus the
+  planner-invariance claim is kernel-scoped; no trainer peak-memory win or
+  full-model bitwise trajectory is claimed.
+- AOT release gate: clean commit `eb013dd0c` produced an `sm_90a` SASS-only
+  wheel with all forward-shadow, delta-shadow, and SR-backward symbols. A
+  no-compiler/no-JIT clean install passed contiguous and noncontiguous full
+  forward+backward smoke tests for both two-pass and SR-R.
 - **APB-site forensic (CLOSED — small-denominator critique confirmed and
   absorbed):** case [1,O=1,H=16,N=640,D=24]. FP64 exact: dQ_ref l2 =
   2.45e-7 (trunk sites ~7e-4 — 3,000× larger), maxabs 5.1e-8, |dO| l2

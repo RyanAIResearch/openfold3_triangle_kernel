@@ -1,5 +1,14 @@
 # Result receipts
 
+- `H100_SUMMARY_4be8da301.md`: final correctness, sanitizer, kernel matrix,
+  same-commit ABBA, production cuEq ABBA, memory/energy, and NCU summary.
+- `H100_WORKSPACE_TRAINER_4be8da301.md`: mirrored trainer budget sweep and
+  independent multi-stripe bitwise holdout.
+- `H100_DIRECT_DELTA_4be8da301.md`: direct classic/BF16-shadow/FP32-shadow/
+  FP64-perfect comparison over 26 real pretrained captures.
+- `H100_AOT_eb013dd0c.md`: clean-source `sm_90a` wheel attestation and
+  compiler-free/JIT-free clean-install smoke gate.
+
 - `sr_results_bundle_20260823T0101.tar.gz` (1.2 MB)
   sha256: 048a96a3264d96b223bb1a8e7bb53ee891bbd79e6b0484fe09e3656a3ac391c4
   Contents: every SR-campaign metrics CSV (per-step loss / step wall /

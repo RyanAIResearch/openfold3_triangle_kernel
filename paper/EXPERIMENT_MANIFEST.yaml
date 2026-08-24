@@ -2,6 +2,7 @@
 # directory. Update on every campaign; canonical_commit/tag advance only
 # via explicit decision.
 canonical_commit: 4be8da30152591ff94c8b95cbe84dda0c3ebb37a  # final H100 kernel campaign
+artifact_commit: eb013dd0c6429bd6c82a5e47c1a0b65df6da098b  # AOT release-gate metadata/tests
 base_commit: 029f76f5  # authorship-rewritten equivalent of a94b9562e
 branch: sr/dq-warpgroup
 worktree: /home/ubuntu/xzz/of3_sr_dq
@@ -34,7 +35,31 @@ runs:
     causal_abba: "same-commit two-pass vs SR-R, 4 paired blocks AB/BA/BA/AB, mean -2.05%, descriptive 95% CI [-2.18%, -1.94%]"
     production_abba: "archived cuEq system vs SR-R, 4 paired blocks AB/BA/BA/AB, mean -3.83%, descriptive 95% CI [-3.89%, -3.73%]"
     production_telemetry: "mean peak memory -1460MiB; full-process energy -3.71% (descriptive, includes initialization/teardown)"
-    profiler: "NCU 2025.1 basic + focused detailed pass; Nsys 2024.6 agent-launch timeout retained as negative receipt"
+    profiler: "NCU 2025.1 basic + focused detailed pass; Nsys 2024.6 agent-launch timeout reproduced even on /bin/true, retained as negative receipt and excluded from claims"
+  workspace_trainer_4be8da301:
+    path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/workspace_trainer_4be8da301_20260823T231454Z
+    commit: 4be8da30152591ff94c8b95cbe84dda0c3ebb37a
+    status: done
+    design: "crop640 SR-R; budgets 64/128/256/512MiB in mirrored order, two repeats each, 12 steps/arm, discard steps 1-2"
+    performance: "64MiB +1.615% vs 256MiB; 128MiB -0.100%; 512MiB -0.184%; whole-model peak identical across all arms"
+    correctness: "separate N640/D16 holdout: budgets and forced 1/2/3/5/10-stripe plans bitwise for dQ/dK/dV/dBias; dK/dV bitwise vs independent two-pass oracle"
+    claim_scope: "kernel plan is arithmetic-invariant; surrounding training trajectory is not bitwise and no trainer peak-memory win is claimed"
+  direct_delta_4be8da301:
+    path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/direct_delta_4be8da301_20260823T232759Z
+    commit: 4be8da30152591ff94c8b95cbe84dda0c3ebb37a
+    status: done
+    captures: 26 real pretrained activations across N384/N640, D16/D32, and APB O1-H16-D24
+    fp32_shadow: "0/26 bitwise equal perfect delta; direct-delta rel-L2 mean 4.21574e-7, max 7.84388e-7; downstream dQ error-floor ratio mean 1.001361, max 1.032273"
+    bf16_shadow: "classic-to-perfect dQ gap recovery mean 83.3438%, median 88.1451%"
+    claim_scope: "same observed downstream dQ error floor; never claim FP32 shadow equals perfect delta"
+  aot_eb013dd0c:
+    path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/aot_eb013dd0c_20260824T000736Z
+    commit: eb013dd0c6429bd6c82a5e47c1a0b65df6da098b
+    status: done
+    wheel_sha256: dfbc5cb1a0d4e5130b51687cc5e6227e133926baa524553afaa3a60cf36d5725
+    target: "sm_90a SASS-only; no PTX; Python 3.14.6 / Torch 2.10.0 / CUDA 12.9"
+    attestation: "clean source; four extension hashes; forward-shadow, delta-shadow, and SR-backward symbols present"
+    clean_install: "PASS; compiler/JIT disabled; contiguous and noncontiguous full forward+backward for two-pass and SR-R"
   scratch_abba_blocks:
     path: /home/ubuntu/xzz/of3_perf_runs/sr_stats_blocks
     arms: 4x paired (cueq wheel_a94b vs SR-R at f284f6133-era build), orders AB/BA/BA/AB
@@ -49,11 +74,12 @@ runs:
     status: done
   fullLR_fork:
     path: /home/ubuntu/xzz/of3_perf_runs/sr_fork1000
-    arms: fork_cueq / fork_sr (SR-R), 1000->1500 full LR, OF3_OPTIM_METRICS=1
-    status: running
+    arms: fork_cueq / fork_sr (SR-R) / fork_cueq_b, shared step1000 checkpoint -> step1500 full LR, OF3_OPTIM_METRICS=1
+    status: done
+    caveat: one validation aggregate per arm; instrumented learning evidence, not speed evidence
   sr_full_schedule:
     path: /home/ubuntu/xzz/of3_perf_runs/sr_srfull
-    status: queued
+    status: done
     caveat: NO clean cueq 0->1500 counterpart yet (prefix was instrumentation-polluted) -> not usable alone for full-schedule speed claims
   captures:
     paths: [/home/ubuntu/xzz/of3_perf_runs/sr_capture_640/cases, /home/ubuntu/xzz/of3_perf_runs/sr_capture_matrix]
@@ -64,10 +90,8 @@ invalid_for_performance:
   - all fork/srfull walls (instrumented with OF3_OPTIM_METRICS) — learning evidence only; speed claims come from clean block campaigns
 pending_before_freeze:
   - .cu terminology pass (residual-corrected) — deferred until fork_sr locked its build hash
-  - workspace 64<->512MiB trainer demo (kernel-level sweep done; trainer-level demo pending)
-  - AOT wheel + clean-install + binary receipts
-  - direct delta-vs-delta (fp32-shadow vs perfect) comparison
-  - repair/upgrade host Nsys installation if a system timeline is required; NCU mechanism evidence is complete
+  - OpenBind and crop768 direct-delta columns if they are retained as submission claims
+  - upgrade host Nsys only if a system timeline becomes necessary; installed 2024.6 hangs on /bin/true, while NCU mechanism evidence is complete
 
 
 authorship_note: |

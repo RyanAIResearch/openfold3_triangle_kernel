@@ -181,28 +181,29 @@ in the F2 design-evolution ladder. Statistics discipline: the PAIRED
 BLOCK is the statistical unit (never pool per-step samples as
 independent); balance AB/BA; report order effect.
 
-## Evidence still owed before submission
+## Evidence status before submission
 
-1. sr_stats_blocks campaign (running): 4 scratch blocks + pretrained block,
-   per-step times + losses → F5/F6/T5.
-2. Capture matrix columns: deeper layers (skip-20/60), 384 crop (running in
-   the same chain); OpenBind ckpt column; D=32-site hunt.
-3. Atomic-twin re-run on current kernels (T1 refresh).
-4. Optional: workspace 64↔512MB trainer-level bitwise θ_t demo (cheap,
-   uniquely ours — strengthens C2).
-5. Pin the artifact commit; wheel + receipts bundle for the SR branch.
-6. Incremental related-work search in the week before submission (watch
-   Aug–Sep 2026 arXiv, NeurIPS 2026 / EMNLP 2026 rollouts).
-8. P0 set from the 08-22 review: (1) 400-step pair = warmup-horizon
-   referee, analyze as such; (2) post-warmup fork test (step-1000 shared
-   ckpt with optimizer state → cueq/SR-R at full LR — THE learning-level
-   gate; campaign queued); (3) APB-0.81 forensic (abs norms, cosine,
-   dW_Q, Adam-update effect — guard against small-denominator artifact);
-   (4) +2–4 paired blocks (target n=6–8); (5) direct delta-vs-delta
-   comparison for the fp32-shadow claim (report as "same observed error
-   floor" until then); (6) workspace 64↔512MiB trainer bitwise demo;
-   (7) atomic twin re-run on the post-fence kernel; (8) contributions
-   5→4 (fold AOT into #4/implementation); abstract trims: drop
-   "industry-wide"/"minimum state"; keep speed + referee wording scoped.
-7. Verify TBIK + Kernel Contracts + FlashBias + FA4 citations first-hand
-   at the citation pass (currently second-hand from the survey).
+Completed: the order-balanced scratch/pretrained blocks, 400-step warmup
+referee, shared-step1000 full-LR cueq-A/SR-R/cueq-B fork, skip20/60 and
+N384/D16 capture columns, APB small-denominator forensic, post-fence atomic
+twin, 64↔512 MiB trainer workspace sweep plus a 1/2/3/5/10-stripe bitwise
+kernel holdout, the 26-capture direct-delta comparison, and the clean
+`sm_90a` AOT wheel/attestation/no-JIT install gate. The workspace trainer
+sweep is deliberately a negative systems result: it shows no whole-model
+peak-memory reduction and no full-model bitwise trajectory, while the
+separate kernel holdout proves the scoped arithmetic-invariance claim.
+
+Still owed:
+
+1. Finish the `.cu` terminology pass so every shadow path is called
+   residual-corrected rather than exact/perfect.
+2. Decide whether OpenBind and crop768 direct-delta columns are submission
+   claims; run them only if retained.
+3. Incremental related-work search in the week before submission (watch
+   Aug–Sep 2026 arXiv and NeurIPS/EMNLP 2026 rollouts), including first-hand
+   verification of TBIK, Kernel Contracts, FlashBias, and FA4.
+4. Keep Nsys out of claims unless the host installation is upgraded: the
+   installed 2024.6 agent hangs even on `/bin/true`; NCU mechanism evidence
+   and CUDA-event performance evidence are complete.
+5. Complete the planned contribution 5→4 merge and abstract trim during the
+   full-paper pass.
