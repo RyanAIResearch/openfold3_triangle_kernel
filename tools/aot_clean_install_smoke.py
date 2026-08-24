@@ -41,94 +41,109 @@ def main() -> None:
         stablefold_triangle_attention,
     )
 
-    torch.manual_seed(20260809)
     device = torch.device("cuda:0")
     # Exact 64-key tiles deliberately exercise the non-contiguous fused QKV
     # pack. The old N=65 smoke padded Q/K/V first and missed this production
     # fast path entirely.
     prefix, sequence, heads, head_dim = 1, 64, 4, 32
 
-    def projection_view() -> torch.Tensor:
-        base = torch.randn(
+    def run_arm(arm: str) -> dict[str, str]:
+        if arm == "sr_r":
+            os.environ["OPENFOLD3_SR_BACKWARD"] = "1"
+            os.environ["OPENFOLD3_SR_SHADOW"] = "1"
+        else:
+            os.environ.pop("OPENFOLD3_SR_BACKWARD", None)
+            os.environ.pop("OPENFOLD3_SR_SHADOW", None)
+        torch.manual_seed(20260809)
+
+        def projection_view() -> torch.Tensor:
+            base = torch.randn(
+                prefix,
+                sequence,
+                sequence,
+                heads,
+                head_dim,
+                device=device,
+                dtype=torch.bfloat16,
+            )
+            return base.transpose(-2, -3).detach().requires_grad_(True)
+
+        q, k, v = projection_view(), projection_view(), projection_view()
+        q_contiguous, k_contiguous, v_contiguous = (
+            tensor.contiguous().detach().requires_grad_(True)
+            for tensor in (q, k, v)
+        )
+        mask = torch.zeros(
             prefix,
             sequence,
+            1,
+            1,
             sequence,
-            heads,
-            head_dim,
             device=device,
             dtype=torch.bfloat16,
         )
-        return base.transpose(-2, -3).detach().requires_grad_(True)
-
-    q, k, v = projection_view(), projection_view(), projection_view()
-    q_contiguous, k_contiguous, v_contiguous = (
-        tensor.contiguous().detach().requires_grad_(True)
-        for tensor in (q, k, v)
-    )
-    mask = torch.zeros(
-        prefix,
-        sequence,
-        1,
-        1,
-        sequence,
-        device=device,
-        dtype=torch.bfloat16,
-    )
-    bias = torch.randn(
-        prefix,
-        1,
-        heads,
-        sequence,
-        sequence,
-        device=device,
-        dtype=torch.bfloat16,
-        requires_grad=True,
-    )
-    bias_contiguous = bias.detach().clone().requires_grad_(True)
-    before = invocation_count()
-    output = stablefold_triangle_attention(q, k, v, mask, bias)
-    output_contiguous = stablefold_triangle_attention(
-        q_contiguous,
-        k_contiguous,
-        v_contiguous,
-        mask,
-        bias_contiguous,
-    )
-    d_output = torch.randn_like(output)
-    gradients = torch.autograd.grad(output, (q, k, v, bias), d_output)
-    gradients_contiguous = torch.autograd.grad(
-        output_contiguous,
-        (q_contiguous, k_contiguous, v_contiguous, bias_contiguous),
-        d_output,
-    )
-    torch.cuda.synchronize()
-    named = {
-        "output": output,
-        "dQ": gradients[0],
-        "dK": gradients[1],
-        "dV": gradients[2],
-        "dBias": gradients[3],
-    }
-    if invocation_count() - before != 2:
-        raise RuntimeError("public facade route counter did not advance twice")
-    if not all(torch.isfinite(value).all().item() for value in named.values()):
-        raise RuntimeError("AOT full F+B produced a non-finite result")
-    reference = {
-        "output": output_contiguous,
-        "dQ": gradients_contiguous[0],
-        "dK": gradients_contiguous[1],
-        "dV": gradients_contiguous[2],
-        "dBias": gradients_contiguous[3],
-    }
-    mismatched = [
-        name for name, value in named.items()
-        if not torch.equal(value, reference[name])
-    ]
-    if mismatched:
-        raise RuntimeError(
-            "non-contiguous fused pack differs from the contiguous path: "
-            + ", ".join(mismatched)
+        bias = torch.randn(
+            prefix,
+            1,
+            heads,
+            sequence,
+            sequence,
+            device=device,
+            dtype=torch.bfloat16,
+            requires_grad=True,
         )
+        bias_contiguous = bias.detach().clone().requires_grad_(True)
+        before = invocation_count()
+        output = stablefold_triangle_attention(q, k, v, mask, bias)
+        output_contiguous = stablefold_triangle_attention(
+            q_contiguous,
+            k_contiguous,
+            v_contiguous,
+            mask,
+            bias_contiguous,
+        )
+        d_output = torch.randn_like(output)
+        gradients = torch.autograd.grad(output, (q, k, v, bias), d_output)
+        gradients_contiguous = torch.autograd.grad(
+            output_contiguous,
+            (q_contiguous, k_contiguous, v_contiguous, bias_contiguous),
+            d_output,
+        )
+        torch.cuda.synchronize()
+        named = {
+            "output": output,
+            "dQ": gradients[0],
+            "dK": gradients[1],
+            "dV": gradients[2],
+            "dBias": gradients[3],
+        }
+        if invocation_count() - before != 2:
+            raise RuntimeError(
+                f"{arm}: public facade route counter did not advance twice"
+            )
+        if not all(torch.isfinite(value).all().item() for value in named.values()):
+            raise RuntimeError(f"{arm}: AOT full F+B produced a non-finite result")
+        reference = {
+            "output": output_contiguous,
+            "dQ": gradients_contiguous[0],
+            "dK": gradients_contiguous[1],
+            "dV": gradients_contiguous[2],
+            "dBias": gradients_contiguous[3],
+        }
+        mismatched = [
+            name for name, value in named.items()
+            if not torch.equal(value, reference[name])
+        ]
+        if mismatched:
+            raise RuntimeError(
+                f"{arm}: non-contiguous fused pack differs from the contiguous "
+                "path: " + ", ".join(mismatched)
+            )
+        return {name: raw_sha256(value) for name, value in named.items()}
+
+    arm_receipts = {}
+    for arm in ("two_pass", "sr_r"):
+        arm_receipts[arm] = run_arm(arm)
 
     forbidden_cache_value = os.environ.get("TORCH_EXTENSIONS_DIR")
     if forbidden_cache_value and Path(forbidden_cache_value).exists():
@@ -142,9 +157,7 @@ def main() -> None:
                 "torch": torch.__version__,
                 "torch_cuda": torch.version.cuda,
                 "binaries": [str(path) for path in binary_paths],
-                "raw_sha256": {
-                    name: raw_sha256(value) for name, value in named.items()
-                },
+                "arms": arm_receipts,
             },
             indent=2,
             sort_keys=True,

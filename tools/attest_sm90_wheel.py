@@ -20,12 +20,16 @@ EXPECTED_EXTENSIONS = {
         "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
         "symbols": [
             "stablefold_triangle_forward_out",
+            "stablefold_triangle_forward_shadow_out",
             "stablefold_pack_qkv",
         ],
     },
     "stablefold_delta": {
         "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
-        "symbols": ["stablefold_triangle_delta_out"],
+        "symbols": [
+            "stablefold_triangle_delta_out",
+            "stablefold_triangle_delta_shadow_out",
+        ],
     },
     "stablefold_dkdv": {
         "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
@@ -39,6 +43,7 @@ EXPECTED_EXTENSIONS = {
         "symbols": [
             "stablefold_triangle_dq_dbias_out",
             "stablefold_reduce_broadcast_dbias_out",
+            "stablefold_triangle_sr_backward_out",
         ],
     },
 }

@@ -74,7 +74,10 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIn('EXPECTED_TORCH_CUDA = "12.9"', text)
         self.assertIn('EXPECTED_ARCH_LIST = "9.0a"', text)
         self.assertIn('"stablefold_pack_qkv"', text)
+        self.assertIn('"stablefold_triangle_forward_shadow_out"', text)
+        self.assertIn('"stablefold_triangle_delta_shadow_out"', text)
         self.assertIn('"stablefold_triangle_dkdv_delta_true_out"', text)
+        self.assertIn('"stablefold_triangle_sr_backward_out"', text)
         self.assertNotIn("--use_fast_math", text)
 
     def test_pyproject_pins_torch_family_and_ships_manifest(self):
@@ -152,15 +155,10 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIn('"dBias": gradients[3]', text)
         self.assertIn("prefix, sequence, heads, head_dim = 1, 64, 4, 32", text)
         self.assertIn("non-contiguous fused pack differs", text)
-        self.assertIn(
-            "mask = torch.zeros(\n"
-            "        prefix,\n"
-            "        sequence,\n"
-            "        1,\n"
-            "        1,\n"
-            "        sequence,",
-            text,
-        )
+        self.assertIn('for arm in ("two_pass", "sr_r")', text)
+        self.assertIn('os.environ["OPENFOLD3_SR_BACKWARD"] = "1"', text)
+        self.assertIn('os.environ["OPENFOLD3_SR_SHADOW"] = "1"', text)
+        self.assertIn("mask = torch.zeros(", text)
 
     def test_attestation_is_cp314_sass_only_and_checks_unique_binaries(self):
         text = (REPOSITORY / "tools/attest_sm90_wheel.py").read_text()
