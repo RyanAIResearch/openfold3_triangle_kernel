@@ -29,7 +29,7 @@ row scalar as a contract choice: the known structured bias of the
 output-based $\delta=dO\cdot O_{\mathrm{bf16}}$ surfaces strongly on
 trained checkpoints, and a compressed rounding residual saved by the
 forward corrects it without restoring a second reconstruction. On H100, StableFold's
-backward runs 21–26% faster than our production baseline across
+backward runs 26.1–28.9% faster than cuEquivariance 0.10.0 across D=32
 OpenFold3 crops, trains real OpenFold3 steps 3.5–4.5% faster (steady-state) than NVIDIA
 cuEquivariance end to end — mean wall margin −9.5 s per 30 steps, bootstrap
 95% CI [−11.5, −6.5] s over four order-balanced blocks, with the same-seed
@@ -101,8 +101,8 @@ fixed order. The result is not a free win, and we report the design
 space honestly: with FP32 partials the single-reconstruction kernel is
 13.6% *slower* than the two-pass baseline (2.1 GB of partial traffic per
 launch); BF16 partials, cp.async double-buffered staging, and a
-vectorized fixed-order fold are each necessary; together they win 11–17%
-across crops against a baseline that we first modernized ourselves
+vectorized fixed-order fold are each necessary; together they win 19.4–23.2%
+in backward across D=32 crops against a baseline that we first modernized ourselves
 (warpgroup restructure, ss-WGMMA, −10% over the production kernel). The
 measured conclusion generalizes the FlashAttention question: whether
 recomputation beats materialization is decided by partial precision,
@@ -137,9 +137,13 @@ and its dQ-error ratio to the perfect-delta oracle is 1.0014 on average
 (1.0323 worst). Delta choice becomes an explicit, priced state–accuracy
 menu.
 
-On an H100, across OpenFold3 crops 384/640/768, StableFold's
-single-reconstruction backward runs 21–26% faster than our production
-baseline and 11–17% faster than the modernized two-pass; in real
+On an H100, across D=32 OpenFold3 crops 384/640/768, StableFold's
+single-reconstruction backward runs 26.1–28.9% faster than
+cuEquivariance 0.10.0 and 19.4–23.2% faster than the same-artifact
+modernized two-pass. Forward plus backward is 21.3–23.5% faster than
+cuEquivariance. This is an applicability region, not an all-dimension
+claim: at N640/D64, SR-R is 41.9% slower than cuEquivariance in backward
+under the same timing contract. In real
 OpenFold3 training at crop 640 it wins every one of five paired
 same-session comparisons (four scratch blocks and one pretrained): four
 order-balanced scratch blocks give a mean margin of −9.5 s per 30 steps
@@ -221,10 +225,18 @@ serving a single kernel.
   dQ/dK/dV/dBias and against the independent two-pass dK/dV oracle. Thus the
   planner-invariance claim is kernel-scoped; no trainer peak-memory win or
   full-model bitwise trajectory is claimed.
-- AOT release gate: clean commit `eb013dd0c` produced an `sm_90a` SASS-only
-  wheel with all forward-shadow, delta-shadow, and SR-backward symbols. A
-  no-compiler/no-JIT clean install passed contiguous and noncontiguous full
-  forward+backward smoke tests for both two-pass and SR-R.
+- Final public comparator gate: clean commit `acbc7a9ad` produced an
+  `sm_90a` SASS-only wheel (SHA256 `4357b7f0a7ac0...`). With 12 warmups and
+  30 CUDA-event samples in each of primary and mirror backend orders, SR-R
+  backward is 26.05/28.94/27.63% faster than cuEquivariance 0.10.0 at
+  D32 N384/N640/N768; forward+backward is 21.28/23.47/22.79% faster. No
+  samples were excluded. The same matrix retains the negative N640/D64
+  boundary: SR-R backward is 41.90% slower than cuEquivariance.
+- AOT release gate: the `acbc7a9ad` clean install disables compiler/JIT and
+  passes the 7-shape DR-WG/SR-C/SR-R contract plus the 18-case public
+  comparator correctness matrix. All public cases are finite with maximum
+  relative L2 <= 0.006097 against the eager FP32-score reference; SR-R
+  replays all five output/gradient tensors bitwise at D16/D32/D64.
 - **APB-site forensic (CLOSED — small-denominator critique confirmed and
   absorbed):** case [1,O=1,H=16,N=640,D=24]. FP64 exact: dQ_ref l2 =
   2.45e-7 (trunk sites ~7e-4 — 3,000× larger), maxabs 5.1e-8, |dO| l2

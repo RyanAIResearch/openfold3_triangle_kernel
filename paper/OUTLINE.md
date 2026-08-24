@@ -102,8 +102,12 @@ and the reduction tree invariant to workspace scheduling.
 - **F1** Three-axis ownership diagram (drawn; NEW).
 - **F2** Design-evolution ladder: double-recon → SR+fp32 (slower) →
   +bf16 → +cp.async → +vectorized reduce (wins). [HAVE: session ledger]
-- **F3** Backward time by crop {384,640,768} × {a94b, two-pass-wg, SR}:
-  7.84/7.07/5.84 @640 etc. [HAVE]
+- **F3** Frozen public H100 matrix by D32 crop {384,640,768} ×
+  {stock, compiled-stock, cuEq 0.10.0, Triton 3.6.0, DR-WG, SR-R}:
+  SR-R backward 1.367/5.440/9.412 ms; 26.05/28.94/27.63% faster than
+  cuEq and 19.38/23.24/21.47% faster than DR-WG. Primary+mirror backend
+  order, 60 samples/arm/shape, no exclusions. Include D64 as the negative
+  applicability boundary, not as a win. [HAVE: acbc7a9ad AOT receipts]
 - **F4** Delta ladder bars, synthetic sharp + 8 real captures (classic /
   shadow / fp32-shadow / perfect). [HAVE: sr_ladder outputs; MORE COLUMNS
   PENDING: D=32 sites, 384/768 crops, OpenBind ckpt]
@@ -173,10 +177,11 @@ FlexAttention, Flashlight, TileLang, PairMixer.
   rounding-residual state improves the output-based delta without
   restoring a second reconstruction." 
 
-## Arm naming (canonical, all headline numbers from one post-fence commit)
+## Arm naming (canonical, all kernel headlines from one final AOT artifact)
 
-DR-Prod (a94b production) / DR-WG (modernized two-pass) / SR-C (classic
-delta) / SR-R (residual-corrected). Historical intermediates appear only
+cuEq 0.10.0 (public external comparator) / DR-WG (modernized two-pass) /
+SR-C (classic delta) / SR-R (residual-corrected), all StableFold arms from
+the clean `acbc7a9ad` AOT artifact. Historical intermediates appear only
 in the F2 design-evolution ladder. Statistics discipline: the PAIRED
 BLOCK is the statistical unit (never pool per-step samples as
 independent); balance AB/BA; report order effect.
@@ -187,8 +192,10 @@ Completed: the order-balanced scratch/pretrained blocks, 400-step warmup
 referee, shared-step1000 full-LR cueq-A/SR-R/cueq-B fork, skip20/60 and
 N384/D16 capture columns, APB small-denominator forensic, post-fence atomic
 twin, 64↔512 MiB trainer workspace sweep plus a 1/2/3/5/10-stripe bitwise
-kernel holdout, the 26-capture direct-delta comparison, and the clean
-`sm_90a` AOT wheel/attestation/no-JIT install gate. The workspace trainer
+kernel holdout, the 26-capture direct-delta comparison, the general Pareto
+workspace-planner cross-N sweep, and the clean `acbc7a9ad` `sm_90a` AOT
+wheel/attestation/no-JIT install plus six-backend correctness/performance
+gate. The workspace trainer
 sweep is deliberately a negative systems result: it shows no whole-model
 peak-memory reduction and no full-model bitwise trajectory, while the
 separate kernel holdout proves the scoped arithmetic-invariance claim.

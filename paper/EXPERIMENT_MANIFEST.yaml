@@ -2,7 +2,8 @@
 # directory. Update on every campaign; canonical_commit/tag advance only
 # via explicit decision.
 canonical_commit: 4be8da30152591ff94c8b95cbe84dda0c3ebb37a  # final H100 kernel campaign
-artifact_commit: eb013dd0c6429bd6c82a5e47c1a0b65df6da098b  # AOT release-gate metadata/tests
+artifact_commit: acbc7a9adfe792f7e4a03ccff01ec5a28e18b1b4  # final AOT planner artifact
+planner_commit: acbc7a9adfe792f7e4a03ccff01ec5a28e18b1b4  # generic Pareto workspace selection
 base_commit: 029f76f5  # authorship-rewritten equivalent of a94b9562e
 branch: sr/dq-warpgroup
 worktree: /home/ubuntu/xzz/of3_sr_dq
@@ -19,13 +20,30 @@ environment:
   pixi_env: openfold3_workspace/src/.pixi/envs/openfold3-cuda12
 arms:
   DR-Prod: {commit: a94b9562e, desc: archived production cuEq baseline (wheel_env_a94b AOT)}
+  cuEq-0.10.0: {version: 0.10.0, desc: public cuEquivariance comparator in the frozen Python 3.14 environment}
   DR-WG:   {commit: 4be8da301, desc: same-commit modernized two-pass, env flags off}
   SR-C:    {flags: OPENFOLD3_SR_BACKWARD=1, desc: single reconstruction, classic delta}
   SR-R:    {flags: OPENFOLD3_SR_BACKWARD=1 OPENFOLD3_SR_SHADOW=1, desc: SR + residual-corrected delta}
 kernel_numbers_provenance:
   pre_fence: [bwd 5.845ms@640 and earlier ladder entries]
   post_fence: [final H100 ABCCBA matrix at 4be8da301; N640 D32 baseline 7.0715ms, SR-C 5.3864ms, SR-R 5.4098ms]
+  final_planner_aot: [order-balanced 60-sample matrix at acbc7a9ad; D32 N384/N640/N768 SR-R bwd 1.3668/5.4396/9.4123ms]
 runs:
+  headline_freeze_acbc7a9:
+    path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/headline_freeze_b649de792_20260824T005158Z
+    commit: acbc7a9adfe792f7e4a03ccff01ec5a28e18b1b4
+    status: done
+    code_change: "generic SR Pareto planner evaluates slab, full-query, and full-resident candidates by launch pairs then total scratch; no sequence/dimension special case and no CUDA source change"
+    aot_wheel_sha256: 4357b7f0a7ac0c71882ed7cb950dcd725cb6e4170f568ab09242c12a9c7ce7ad
+    correctness: "7-shape DR-WG/SR-C/SR-R AOT gate passed; 18 public-backend cases passed eager-FP32 reference at max rel-L2 <= 0.006097; SR-R replay 5/5 tensors at D16/D32/D64"
+    comparator_design: "stock / torch.compile stock / cuEq 0.10.0 / Triton 3.6.0 / DR-WG / SR-R; primary+mirror backend order; 12 warmups + 30 samples/run; no exclusions; CUDA events"
+    d32_vs_cueq: "N384/N640/N768 backward +26.05/+28.94/+27.63%; forward+backward +21.28/+23.47/+22.79%"
+    d32_vs_dr_wg: "N384/N640/N768 backward +19.38/+23.24/+21.47%; forward+backward +12.50/+17.15/+16.16%"
+    boundary: "N640 D64: cuEq remains faster; SR-R is 41.90% slower in backward and 35.25% slower in forward+backward under the same metric"
+    order_stability: "D32 N384/N640/N768 SR-R forward+backward primary-vs-mirror spread <= 0.14%; no timing samples excluded"
+    workspace_evidence: "cross-N N576..1024 sweep; Pareto full-query candidate removes q-shaped continuation when it reduces both launch pairs and total scratch; every dQ/dK/dV/dBias digest and SR-R replay unchanged"
+    profiler: "host Nsys unsupported (timestamp counter/perf_event restrictions) and NCU ERR_NVGPUCTRPERM retained as negative receipts; raw PyTorch CUDA activity traces locate SR leaf/cudnn bprop crossover without inventing hardware counters"
+    analysis: analysis/planner_comparator_matrix_analysis.{json,md}
   h100_final_4be8da301:
     path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/h100_4be8da301_20260823T205450Z
     commit: 4be8da30152591ff94c8b95cbe84dda0c3ebb37a
@@ -60,6 +78,13 @@ runs:
     target: "sm_90a SASS-only; no PTX; Python 3.14.6 / Torch 2.10.0 / CUDA 12.9"
     attestation: "clean source; four extension hashes; forward-shadow, delta-shadow, and SR-backward symbols present"
     clean_install: "PASS; compiler/JIT disabled; contiguous and noncontiguous full forward+backward for two-pass and SR-R"
+  aot_acbc7a9ad:
+    path: /home/ubuntu/xzz/of3_perf_runs/iclr27_h100/aot_acbc7a9ad_20260824T015728Z
+    commit: acbc7a9adfe792f7e4a03ccff01ec5a28e18b1b4
+    status: done
+    wheel_sha256: 4357b7f0a7ac0c71882ed7cb950dcd725cb6e4170f568ab09242c12a9c7ce7ad
+    target: "sm_90a SASS-only; no PTX; Python 3.14.6 / Torch 2.10.0 / CUDA 12.9"
+    clean_install: "PASS; JIT disabled; final correctness and both performance orders import only the read-only runtime_acbc install"
   scratch_abba_blocks:
     path: /home/ubuntu/xzz/of3_perf_runs/sr_stats_blocks
     arms: 4x paired (cueq wheel_a94b vs SR-R at f284f6133-era build), orders AB/BA/BA/AB
