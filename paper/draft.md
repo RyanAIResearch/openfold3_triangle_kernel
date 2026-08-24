@@ -226,17 +226,23 @@ serving a single kernel.
   planner-invariance claim is kernel-scoped; no trainer peak-memory win or
   full-model bitwise trajectory is claimed.
 - Final public comparator gate: clean commit `acbc7a9ad` produced an
-  `sm_90a` SASS-only wheel (SHA256 `4357b7f0a7ac0...`). With 12 warmups and
-  30 CUDA-event samples in each of primary and mirror backend orders, SR-R
-  backward is 26.05/28.94/27.63% faster than cuEquivariance 0.10.0 at
-  D32 N384/N640/N768; forward+backward is 21.28/23.47/22.79% faster. No
-  samples were excluded. The same matrix retains the negative N640/D64
-  boundary: SR-R backward is 41.90% slower than cuEquivariance.
+  `sm_90a` SASS-only wheel (SHA256 `4357b7f0a7ac0...`). Four paired ABBA
+  blocks, each with 12 warmups and 30 CUDA-event samples, give SR-R
+  backward speedups of 26.10/28.98/27.65% over cuEquivariance 0.10.0 at
+  D32 N384/N640/N768; the descriptive block-level 95% intervals are
+  [25.55,26.65]/[28.49,29.47]/[27.56,27.74]%. Forward+backward is
+  21.28/23.45/22.81% faster. The paired block, not the 120 event samples,
+  is the n=4 statistical unit; no samples were excluded. The six-backend
+  matrix retains the negative N640/D64 boundary: SR-R backward is 41.90%
+  slower than cuEquivariance.
 - AOT release gate: the `acbc7a9ad` clean install disables compiler/JIT and
   passes the 7-shape DR-WG/SR-C/SR-R contract plus the 18-case public
   comparator correctness matrix. All public cases are finite with maximum
   relative L2 <= 0.006097 against the eager FP32-score reference; SR-R
-  replays all five output/gradient tensors bitwise at D16/D32/D64.
+  replays all five output/gradient tensors bitwise at D16/D32/D64. On the
+  new N768 full-query/four-leaf-wave route, Compute Sanitizer reports zero
+  memcheck errors, zero synccheck errors, and zero racecheck hazards or
+  warnings.
 - **APB-site forensic (CLOSED — small-denominator critique confirmed and
   absorbed):** case [1,O=1,H=16,N=640,D=24]. FP64 exact: dQ_ref l2 =
   2.45e-7 (trunk sites ~7e-4 — 3,000× larger), maxabs 5.1e-8, |dO| l2

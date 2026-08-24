@@ -104,10 +104,11 @@ and the reduction tree invariant to workspace scheduling.
   +bf16 → +cp.async → +vectorized reduce (wins). [HAVE: session ledger]
 - **F3** Frozen public H100 matrix by D32 crop {384,640,768} ×
   {stock, compiled-stock, cuEq 0.10.0, Triton 3.6.0, DR-WG, SR-R}:
-  SR-R backward 1.367/5.440/9.412 ms; 26.05/28.94/27.63% faster than
-  cuEq and 19.38/23.24/21.47% faster than DR-WG. Primary+mirror backend
-  order, 60 samples/arm/shape, no exclusions. Include D64 as the negative
-  applicability boundary, not as a win. [HAVE: acbc7a9ad AOT receipts]
+  four-block SR-R backward 1.365/5.443/9.410 ms; 26.10/28.98/27.65%
+  faster than cuEq and 19.37/23.40/21.51% faster than DR-WG. ABBA backend
+  and shape order, 120 samples/arm/shape with paired block as n=4, no
+  exclusions. Include D64 as the negative applicability boundary, not as
+  a win. [HAVE: acbc7a9ad AOT receipts]
 - **F4** Delta ladder bars, synthetic sharp + 8 real captures (classic /
   shadow / fp32-shadow / perfect). [HAVE: sr_ladder outputs; MORE COLUMNS
   PENDING: D=32 sites, 384/768 crops, OpenBind ckpt]
