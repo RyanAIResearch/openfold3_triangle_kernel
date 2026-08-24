@@ -29,6 +29,7 @@ from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
 
 CASES = {
     "trunk_n640_d32": (1, 640, 4, 640, 32),
+    "trunk_n768_d32": (1, 768, 4, 768, 32),
     "batch2_outer24_n384_d32": (2, 24, 4, 384, 32),
     "n384_d16": (1, 384, 4, 384, 16),
     "n384_d64": (1, 384, 2, 384, 64),

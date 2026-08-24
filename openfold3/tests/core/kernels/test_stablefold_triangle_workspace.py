@@ -175,23 +175,63 @@ class StableFoldTriangleWorkspaceTest(unittest.TestCase):
         self.assertIn("dk_continuation[index] =", source)
         self.assertIn("dv_continuation[index] =", source)
 
-    def test_sr_plan_promotes_only_when_full_span_reduces_total_scratch(self):
+    def test_sr_plan_chooses_pareto_full_span_without_shape_lookup(self):
         promoted = sr_workspace_plan(640, 4, 32, outer=640, batch=1)
         self.assertEqual(promoted.query_span, 640)
         self.assertEqual(promoted.query_stripes, 1)
         self.assertEqual(promoted.elements * 2, 500 * 1024 * 1024)
 
-        bounded = sr_workspace_plan(640, 4, 16, outer=640, batch=1)
-        self.assertEqual(bounded.query_span, 320)
-        self.assertEqual(bounded.query_stripes, 2)
+        budgeted_full_span = sr_workspace_plan(
+            640, 4, 16, outer=640, batch=1
+        )
+        self.assertEqual(budgeted_full_span.query_span, 640)
+        self.assertEqual(budgeted_full_span.query_stripes, 1)
+        self.assertEqual(budgeted_full_span.leaf_waves, 2)
+        self.assertLessEqual(
+            budgeted_full_span.elements * 2,
+            256 * 1024 * 1024,
+        )
+
+        bounded = workspace_plan(640, 4, outer=640, batch=1)
         bounded_total = bounded.elements * 2 + 2 * 640 * 4 * 640 * 16 * 4
-        self.assertLess(bounded_total, promoted.elements * 2)
+        self.assertEqual(bounded.query_span, 320)
+        self.assertLess(budgeted_full_span.elements * 2, bounded_total)
 
         forced = sr_workspace_plan(
             640, 4, 32, outer=640, batch=1, query_span=320
         )
         self.assertEqual(forced.query_span, 320)
         self.assertEqual(forced.query_stripes, 2)
+
+    def test_sr_long_n_full_span_dominates_query_stripe_continuation(self):
+        budget = 256 * 1024 * 1024
+        for sequence in (768, 832, 896, 1024):
+            with self.subTest(sequence=sequence):
+                generic = workspace_plan(
+                    sequence,
+                    4,
+                    outer=sequence,
+                    batch=1,
+                    workspace_budget_bytes=budget,
+                )
+                sr = sr_workspace_plan(
+                    sequence,
+                    4,
+                    32,
+                    outer=sequence,
+                    batch=1,
+                    workspace_budget_bytes=budget,
+                )
+                generic_total = (
+                    generic.elements * 2
+                    + 2 * sequence * 4 * sequence * 32 * 4
+                )
+                self.assertGreater(generic.query_stripes, 1)
+                self.assertEqual(sr.query_span, sequence)
+                self.assertEqual(sr.query_stripes, 1)
+                self.assertEqual(sr.launch_pairs, generic.launch_pairs)
+                self.assertLess(sr.elements * 2, generic_total)
+                self.assertLessEqual(sr.elements * 2, budget)
 
     def test_invalid_dimensions_fail_closed(self):
         for kwargs in (

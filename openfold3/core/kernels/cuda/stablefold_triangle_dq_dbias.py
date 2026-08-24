@@ -517,11 +517,14 @@ def sr_workspace_plan(
 ) -> WorkspacePlan:
     """Plan SR scratch while accounting for striped dK/dV continuation.
 
-    ``workspace_budget_bytes`` is the preferred dBias-slab cap.  For an
-    automatic plan, SR may promote to a full-query slab when doing so uses no
-    more total scratch than the bounded slab plus two q-shaped FP32 dK/dV
-    continuation tensors.  Explicit query spans or batch chunks are honored
-    exactly for diagnostics and controlled experiments.
+    ``workspace_budget_bytes`` is the preferred dBias-slab cap.  Automatic SR
+    planning compares the generic slab against two full-query alternatives:
+    a budget-respecting leaf-wave plan and an all-resident plan.  A candidate
+    is eligible only when it uses no more total scratch (including the slab
+    plan's two q-shaped FP32 dK/dV continuation tensors) and no more launch
+    pairs.  Eligible candidates minimize launch pairs first, then total
+    scratch.  Explicit query spans or batch chunks are honored exactly for
+    diagnostics and controlled experiments.
     """
 
     if dim <= 0:
@@ -537,16 +540,41 @@ def sr_workspace_plan(
         query_span=query_span,
         batch_chunk=batch_chunk,
     )
-    if (
-        plan.query_stripes == 1
-        or query_span is not None
-        or batch_chunk is not None
-    ):
+    if query_span is not None or batch_chunk is not None:
         return plan
 
-    continuation_bytes = 2 * batch * outer * heads * sequence * dim * 4
+    continuation_bytes = (
+        2 * batch * outer * heads * sequence * dim * 4
+        if plan.query_stripes > 1
+        else 0
+    )
+    plan_total_bytes = plan.elements * 2 + continuation_bytes
+    candidates = [(plan, plan_total_bytes)]
+
+    # Query stripes require q-shaped FP32 dK/dV continuation tensors.  The
+    # generic dBias planner does not know about that SR-only cost and can
+    # prefer query stripes over an equal-launch full-query leaf-wave plan.
+    # Evaluate that missing Pareto candidate without exceeding the requested
+    # workspace budget.
+    full_span = workspace_plan(
+        sequence,
+        heads,
+        outer=outer,
+        batch=batch,
+        workspace_budget_bytes=workspace_budget_bytes,
+        query_span=sequence,
+    )
+    full_span_total_bytes = full_span.elements * 2
+    if (
+        full_span.launch_pairs <= plan.launch_pairs
+        and full_span_total_bytes <= plan_total_bytes
+    ):
+        candidates.append((full_span, full_span_total_bytes))
+
+    # Retain the existing speed-first promotion when all leaves can reside at
+    # once without exceeding the original slab-plus-continuation footprint.
     full_workspace_bytes = batch * plan.leaves * heads * sequence * sequence * 2
-    full = workspace_plan(
+    full_resident = workspace_plan(
         sequence,
         heads,
         outer=outer,
@@ -555,8 +583,22 @@ def sr_workspace_plan(
         query_span=sequence,
         batch_chunk=batch,
     )
-    bounded_total_bytes = plan.elements * 2 + continuation_bytes
-    return full if full.elements * 2 <= bounded_total_bytes else plan
+    full_resident_total_bytes = full_resident.elements * 2
+    if (
+        full_resident.launch_pairs <= plan.launch_pairs
+        and full_resident_total_bytes <= plan_total_bytes
+    ):
+        candidates.append((full_resident, full_resident_total_bytes))
+
+    return min(
+        candidates,
+        key=lambda candidate: (
+            candidate[0].launch_pairs,
+            candidate[1],
+            candidate[0].leaf_waves,
+            candidate[0].query_span,
+        ),
+    )[0]
 
 
 __all__ = [
