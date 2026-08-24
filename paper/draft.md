@@ -35,12 +35,14 @@ producer layouts at N=640 and 768, its forward plus backward reduces
 D16/D32 triangle time by 44.0–71.8% relative to MegaFold/EvoFlash-3D and
 42.4–48.7% relative to TriFast across eight independent-seed paired
 blocks, while retaining the negative boundary where MegaFold is 10.5%
-faster at the N=768/D48 diffusion site. In an
-attention-selector-only crop768 experiment, it reduces synchronized
-OpenFold3 step time by 6.78% and step energy by 7.35% over four
-order-balanced blocks, with a short-run same-seed loss gap inside
-cuEquivariance's self-envelope — and replays bitwise under the pinned
-execution contract.
+faster at the N=768/D48 diffusion site. In a same-OpenFold3 crop768
+comparison over eight independent-seed, order-balanced blocks, SR-R
+reduces complete synchronized training-step time by 7.15% versus
+cuEquivariance, 14.52% versus a TriFast-triangle/cuEquivariance-APB
+hybrid, and 21.75% versus MegaFold, with every comparison favoring SR-R
+in 8/8 blocks; the corresponding step-energy reductions are 7.64%,
+14.04%, and 23.89%. StableFold replays bitwise under the pinned execution
+contract.
 
 ---
 
@@ -158,7 +160,20 @@ TriFast does not implement the APB operator, and MegaFold is 10.5% faster
 at the N768/D48 diffusion APB site. SR-R also uses substantially more
 incremental operator memory on triangle sites (for example 3.17 GiB versus
 1.47 GiB MegaFold and 0.89 GiB TriFast at N768/D32), so this is a speed
-result, not a memory win. In real OpenFold3 training at crop 640 it wins
+result, not a memory win. We separately integrate these public kernels
+into the same OpenFold3 crop768 training process. All four arms share the
+checkpoint and data seed within a block and retain cuEquivariance triangle
+multiplicative update; MegaFold replaces every observed cuEq-fused
+attention call, while TriFast is explicitly a triangle-self-attention
+plus cuEq-APB hybrid. Across eight independent-seed blocks with every arm
+in every run position twice, SR-R's synchronized full training step is
+7.15% faster than cuEquivariance (95% paired-block bootstrap interval
+[6.78,7.52]), 14.52% faster than the TriFast hybrid [13.89,15.16], and
+21.75% faster than MegaFold [21.42,22.09]. Every comparison favors SR-R
+in 8/8 blocks (two-sided exact sign p=0.0078125); energy falls by
+7.64%, 14.04%, and 23.89%, respectively. This is a same-codebase systems
+comparison, not a claim to reproduce MegaFold's native training system or
+a full TriFast replacement. In real OpenFold3 training at crop 640 it wins
 every one of five paired
 same-session comparisons (four scratch blocks and one pretrained): four
 order-balanced scratch blocks give a mean margin of −9.5 s per 30 steps
@@ -263,6 +278,22 @@ serving a single kernel.
   N640/N768 checks against cuEq keep all supported tensors finite at
   relative L2 <= 0.004672; MegaFold's relaxed-atomic dBias may diverge on
   replay, whereas TriFast is bitwise across the tested 20-run replays.
+- Same-OpenFold3 public end-to-end gate: crop768, batch1, bf16-mixed, eight
+  independent seeds, four arms, and every arm in every process position
+  twice. All arms share cuEq triangle multiplicative update. MegaFold
+  replaces every observed cuEq-fused attention call; TriFast is explicitly
+  a triangle-only/cuEq-APB hybrid. The 32/32 processes and 384/384
+  synchronized training-step receipts pass, with no OOM, fallback, formal
+  autotune, cache mutation, or StableFold JIT artifact. After two warmup
+  steps per process, mean step times are 11.171s SR-R, 12.029s cuEq,
+  13.062s TriFast hybrid, and 14.275s MegaFold. Paired SR-R reductions are
+  7.15% [6.78,7.52], 14.52% [13.89,15.16], and 21.75% [21.42,22.09]; all
+  are 8/8 wins. Mean energy is 5.943/6.435/6.909/7.810 kJ in the same arm
+  order. Ninety-six paired train/loss points give SR-R-vs-cuEq mean
+  absolute gap 8.91e-5 and max relative gap 7.10e-5; external arms reach
+  about 2.9% maximum relative separation after sequential optimizer
+  updates. This is a short-run numerical referee, not convergence or
+  validation evidence.
 - AOT release gate: the `acbc7a9ad` clean install disables compiler/JIT and
   passes the 7-shape DR-WG/SR-C/SR-R contract plus the 18-case public
   comparator correctness matrix. All public cases are finite with maximum

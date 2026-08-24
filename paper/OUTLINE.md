@@ -128,22 +128,31 @@ and the reduction tree invariant to workspace scheduling.
   29.3%. Preserve the negative boundary: at N768/D48 diffusion APB,
   MegaFold is 10.5% faster in every block. Adapter transforms required by
   each public API are included. [HAVE: published_comparators_acbc7a9;
-  n=8 is the paired-block unit, distinct from the crop768 e2e n=4]
+  n=8 is the paired-block unit; keep operator and full-step estimands
+  separate]
 - **F4** Delta ladder bars, synthetic sharp + 8 real captures (classic /
   shadow / fp32-shadow / perfect). [HAVE: sr_ladder outputs; MORE COLUMNS
   PENDING: D=32 sites, 384/768 crops, OpenBind ckpt]
-- **F5** Final AOT crop768 attention-only e2e ABBA: both arms retain cuEq
-  trimul and differ only in the StableFold attention selector. Four paired
-  blocks, 8/8 runs and 96/96 step receipts; synchronized steady step-time
-  reduction 6.783% [6.748,6.818], throughput +7.277%, step-energy reduction
-  7.345% [7.238,7.435], and full-process-wall reduction 2.599%
-  [2.429,2.716]. Whole-run peak reserved memory is 81.038GB cuEq vs
-  80.977GB SR-R. [HAVE: final read-only AOT, JIT-forbidden receipts]
+- **F5** Final same-OpenFold3 crop768 four-arm end-to-end comparison. All
+  arms use the same checkpoint/data within each block and retain cuEq
+  trimul; the arms are cuEq attention, SR-R, MegaFold/EvoFlash-3D on every
+  observed cuEq-fused attention call, and a TriFast-triangle/cuEq-APB
+  hybrid. Eight independent-seed paired blocks, every arm in every run
+  position twice, 32/32 processes and 384/384 synchronized full training
+  steps. After discarding two warmup steps/process, SR-R reduces step time
+  by 7.15% [6.78,7.52] vs cuEq, 14.52% [13.89,15.16] vs the TriFast
+  hybrid, and 21.75% [21.42,22.09] vs MegaFold; every comparison is 8/8,
+  exact sign p=0.0078125. Energy reductions are 7.64/14.04/23.89%; outer
+  wall reductions are 3.28/7.17/11.06%. Median steady reserved memory is
+  52.32 GiB SR-R, 52.84 cuEq, 51.72 TriFast hybrid, and 52.32 MegaFold.
+  [HAVE: published_e2e_acbc7a9; frozen AOT/runtime and TriFast config]
 - **F6** Same-seed loss overlay cueq vs SR, scratch + pretrained. The final
-  crop768 speed campaign adds a short-run loss referee: 48 paired points,
-  mean |gap| 7.25e-5 and max 4.90e-4, comparable to the cuEq four-run
-  self-envelope (mean 1.93e-4, max 4.81e-4). This is numerical sanity,
-  not convergence evidence. [HAVE: 30-step and 400-step/fork evidence]
+  crop768 four-arm speed campaign adds 96 paired train/loss points per
+  comparison: SR-R vs cuEq mean |gap| 8.91e-5, max 1.50e-3, and max
+  relative gap 7.10e-5. The external Triton arms reach about 2.9% maximum
+  relative train/loss separation after sequential optimizer updates;
+  retain this as a short-run numerical referee and never as convergence
+  evidence. [HAVE: 30-step, 400-step/fork, and published-e2e receipts]
 - **T1** Determinism cost: fixed-tree vs atomicAdd twin (+10–12% kernel /
   ~4.8% step; twin replay divergence up to 11.8% of elements).
   [HAVE (v8-era); RE-RUN on current kernels recommended]
@@ -152,10 +161,11 @@ and the reduction tree invariant to workspace scheduling.
 - **T3** Contract matrix: gates per lane (bitwise battery / replay /
   sanitizers / dV invariant). [HAVE]
 - **T4** Memory: workspace + partials + shadow state per crop. [HAVE calc]
-- **T5** e2e stats: four paired crop768 blocks, AB/BA/BA/AB, fixed-seed
-  block bootstrap; never treat the 40 within-run steps as independent.
-  Include synchronized time, hardware-counter energy, full-process wall,
-  and peak-memory rows. [HAVE]
+- **T5** e2e stats: eight independent-seed paired crop768 blocks and four
+  arms, with every arm occupying every run position twice; never treat the
+  80 within-arm steady steps as independent. Include synchronized complete
+  training-step time, NVML-counter energy, full-process wall, peak memory,
+  8/8 wins, and exact sign tests. [HAVE]
 
 ## Must-cite list (verified where marked)
 
@@ -198,13 +208,12 @@ FlexAttention, Flashlight, TileLang, PairMixer.
   never claim the shape battery PROVES absence of specialization (it
   evidences the mechanisms; the static routing table is the proof).
 - Statistics wording: the statistical unit is the PAIRED BLOCK. The older
-  exact-layout and crop768 e2e campaigns use n=4; the published-kernel
-  N640/N768 campaign uses n=8 independent-seed process blocks. Never call
-  the two arms or the 30 CUDA-event samples separate replicates. At n=4,
-  block-bootstrap intervals are descriptive/preliminary; per-step times
-  are correlated within a run and are never independent samples. The 40
-  crop768 steady-step pairs are a consistency diagnostic, not n=40
-  inferential units.
+  exact-layout and superseded two-arm crop768 screen use n=4; both the
+  published-kernel N640/N768 campaign and the final four-arm crop768 e2e
+  campaign use n=8 independent-seed process blocks. Never call arms,
+  CUDA-event samples, or the 80 within-arm steady steps separate
+  replicates. Per-step times are correlated within a run and are never
+  independent samples.
 - Defensible one-liner (the novelty sentence): "StableFold is a
   single-reconstruction triangular-attention backward in which each
   probability tile feeds all four gradient consumers, while bounded
@@ -240,7 +249,12 @@ The closest executable public-kernel comparison is also complete:
 MegaFold/EvoFlash-3D and TriFast are source/wheel pinned, API-adapter costs
 are timed, N640/N768 use eight order-balanced independent-seed blocks, and
 same-size correctness/replay gates plus the D48/N768 negative crossover are
-retained in the sealed receipt.
+retained in the sealed receipt. The fair same-OpenFold3 end-to-end public
+comparison is now also complete: 32 order-balanced crop768 processes use
+eight independent seeds, include every required public-API transform,
+freeze the TriFast H100 autotune config before formal timing, and pass the
+route/loss/cache/no-JIT gates. SR-R wins all eight paired blocks against
+cuEq, MegaFold, and the explicitly named TriFast-triangle/cuEq-APB hybrid.
 The workspace trainer
 sweep is deliberately a negative systems result: it shows no whole-model
 peak-memory reduction and no full-model bitwise trajectory, while the
