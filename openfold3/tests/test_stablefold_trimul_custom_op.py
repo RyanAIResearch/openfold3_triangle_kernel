@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import os
 import subprocess
 import sys
@@ -37,6 +38,104 @@ _BACKWARD_SCHEMA = (
     "Tensor w_g, Tensor w_z, Tensor g_in, Tensor g_out, Tensor out, "
     "bool outgoing) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
 )
+
+_WGRAD_PLANNER_ROWS = (
+    1,
+    4095,
+    4096,
+    4097,
+    153 * 4096,
+    153 * 4096 + 1,
+)
+_WGRAD_WAVE_CAPACITY = {32: 2457, 64: 614, 96: 273, 128: 153}
+
+
+@pytest.mark.parametrize("rows", _WGRAD_PLANNER_ROWS)
+@pytest.mark.parametrize("channels", (32, 64, 96, 128))
+def test_wgrad_planner_has_bounded_globally_ordered_waves(rows, channels):
+    plan = stable._plan_wgrad_fixed_fold(rows, channels, channels)
+    expected_full, expected_tail = divmod(rows, stable._WGRAD_K_CHUNK)
+    expected_logical = expected_full + int(expected_tail != 0)
+
+    assert stable._WGRAD_PARTIAL_CAP_BYTES == 48 * 1024 * 1024
+    assert plan.partial_bytes_per_chunk == 5 * channels * channels * 4
+    assert plan.chunks_per_wave == _WGRAD_WAVE_CAPACITY[channels]
+    assert sum(
+        wave.full_chunks + int(wave.tail_rows != 0)
+        for wave in plan.waves
+    ) == expected_logical
+
+    next_chunk = 0
+    observed_full = 0
+    observed_tail = []
+    for wave in plan.waves:
+        wave_chunks = wave.full_chunks + int(wave.tail_rows != 0)
+        assert wave.first_chunk == next_chunk
+        assert 1 <= wave_chunks <= plan.chunks_per_wave
+        assert (
+            wave_chunks * plan.partial_bytes_per_chunk
+            <= stable._WGRAD_PARTIAL_CAP_BYTES
+        )
+        next_chunk += wave_chunks
+        observed_full += wave.full_chunks
+        if wave.tail_rows:
+            observed_tail.append(wave.tail_rows)
+    assert next_chunk == expected_logical
+    assert observed_full == expected_full
+    assert observed_tail == ([expected_tail] if expected_tail else [])
+
+    if rows == 153 * 4096 + 1 and channels == 128:
+        assert plan.waves == (
+            stable._WgradWave(0, 153, 0),
+            stable._WgradWave(153, 0, 1),
+        )
+
+
+def test_wgrad_planner_fails_when_one_partial_exceeds_fixed_cap():
+    with pytest.raises(ValueError, match="one wgrad partial exceeds"):
+        stable._plan_wgrad_fixed_fold(1, 2048, 2048)
+
+
+def test_wgrad_full_chunk_operands_are_zero_copy_views():
+    channels = 32
+    rows = 3 * stable._WGRAD_K_CHUNK
+    d_proj5 = torch.empty((rows, 5 * channels), dtype=torch.bfloat16)
+    z_ln = torch.empty((rows, channels), dtype=torch.bfloat16)
+    projection_t, normalized = stable._wgrad_full_chunk_views(
+        d_proj5, z_ln, 1, 2
+    )
+
+    assert torch._C._is_alias_of(projection_t, d_proj5)
+    assert torch._C._is_alias_of(normalized, z_ln)
+    assert projection_t.shape == (
+        2, 5 * channels, stable._WGRAD_K_CHUNK
+    )
+    assert normalized.shape == (2, stable._WGRAD_K_CHUNK, channels)
+    assert projection_t.stride() == (
+        stable._WGRAD_K_CHUNK * 5 * channels,
+        1,
+        5 * channels,
+    )
+    assert normalized.stride() == (
+        stable._WGRAD_K_CHUNK * channels,
+        channels,
+        1,
+    )
+
+
+def test_wgrad_route_is_fixed_cap_tail_only_and_leaves_dwz_unchanged():
+    full_view_source = inspect.getsource(stable._wgrad_full_chunk_views)
+    route_source = inspect.getsource(stable._trimul_backward_combined_impl)
+    planner_source = inspect.getsource(stable._plan_wgrad_fixed_fold)
+    assert ".contiguous" not in full_view_source
+    assert "new_zeros" not in full_view_source
+    assert "torch.cat" not in full_view_source
+    assert "os.environ" not in planner_source
+    assert "d_w5 = _trimul_wgrad_fixed(ext, d_proj5, z_ln)" in route_source
+    assert (
+        "d_wz = torch.mm(d_raw.t(), xlnT.t(), out_dtype=torch.float32)"
+        in route_source
+    )
 
 
 def _flat_inputs(device: torch.device | str, n: int = 17, c: int = 32):
@@ -356,6 +455,117 @@ def _assert_exact_receipts(reference, candidate):
         assert torch.equal(actual, expected), f"receipt {index} differs"
 
 
+def _manual_wgrad_fixed_reference(d_proj5, z_ln):
+    rows, five_hidden = d_proj5.shape
+    hidden = five_hidden // 5
+    channels = z_ln.shape[1]
+    plan = stable._plan_wgrad_fixed_fold(rows, hidden, channels)
+    output = torch.zeros(
+        (five_hidden, channels), device=d_proj5.device, dtype=torch.float32
+    )
+    for wave in plan.waves:
+        if wave.full_chunks:
+            projection_t, normalized = stable._wgrad_full_chunk_views(
+                d_proj5, z_ln, wave.first_chunk, wave.full_chunks
+            )
+            partials = torch.bmm(
+                projection_t, normalized, out_dtype=torch.float32
+            )
+            for partial in partials.unbind(0):
+                output.add_(partial)
+            del partials, projection_t, normalized
+        if wave.tail_rows:
+            tail_start = (
+                wave.first_chunk + wave.full_chunks
+            ) * stable._WGRAD_K_CHUNK
+            projection_tail = d_proj5.new_zeros(
+                (1, stable._WGRAD_K_CHUNK, five_hidden)
+            )
+            normalized_tail = z_ln.new_zeros(
+                (1, stable._WGRAD_K_CHUNK, channels)
+            )
+            projection_tail[0, :wave.tail_rows].copy_(
+                d_proj5.narrow(0, tail_start, wave.tail_rows)
+            )
+            normalized_tail[0, :wave.tail_rows].copy_(
+                z_ln.narrow(0, tail_start, wave.tail_rows)
+            )
+            partial = torch.bmm(
+                projection_tail.transpose(1, 2),
+                normalized_tail,
+                out_dtype=torch.float32,
+            )[0]
+            output.add_(partial)
+            del partial, projection_tail, normalized_tail
+    return output
+
+
+class _RecordingWgradFold:
+    def __init__(self, extension):
+        self.extension = extension
+        self.initialize = []
+
+    def trimul_wgrad_fixed_fold(self, partials, accumulator, initialize):
+        self.initialize.append(initialize)
+        return self.extension.trimul_wgrad_fixed_fold(
+            partials, accumulator, initialize
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.parametrize(
+    ("sequence", "expected_initialize"),
+    ((792, [True, False]), (800, [True, False, False])),
+)
+def test_h100_wgrad_c128_multiwave_tail_reference_replay_and_memory(
+    sequence, expected_initialize,
+):
+    channels = 128
+    rows = sequence * sequence
+    torch.manual_seed(7300 + sequence)
+    d_proj5 = torch.randn(
+        (rows, 5 * channels), device="cuda", dtype=torch.bfloat16
+    )
+    z_ln = torch.randn(
+        (rows, channels), device="cuda", dtype=torch.bfloat16
+    )
+    recorder = _RecordingWgradFold(stable._get_ext())
+
+    baseline_bytes = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+    actual = stable._trimul_wgrad_fixed(recorder, d_proj5, z_ln)
+    torch.cuda.synchronize()
+    peak_extra_bytes = torch.cuda.max_memory_allocated() - baseline_bytes
+    assert peak_extra_bytes <= 128 * 1024 * 1024
+    assert recorder.initialize == expected_initialize
+
+    reference = _manual_wgrad_fixed_reference(d_proj5, z_ln)
+    replay = stable._trimul_wgrad_fixed(stable._get_ext(), d_proj5, z_ln)
+    torch.cuda.synchronize()
+    assert torch.equal(actual, reference)
+    assert torch.equal(replay, actual)
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+def test_h100_wgrad_tail_accuracy_matches_pure_pytorch_fp32():
+    channels = 128
+    sequence = 65
+    rows = sequence * sequence
+    torch.manual_seed(8173)
+    d_proj5 = torch.randn(
+        (rows, 5 * channels), device="cuda", dtype=torch.bfloat16
+    )
+    z_ln = torch.randn(
+        (rows, channels), device="cuda", dtype=torch.bfloat16
+    )
+    actual = stable._trimul_wgrad_fixed(stable._get_ext(), d_proj5, z_ln)
+    reference = d_proj5.float().t() @ z_ln.float()
+    relative_l2 = (actual - reference).norm() / reference.norm().clamp_min(1e-12)
+    assert relative_l2.item() <= 1.0e-2
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
 @pytest.mark.parametrize("channels", (32, 64, 96, 128))
@@ -392,11 +602,21 @@ def test_h100_legacy_custom_op_exact_parity_and_replay(
 
 @pytest.mark.slow
 @pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
-def test_h100_custom_ops_pass_opcheck():
-    torch.manual_seed(2026)
-    module = _live_module(32, True)
-    z = torch.randn((1, 17, 17, 32), dtype=torch.bfloat16, device="cuda")
-    mask = torch.ones((1, 17, 17), dtype=torch.float32, device="cuda")
+@pytest.mark.parametrize("outgoing", (False, True))
+@pytest.mark.parametrize(
+    ("channels", "sequence"), ((32, 64), (128, 65))
+)
+def test_h100_custom_ops_pass_opcheck(channels, sequence, outgoing):
+    torch.manual_seed(2026 + channels + sequence + int(outgoing))
+    module = _live_module(channels, outgoing)
+    z = torch.randn(
+        (1, sequence, sequence, channels),
+        dtype=torch.bfloat16,
+        device="cuda",
+    )
+    mask = torch.ones(
+        (1, sequence, sequence), dtype=torch.float32, device="cuda"
+    )
     inputs = (
         z.requires_grad_(True), mask,
         module.linear_a_p.weight, module.linear_a_g.weight,
@@ -404,7 +624,7 @@ def test_h100_custom_ops_pass_opcheck():
         module.linear_g.weight, module.linear_z.weight,
         module.layer_norm_in.weight, module.layer_norm_in.bias,
         module.layer_norm_out.weight, module.layer_norm_out.bias,
-        True, True,
+        outgoing, True,
     )
     forward_result = torch.library.opcheck(
         stable._trimul_fwd_v1,
@@ -420,7 +640,7 @@ def test_h100_custom_ops_pass_opcheck():
         inputs[0], inputs[1],
         outputs[1], outputs[2], outputs[3], outputs[4], outputs[5], outputs[6],
         outputs[7], outputs[8], outputs[9], outputs[10],
-        *inputs[2:8], inputs[8], inputs[10], outputs[0], True,
+        *inputs[2:8], inputs[8], inputs[10], outputs[0], outgoing,
     )
     # The backward op is intentionally the once-differentiable implementation
     # detail.  Detach its opcheck inputs so this gate covers schema, fake, and
@@ -498,13 +718,25 @@ class _SupportedModule(torch.nn.Module):
 @pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("backend", ("aot_eager", "inductor"))
-def test_h100_eager_matches_fullgraph_forward_and_backward(outgoing, backend):
-    torch.manual_seed(3030 + int(outgoing))
-    eager = _SupportedModule(_live_module(32, outgoing))
+@pytest.mark.parametrize(
+    ("channels", "sequence"), ((32, 64), (128, 65))
+)
+def test_h100_eager_matches_fullgraph_forward_and_backward(
+    outgoing, backend, channels, sequence,
+):
+    torch.compiler.reset()
+    torch.manual_seed(3030 + channels + sequence + int(outgoing))
+    eager = _SupportedModule(_live_module(channels, outgoing))
     compiled = copy.deepcopy(eager)
     compiled = torch.compile(compiled, backend=backend, fullgraph=True)
-    z = torch.randn((1, 17, 17, 32), dtype=torch.bfloat16, device="cuda")
-    mask = torch.ones((1, 17, 17), dtype=torch.float32, device="cuda")
+    z = torch.randn(
+        (1, sequence, sequence, channels),
+        dtype=torch.bfloat16,
+        device="cuda",
+    )
+    mask = torch.ones(
+        (1, sequence, sequence), dtype=torch.float32, device="cuda"
+    )
     grad_out = torch.randn_like(z)
 
     eager_receipt = _run_and_collect(
@@ -522,6 +754,47 @@ def test_h100_eager_matches_fullgraph_forward_and_backward(outgoing, backend):
         grad_out,
     )
     _assert_exact_receipts(eager_receipt, compiled_receipt)
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.parametrize("outgoing", (False, True))
+@pytest.mark.parametrize("backend", ("aot_eager", "inductor"))
+def test_h100_dynamic_fullgraph_backward_crosses_k_chunk_boundary(
+    outgoing, backend,
+):
+    torch.compiler.reset()
+    channels = 32
+    torch.manual_seed(3737 + int(outgoing))
+    eager = _SupportedModule(_live_module(channels, outgoing))
+    compiled = torch.compile(
+        copy.deepcopy(eager), backend=backend, fullgraph=True, dynamic=True
+    )
+    for sequence in (63, 65):
+        z = torch.randn(
+            (1, sequence, sequence, channels),
+            dtype=torch.bfloat16,
+            device="cuda",
+        )
+        mask = torch.ones(
+            (1, sequence, sequence), dtype=torch.float32, device="cuda"
+        )
+        grad_out = torch.randn_like(z)
+        eager_receipt = _run_and_collect(
+            lambda wrapper, value, pair_mask: wrapper(value, pair_mask),
+            eager,
+            z,
+            mask,
+            grad_out,
+        )
+        compiled_receipt = _run_and_collect(
+            lambda wrapper, value, pair_mask: wrapper(value, pair_mask),
+            compiled,
+            z,
+            mask,
+            grad_out,
+        )
+        _assert_exact_receipts(eager_receipt, compiled_receipt)
 
 
 @pytest.mark.slow

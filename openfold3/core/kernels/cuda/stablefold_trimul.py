@@ -16,7 +16,8 @@ Backward: trimul_gate_split_bwd recomputes proj tiles on tensor cores from
 the saved z_ln with the exact forward accumulation order; sig_mul_bwd_out
 reconstructs out_raw from the forward output (r*sig = out identity, so
 d_gate = dy*out*(1-sig)).  Remaining GEMMs are cuBLAS; LN backwards are the
-fixed-order kernels below.
+fixed-order kernels below.  dW5 uses K=4096 BF16 bmm partials under a fixed
+48 MiB partial cap, followed by one globally ascending FP32 fold.
 
 All reductions fixed-order, zero atomics, bitwise replay-deterministic.
 Contract (explicit reject, no silent specialization): c_hidden == c_z,
@@ -27,9 +28,27 @@ The private, versioned ``torch.library`` boundary below is first-order-only.
 Its backward remains an opaque custom op; higher-order differentiation is not
 part of the production contract.
 """
+from typing import NamedTuple
+
 import torch
 
 _ext = None
+
+_WGRAD_K_CHUNK = 4096
+_WGRAD_PARTIAL_CAP_BYTES = 48 * 1024 * 1024
+_WGRAD_FP32_BYTES = 4
+
+
+class _WgradWave(NamedTuple):
+    first_chunk: int
+    full_chunks: int
+    tail_rows: int
+
+
+class _WgradPlan(NamedTuple):
+    partial_bytes_per_chunk: int
+    chunks_per_wave: int
+    waves: tuple[_WgradWave, ...]
 
 
 def _get_ext():
@@ -41,6 +60,119 @@ def _get_ext():
 
         _ext = load_extension()
     return _ext
+
+
+def _plan_wgrad_fixed_fold(rows: int, hidden: int, channels: int) -> _WgradPlan:
+    """Plan bounded split-K partials in one global ascending chunk order."""
+    if rows <= 0:
+        raise ValueError(f"wgrad rows must be positive, got {rows}")
+    if hidden <= 0 or channels <= 0:
+        raise ValueError(
+            "wgrad hidden/channels must be positive, got "
+            f"hidden={hidden}, channels={channels}"
+        )
+    partial_bytes = 5 * hidden * channels * _WGRAD_FP32_BYTES
+    if partial_bytes > _WGRAD_PARTIAL_CAP_BYTES:
+        raise ValueError(
+            "one wgrad partial exceeds the fixed 48 MiB cap: "
+            f"{partial_bytes} bytes"
+        )
+    chunks_per_wave = _WGRAD_PARTIAL_CAP_BYTES // partial_bytes
+    full_chunks, tail_rows = divmod(rows, _WGRAD_K_CHUNK)
+    logical_chunks = full_chunks + int(tail_rows != 0)
+    waves = []
+    first_chunk = 0
+    while first_chunk < logical_chunks:
+        wave_chunks = min(chunks_per_wave, logical_chunks - first_chunk)
+        wave_full_chunks = min(
+            wave_chunks,
+            max(0, full_chunks - first_chunk),
+        )
+        wave_tail_rows = tail_rows if wave_full_chunks < wave_chunks else 0
+        waves.append(
+            _WgradWave(first_chunk, wave_full_chunks, wave_tail_rows)
+        )
+        first_chunk += wave_chunks
+    return _WgradPlan(partial_bytes, chunks_per_wave, tuple(waves))
+
+
+def _wgrad_full_chunk_views(
+    d_proj5, z_ln, first_chunk: int, full_chunks: int
+):
+    """Return transpose-compatible aliases for complete K=4096 chunks."""
+    row_start = first_chunk * _WGRAD_K_CHUNK
+    wave_rows = full_chunks * _WGRAD_K_CHUNK
+    five_hidden = d_proj5.shape[1]
+    channels = z_ln.shape[1]
+    projection = d_proj5.narrow(0, row_start, wave_rows).view(
+        full_chunks, _WGRAD_K_CHUNK, five_hidden
+    )
+    normalized = z_ln.narrow(0, row_start, wave_rows).view(
+        full_chunks, _WGRAD_K_CHUNK, channels
+    )
+    return projection.transpose(1, 2), normalized
+
+
+def _trimul_wgrad_fixed(ext, d_proj5, z_ln):
+    """Compute dW5 with bounded BF16 split-K GEMMs and a fixed FP32 fold."""
+    rows, five_hidden = d_proj5.shape
+    z_rows, channels = z_ln.shape
+    if rows != z_rows:
+        raise ValueError(
+            f"wgrad operands disagree on rows: {rows} versus {z_rows}"
+        )
+    if five_hidden % 5 != 0:
+        raise ValueError(
+            f"wgrad projection width must be divisible by five, got {five_hidden}"
+        )
+    hidden = five_hidden // 5
+    plan = _plan_wgrad_fixed_fold(rows, hidden, channels)
+    accumulator = torch.empty(
+        (five_hidden, channels),
+        dtype=torch.float32,
+        device=d_proj5.device,
+    )
+    initialize = True
+    for wave in plan.waves:
+        if wave.full_chunks:
+            projection_t, normalized = _wgrad_full_chunk_views(
+                d_proj5, z_ln, wave.first_chunk, wave.full_chunks
+            )
+            partials = torch.bmm(
+                projection_t,
+                normalized,
+                out_dtype=torch.float32,
+            )
+            ext.trimul_wgrad_fixed_fold(partials, accumulator, initialize)
+            initialize = False
+            del partials, projection_t, normalized
+
+        if wave.tail_rows:
+            tail_start = (
+                wave.first_chunk + wave.full_chunks
+            ) * _WGRAD_K_CHUNK
+            projection_tail = d_proj5.new_zeros(
+                (1, _WGRAD_K_CHUNK, five_hidden)
+            )
+            normalized_tail = z_ln.new_zeros(
+                (1, _WGRAD_K_CHUNK, channels)
+            )
+            projection_tail[0, :wave.tail_rows].copy_(
+                d_proj5.narrow(0, tail_start, wave.tail_rows)
+            )
+            normalized_tail[0, :wave.tail_rows].copy_(
+                z_ln.narrow(0, tail_start, wave.tail_rows)
+            )
+            partials = torch.bmm(
+                projection_tail.transpose(1, 2),
+                normalized_tail,
+                out_dtype=torch.float32,
+            )
+            ext.trimul_wgrad_fixed_fold(partials, accumulator, initialize)
+            initialize = False
+            del partials, projection_tail, normalized_tail
+
+    return accumulator
 
 
 def _trimul_forward_impl(
@@ -125,7 +257,7 @@ def _trimul_backward_combined_impl(
     # in GEMM backward: W5 [5H, C] built once, only here
     w5 = torch.cat([w_ap, w_ag, w_bp, w_bg, w_g], 0).to(torch.bfloat16)
     d_zln = (d_proj5 @ w5).contiguous()
-    d_w5 = torch.mm(d_proj5.t(), z_ln, out_dtype=torch.float32)
+    d_w5 = _trimul_wgrad_fixed(ext, d_proj5, z_ln)
     # LN in backward
     d_z = ext.ln_bwd_dx(z_bf.view(rows, C), d_zln, rows, C, 1,
                         g_in, mean_in, rstd_in)
