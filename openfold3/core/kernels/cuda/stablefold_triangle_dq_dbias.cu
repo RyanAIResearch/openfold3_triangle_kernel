@@ -1273,6 +1273,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
 #pragma unroll
         for (int half = 0; half < 2; ++half) {
           const int key_row = warp_key + group + half * 8;
+          const float mask_value = slot_mask[key_row];
 #pragma unroll
           for (int pair = 0; pair < 2; ++pair) {
             const int query_in_tile = column * 8 + thread_in_group * 2 +
@@ -1282,7 +1283,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
             const int64_t stats = stats_base + query;
             const float lse = logsumexp[stats];
             const float value = score[column].v[index] * scale +
-                slot_mask[key_row] +
+                mask_value +
                 __bfloat162float(
                     cur_bias[query_in_tile * kSrBiasStride + key_row]);
             const float probability =
