@@ -1,12 +1,119 @@
 #include <torch/extension.h>
+#include <ATen/MemoryOverlap.h>
 #include <cuda_bf16.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <algorithm>
+#include <cstdint>
+#include <initializer_list>
+#include <limits>
+#include <utility>
 
 using bf16 = __nv_bfloat16;
 
 #define WARP 32
 #define FULL 0xffffffffu
+
+namespace {
+
+constexpr int64_t kMaxGridX = 2147483647LL;
+constexpr int64_t kMaxGridYZ = 65535LL;
+
+int64_t checked_positive(int64_t value, const char* op, const char* name) {
+  TORCH_CHECK(value > 0, op, ": ", name, " must be positive, got ", value);
+  return value;
+}
+
+int64_t checked_mul(int64_t lhs, int64_t rhs, const char* op,
+                    const char* expression) {
+  TORCH_CHECK(lhs >= 0 && rhs >= 0, op, ": ", expression,
+              " operands must be non-negative");
+  TORCH_CHECK(lhs == 0 || rhs <= std::numeric_limits<int64_t>::max() / lhs,
+              op, ": ", expression, " overflows int64");
+  return lhs * rhs;
+}
+
+int64_t ceil_div_positive(int64_t value, int64_t divisor) {
+  return 1 + (value - 1) / divisor;
+}
+
+void check_channel(int channel, const char* op, const char* name) {
+  TORCH_CHECK(channel == 32 || channel == 64 || channel == 96 || channel == 128,
+              op, ": ", name, " must be one of {32, 64, 96, 128}, got ",
+              channel);
+}
+
+void check_channels(int C, int H, const char* op) {
+  check_channel(C, op, "C");
+  check_channel(H, op, "H");
+  TORCH_CHECK(C == H, op, ": C and H must be equal, got C=", C, ", H=", H);
+}
+
+void check_cuda_tensor(const torch::Tensor& tensor, at::ScalarType dtype,
+                       const char* op, const char* name) {
+  TORCH_CHECK(tensor.defined(), op, ": ", name, " must be defined");
+  TORCH_CHECK(tensor.is_cuda(), op, ": ", name, " must be a CUDA tensor");
+  TORCH_CHECK(tensor.scalar_type() == dtype, op, ": ", name,
+              " has the wrong dtype");
+}
+
+void check_cuda_contiguous(const torch::Tensor& tensor, at::ScalarType dtype,
+                           const char* op, const char* name) {
+  check_cuda_tensor(tensor, dtype, op, name);
+  TORCH_CHECK(tensor.is_contiguous(), op, ": ", name, " must be contiguous");
+}
+
+void check_same_device(const torch::Tensor& tensor,
+                       const torch::Tensor& primary, const char* op,
+                       const char* name) {
+  TORCH_CHECK(tensor.device() == primary.device(), op, ": ", name,
+              " must be on the same CUDA device as the primary input");
+}
+
+void check_shape(const torch::Tensor& tensor,
+                 std::initializer_list<int64_t> expected, const char* op,
+                 const char* name) {
+  TORCH_CHECK(tensor.dim() == static_cast<int64_t>(expected.size()), op, ": ",
+              name, " has wrong rank; got shape ", tensor.sizes());
+  int64_t dimension = 0;
+  for (int64_t extent : expected) {
+    TORCH_CHECK(tensor.size(dimension) == extent, op, ": ", name,
+                " has wrong shape; got ", tensor.sizes());
+    ++dimension;
+  }
+}
+
+void check_alignment(const torch::Tensor& tensor, uintptr_t alignment,
+                     const char* op, const char* name) {
+  auto address = reinterpret_cast<uintptr_t>(tensor.data_ptr());
+  TORCH_CHECK(address % alignment == 0, op, ": ", name, " data pointer must be ",
+              alignment, "-byte aligned");
+}
+
+int64_t check_pair_extent(int64_t B, int64_t NN, int H, const char* op) {
+  checked_positive(B, op, "B");
+  checked_positive(NN, op, "NN");
+  TORCH_CHECK(B <= kMaxGridYZ, op, ": B exceeds the production grid-z limit");
+  int64_t rows = checked_mul(B, NN, op, "B*NN");
+  int64_t values = checked_mul(rows, H, op, "B*NN*H");
+  TORCH_CHECK(ceil_div_positive(rows, 8) <= kMaxGridX, op,
+              ": LayerNorm grid-x exceeds the production limit");
+  TORCH_CHECK(ceil_div_positive(values, 256) <= kMaxGridX, op,
+              ": sigmoid grid-x exceeds the production limit");
+  int64_t transpose_tiles = ceil_div_positive(NN, 32);
+  TORCH_CHECK(transpose_tiles <= kMaxGridX, op,
+              ": transpose grid-x exceeds the production limit");
+  TORCH_CHECK(checked_mul(transpose_tiles, B, op, "ceil(NN/32)*B") <= kMaxGridX,
+              op, ": transpose reduction chunks exceed signed int32");
+  return rows;
+}
+
+void check_no_overlap(const torch::Tensor& output,
+                      std::initializer_list<const torch::Tensor*> inputs) {
+  at::assert_no_internal_overlap(output);
+  for (const torch::Tensor* input : inputs) at::assert_no_overlap(output, *input);
+}
+
+}  // namespace
 
 __device__ __forceinline__ float warp_sum(float v) {
     #pragma unroll
@@ -468,13 +575,36 @@ std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor w_ap,
                                        torch::Tensor mask, torch::Tensor gamma,
                                        torch::Tensor beta, long B, long NN,
                                        int C, int H, bool save_zln) {
-  TORCH_CHECK(C % 16 == 0 && C <= 128, "trimul_in: C must be mult of 16, <=128");
-  TORCH_CHECK(H % 32 == 0, "trimul_in: H must be mult of 32");
-  for (auto* w : {&w_ap, &w_ag, &w_bp, &w_bg, &w_g}) {
-    TORCH_CHECK(w->dtype() == torch::kFloat && w->is_contiguous(),
-                "trimul_in: weights must be contiguous fp32");
+  constexpr const char* op = "trimul_in_fwd";
+  check_channels(C, H, op);
+  int64_t rows = check_pair_extent(B, NN, H, op);
+  check_cuda_contiguous(z, at::kBFloat16, op, "z");
+  check_shape(z, {rows, C}, op, "z");
+  check_alignment(z, 8, op, "z");
+  for (auto named_weight : {
+           std::pair<const char*, const torch::Tensor*>("w_ap", &w_ap),
+           std::pair<const char*, const torch::Tensor*>("w_ag", &w_ag),
+           std::pair<const char*, const torch::Tensor*>("w_bp", &w_bp),
+           std::pair<const char*, const torch::Tensor*>("w_bg", &w_bg),
+           std::pair<const char*, const torch::Tensor*>("w_g", &w_g)}) {
+    check_cuda_contiguous(*named_weight.second, at::kFloat, op,
+                          named_weight.first);
+    check_same_device(*named_weight.second, z, op, named_weight.first);
+    check_shape(*named_weight.second, {H, C}, op, named_weight.first);
   }
-  long rows = B * NN;
+  check_cuda_contiguous(mask, at::kFloat, op, "mask");
+  check_same_device(mask, z, op, "mask");
+  check_shape(mask, {rows}, op, "mask");
+  TORCH_CHECK(!mask.requires_grad(), op, ": mask must not require gradients");
+  for (auto named_parameter : {
+           std::pair<const char*, const torch::Tensor*>("gamma", &gamma),
+           std::pair<const char*, const torch::Tensor*>("beta", &beta)}) {
+    check_cuda_contiguous(*named_parameter.second, at::kFloat, op,
+                          named_parameter.first);
+    check_same_device(*named_parameter.second, z, op, named_parameter.first);
+    check_shape(*named_parameter.second, {C}, op, named_parameter.first);
+    check_alignment(*named_parameter.second, 16, op, named_parameter.first);
+  }
   long tiles = (rows + 127) / 128;
   auto stream = at::cuda::getCurrentCUDAStream();
   auto opts = torch::TensorOptions().dtype(torch::kBFloat16).device(z.device());
@@ -737,11 +867,27 @@ std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wz,
                                        torch::Tensor gate, torch::Tensor gamma,
                                        torch::Tensor beta, long B, long NN,
                                        int C, int H, bool training) {
-  TORCH_CHECK(C % 32 == 0 && C <= 128, "trimul_out: C must be mult of 32, <=128");
-  TORCH_CHECK(H % 32 == 0 && H <= 128, "trimul_out: H must be mult of 32, <=128");
-  TORCH_CHECK(wz.dtype() == torch::kFloat && wz.is_contiguous(),
-              "trimul_out: weight must be contiguous fp32");
-  long rows = B * NN;
+  constexpr const char* op = "trimul_out_fwd";
+  check_channels(C, H, op);
+  int64_t rows = check_pair_extent(B, NN, H, op);
+  check_cuda_contiguous(x, at::kBFloat16, op, "x");
+  check_shape(x, {checked_mul(B, H, op, "B*H"), NN}, op, "x");
+  check_alignment(x, 16, op, "x");
+  check_cuda_contiguous(wz, at::kFloat, op, "wz");
+  check_same_device(wz, x, op, "wz");
+  check_shape(wz, {C, H}, op, "wz");
+  check_cuda_contiguous(gate, at::kBFloat16, op, "gate");
+  check_same_device(gate, x, op, "gate");
+  check_shape(gate, {rows, C}, op, "gate");
+  check_alignment(gate, 4, op, "gate");
+  for (auto named_parameter : {
+           std::pair<const char*, const torch::Tensor*>("gamma", &gamma),
+           std::pair<const char*, const torch::Tensor*>("beta", &beta)}) {
+    check_cuda_contiguous(*named_parameter.second, at::kFloat, op,
+                          named_parameter.first);
+    check_same_device(*named_parameter.second, x, op, named_parameter.first);
+    check_shape(*named_parameter.second, {H}, op, named_parameter.first);
+  }
   long tiles = (rows + 127) / 128;
   auto stream = at::cuda::getCurrentCUDAStream();
   auto opts = torch::TensorOptions().dtype(torch::kBFloat16).device(x.device());
@@ -1001,9 +1147,43 @@ torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor w_ap,
                           torch::Tensor mask, torch::Tensor d_a,
                           torch::Tensor d_b, torch::Tensor d_proj5,
                           long B, long NN, int C, int H) {
-  TORCH_CHECK(C % 16 == 0 && C <= 128, "trimul_gate_split_bwd: C must be mult of 16, <=128");
-  TORCH_CHECK(H % 32 == 0, "trimul_gate_split_bwd: H must be mult of 32");
-  long rows = B * NN;
+  constexpr const char* op = "trimul_gate_split_bwd";
+  check_channels(C, H, op);
+  int64_t rows = check_pair_extent(B, NN, H, op);
+  check_cuda_contiguous(zln, at::kBFloat16, op, "zln");
+  check_shape(zln, {rows, C}, op, "zln");
+  check_alignment(zln, 16, op, "zln");
+  for (auto named_weight : {
+           std::pair<const char*, const torch::Tensor*>("w_ap", &w_ap),
+           std::pair<const char*, const torch::Tensor*>("w_ag", &w_ag),
+           std::pair<const char*, const torch::Tensor*>("w_bp", &w_bp),
+           std::pair<const char*, const torch::Tensor*>("w_bg", &w_bg)}) {
+    check_cuda_contiguous(*named_weight.second, at::kFloat, op,
+                          named_weight.first);
+    check_same_device(*named_weight.second, zln, op, named_weight.first);
+    check_shape(*named_weight.second, {H, C}, op, named_weight.first);
+  }
+  check_cuda_contiguous(mask, at::kFloat, op, "mask");
+  check_same_device(mask, zln, op, "mask");
+  check_shape(mask, {rows}, op, "mask");
+  TORCH_CHECK(!mask.requires_grad(), op, ": mask must not require gradients");
+  for (auto named_gradient : {
+           std::pair<const char*, const torch::Tensor*>("d_a", &d_a),
+           std::pair<const char*, const torch::Tensor*>("d_b", &d_b)}) {
+    check_cuda_contiguous(*named_gradient.second, at::kBFloat16, op,
+                          named_gradient.first);
+    check_same_device(*named_gradient.second, zln, op, named_gradient.first);
+    check_shape(*named_gradient.second,
+                {checked_mul(B, H, op, "B*H"), NN}, op,
+                named_gradient.first);
+    check_alignment(*named_gradient.second, 16, op, named_gradient.first);
+  }
+  check_cuda_contiguous(d_proj5, at::kBFloat16, op, "d_proj5");
+  check_same_device(d_proj5, zln, op, "d_proj5");
+  check_shape(d_proj5, {rows, 5LL * H}, op, "d_proj5");
+  check_alignment(d_proj5, 16, op, "d_proj5");
+  check_no_overlap(d_proj5,
+                   {&zln, &w_ap, &w_ag, &w_bp, &w_bg, &mask, &d_a, &d_b});
   long tiles = (rows + 127) / 128;
   auto stream = at::cuda::getCurrentCUDAStream();
   int Cp = C + 8;
@@ -1030,9 +1210,35 @@ torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor w_ap,
 torch::Tensor sig_mul_bwd_out(torch::Tensor out, torch::Tensor gate,
                               torch::Tensor grad_out, torch::Tensor dgate_dst,
                               int H, long dgate_stride) {
+  constexpr const char* op = "sig_mul_bwd_out";
+  check_channel(H, op, "H");
+  check_cuda_contiguous(out, at::kBFloat16, op, "out");
+  TORCH_CHECK(out.dim() == 2 && out.size(0) > 0 && out.size(1) == H, op,
+              ": out must have shape [rows, H] with rows > 0; got ",
+              out.sizes());
+  int64_t rows = out.size(0);
+  for (auto named_input : {
+           std::pair<const char*, const torch::Tensor*>("gate", &gate),
+           std::pair<const char*, const torch::Tensor*>("grad_out", &grad_out)}) {
+    check_cuda_contiguous(*named_input.second, at::kBFloat16, op,
+                          named_input.first);
+    check_same_device(*named_input.second, out, op, named_input.first);
+    check_shape(*named_input.second, {rows, H}, op, named_input.first);
+  }
+  check_cuda_tensor(dgate_dst, at::kBFloat16, op, "dgate_dst");
+  check_same_device(dgate_dst, out, op, "dgate_dst");
+  check_shape(dgate_dst, {rows, H}, op, "dgate_dst");
+  checked_positive(dgate_stride, op, "dgate_stride");
+  TORCH_CHECK(dgate_stride >= H, op, ": dgate_stride must be at least H");
+  TORCH_CHECK(dgate_dst.stride(0) == dgate_stride && dgate_dst.stride(1) == 1,
+              op, ": dgate_dst strides must equal [dgate_stride, 1], got ",
+              dgate_dst.strides());
+  check_no_overlap(dgate_dst, {&out, &gate, &grad_out});
+  int64_t total = checked_mul(rows, H, op, "rows*H");
+  TORCH_CHECK(ceil_div_positive(total, 256) <= kMaxGridX, op,
+              ": launch grid-x exceeds the production limit");
   auto stream = at::cuda::getCurrentCUDAStream();
   auto draw = torch::empty_like(out);
-  long total = out.numel();
   sig_mul_bwd_out_kernel<<<(unsigned)((total + 255) / 256), 256, 0, stream>>>(
       (const bf16*)out.data_ptr(), (const bf16*)gate.data_ptr(),
       (const bf16*)grad_out.data_ptr(), total, H, dgate_stride,
@@ -1045,8 +1251,35 @@ static inline int cdiv(long a, int b) { return (int)((a + b - 1) / b); }
 torch::Tensor ln_bwd_dx(torch::Tensor input, torch::Tensor grad_out, long rows,
                         long row_stride, long col_stride, torch::Tensor gamma,
                         torch::Tensor mean, torch::Tensor rstd) {
+  constexpr const char* op = "ln_bwd_dx";
+  checked_positive(rows, op, "rows");
+  check_cuda_contiguous(input, at::kBFloat16, op, "input");
+  check_cuda_contiguous(gamma, at::kFloat, op, "gamma");
+  check_same_device(gamma, input, op, "gamma");
+  TORCH_CHECK(gamma.dim() == 1, op, ": gamma must be rank one");
+  TORCH_CHECK(gamma.size(0) <= std::numeric_limits<int>::max(), op,
+              ": gamma length exceeds int32");
+  int C = static_cast<int>(gamma.size(0));
+  check_channel(C, op, "C");
+  TORCH_CHECK(row_stride == C && col_stride == 1, op,
+              ": production layout requires row_stride=C and col_stride=1");
+  check_shape(input, {rows, C}, op, "input");
+  TORCH_CHECK(input.stride(0) == row_stride && input.stride(1) == col_stride,
+              op, ": input strides do not match the supplied strides");
+  check_cuda_contiguous(grad_out, at::kBFloat16, op, "grad_out");
+  check_same_device(grad_out, input, op, "grad_out");
+  check_shape(grad_out, {rows, C}, op, "grad_out");
+  for (auto named_stat : {
+           std::pair<const char*, const torch::Tensor*>("mean", &mean),
+           std::pair<const char*, const torch::Tensor*>("rstd", &rstd)}) {
+    check_cuda_contiguous(*named_stat.second, at::kFloat, op,
+                          named_stat.first);
+    check_same_device(*named_stat.second, input, op, named_stat.first);
+    check_shape(*named_stat.second, {rows}, op, named_stat.first);
+  }
+  TORCH_CHECK(ceil_div_positive(rows, 8) <= kMaxGridX, op,
+              ": launch grid-x exceeds the production limit");
   auto stream = at::cuda::getCurrentCUDAStream();
-  int C = gamma.size(0);
   auto grad_in = torch::empty_like(input);
   int warps_per_block = 8;
   dim3 block(WARP * warps_per_block);
@@ -1062,6 +1295,26 @@ std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_ou
                                       long rows, long row_stride, long col_stride,
                                       int C, torch::Tensor mean,
                                       torch::Tensor rstd) {
+  constexpr const char* op = "ln_bwd_dgb";
+  checked_positive(rows, op, "rows");
+  check_channel(C, op, "C");
+  TORCH_CHECK(row_stride == C && col_stride == 1, op,
+              ": production layout requires row_stride=C and col_stride=1");
+  check_cuda_contiguous(input, at::kBFloat16, op, "input");
+  check_shape(input, {rows, C}, op, "input");
+  TORCH_CHECK(input.stride(0) == row_stride && input.stride(1) == col_stride,
+              op, ": input strides do not match the supplied strides");
+  check_cuda_contiguous(grad_out, at::kBFloat16, op, "grad_out");
+  check_same_device(grad_out, input, op, "grad_out");
+  check_shape(grad_out, {rows, C}, op, "grad_out");
+  for (auto named_stat : {
+           std::pair<const char*, const torch::Tensor*>("mean", &mean),
+           std::pair<const char*, const torch::Tensor*>("rstd", &rstd)}) {
+    check_cuda_contiguous(*named_stat.second, at::kFloat, op,
+                          named_stat.first);
+    check_same_device(*named_stat.second, input, op, named_stat.first);
+    check_shape(*named_stat.second, {rows}, op, named_stat.first);
+  }
   auto stream = at::cuda::getCurrentCUDAStream();
   auto dgamma = torch::empty({(long)C},
       torch::TensorOptions().dtype(torch::kFloat).device(input.device()));
@@ -1081,7 +1334,10 @@ std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_ou
   long chunk_rows = (rows + target_chunks - 1) / target_chunks;
   chunk_rows = ((chunk_rows + 63) / 64) * 64;
   chunk_rows = std::max(64L, std::min(2048L, chunk_rows));
-  int chunks = (int)((rows + chunk_rows - 1) / chunk_rows);
+  int64_t chunks64 = ceil_div_positive(rows, chunk_rows);
+  TORCH_CHECK(chunks64 <= kMaxGridYZ, op,
+              ": reduction chunks exceed the production grid-y limit");
+  int chunks = static_cast<int>(chunks64);
   auto partial = torch::empty({(long)chunks * 2, (long)C},
       torch::TensorOptions().dtype(torch::kFloat).device(input.device()));
   dim3 block(128);
@@ -1100,16 +1356,42 @@ std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_ou
 std::vector<torch::Tensor> transpose_ln_bwd(torch::Tensor x, torch::Tensor d_xln, int N,
                                int H, int B, torch::Tensor gamma,
                                torch::Tensor mean, torch::Tensor rstd) {
+  constexpr const char* op = "transpose_ln_bwd";
+  check_channel(H, op, "H");
+  checked_positive(N, op, "N");
+  checked_positive(B, op, "B");
+  TORCH_CHECK(B <= kMaxGridYZ, op, ": B exceeds the production grid-z limit");
+  int64_t NN = checked_mul(N, N, op, "N*N");
+  int64_t rows = checked_mul(B, NN, op, "B*N*N");
+  int64_t tiles64 = ceil_div_positive(NN, 32);
+  TORCH_CHECK(tiles64 <= kMaxGridX, op,
+              ": transpose grid-x exceeds the production limit");
+  int64_t chunks64 = checked_mul(tiles64, B, op, "ceil(N*N/32)*B");
+  TORCH_CHECK(chunks64 <= kMaxGridX, op,
+              ": transpose reduction chunks exceed signed int32");
+  check_cuda_contiguous(x, at::kBFloat16, op, "x");
+  check_shape(x, {checked_mul(B, H, op, "B*H"), NN}, op, "x");
+  check_cuda_contiguous(d_xln, at::kBFloat16, op, "d_xln");
+  check_same_device(d_xln, x, op, "d_xln");
+  check_shape(d_xln, {rows, H}, op, "d_xln");
+  check_cuda_contiguous(gamma, at::kFloat, op, "gamma");
+  check_same_device(gamma, x, op, "gamma");
+  check_shape(gamma, {H}, op, "gamma");
+  for (auto named_stat : {
+           std::pair<const char*, const torch::Tensor*>("mean", &mean),
+           std::pair<const char*, const torch::Tensor*>("rstd", &rstd)}) {
+    check_cuda_contiguous(*named_stat.second, at::kFloat, op,
+                          named_stat.first);
+    check_same_device(*named_stat.second, x, op, named_stat.first);
+    check_shape(*named_stat.second, {rows}, op, named_stat.first);
+  }
   auto stream = at::cuda::getCurrentCUDAStream();
-  long NN = (long)N * N;
   auto d_x = torch::empty({(long)B * H, (long)N, (long)N},
       torch::TensorOptions().dtype(torch::kBFloat16).device(x.device()));
-  TORCH_CHECK(H % 32 == 0 && H <= 128,
-              "stablefold trimul: c_hidden must be a multiple of 32 and <= 128");
   dim3 block(256);
-  unsigned tiles = (unsigned)((NN + 31) / 32);
+  unsigned tiles = static_cast<unsigned>(tiles64);
   dim3 grid(tiles, 1, (unsigned)B);
-  long chunks = (long)tiles * B;
+  long chunks = static_cast<long>(chunks64);
   auto partial = torch::empty({chunks * 2, (long)H},
       torch::TensorOptions().dtype(torch::kFloat).device(x.device()));
   size_t smem = (size_t)H * 33 * sizeof(float) * 2;
