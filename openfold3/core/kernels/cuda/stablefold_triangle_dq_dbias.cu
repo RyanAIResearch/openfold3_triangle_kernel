@@ -1124,12 +1124,14 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
           }
           const int64_t index =
               out_base + static_cast<int64_t>(row) * io_dim + column;
-          dv_acc[local][tile].v[half * 2] = dv_continuation[index];
-          dv_acc[local][tile].v[half * 2 + 1] =
-              dv_continuation[index + 1];
-          dk_acc[local][tile].v[half * 2] = dk_continuation[index];
-          dk_acc[local][tile].v[half * 2 + 1] =
-              dk_continuation[index + 1];
+          const float2 dv_pair =
+              *reinterpret_cast<const float2*>(dv_continuation + index);
+          const float2 dk_pair =
+              *reinterpret_cast<const float2*>(dk_continuation + index);
+          dv_acc[local][tile].v[half * 2] = dv_pair.x;
+          dv_acc[local][tile].v[half * 2 + 1] = dv_pair.y;
+          dk_acc[local][tile].v[half * 2] = dk_pair.x;
+          dk_acc[local][tile].v[half * 2 + 1] = dk_pair.y;
         }
       }
     }
@@ -1420,12 +1422,12 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
             if (column >= io_dim) {
               continue;
             }
-            dq_partials[idx_base + static_cast<int64_t>(row) * io_dim +
-                        column] =
-                __float2bfloat16_rn(dq_acc[tile].v[half * 2]);
-            dq_partials[idx_base + static_cast<int64_t>(row) * io_dim +
-                        column + 1] =
-                __float2bfloat16_rn(dq_acc[tile].v[half * 2 + 1]);
+            const int64_t index =
+                idx_base + static_cast<int64_t>(row) * io_dim + column;
+            *reinterpret_cast<uint32_t*>(dq_partials + index) =
+                pack_bf16_pair(
+                    dq_acc[tile].v[half * 2],
+                    dq_acc[tile].v[half * 2 + 1]);
           }
         }
       }
@@ -1458,21 +1460,24 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
         const int64_t index =
             out_base + static_cast<int64_t>(row) * io_dim + column;
         if (final_query_stripe) {
-          out_dv[index] =
-              __float2bfloat16_rn(dv_acc[local][tile].v[half * 2]);
-          out_dv[index + 1] =
-              __float2bfloat16_rn(dv_acc[local][tile].v[half * 2 + 1]);
-          out_dk[index] = __float2bfloat16_rn(
-              dk_acc[local][tile].v[half * 2] * scale);
-          out_dk[index + 1] = __float2bfloat16_rn(
+          *reinterpret_cast<uint32_t*>(out_dv + index) = pack_bf16_pair(
+              dv_acc[local][tile].v[half * 2],
+              dv_acc[local][tile].v[half * 2 + 1]);
+          *reinterpret_cast<uint32_t*>(out_dk + index) = pack_bf16_pair(
+              dk_acc[local][tile].v[half * 2] * scale,
               dk_acc[local][tile].v[half * 2 + 1] * scale);
         } else {
-          dv_continuation[index] = dv_acc[local][tile].v[half * 2];
-          dv_continuation[index + 1] =
-              dv_acc[local][tile].v[half * 2 + 1];
-          dk_continuation[index] = dk_acc[local][tile].v[half * 2];
-          dk_continuation[index + 1] =
-              dk_acc[local][tile].v[half * 2 + 1];
+          // Preserve the audited scalar continuation contract exactly:
+          //   dv_continuation[index] = {dv0, dv1}
+          //   dk_continuation[index] = {dk0, dk1}
+          // The aligned float2 stores only combine each adjacent pair into
+          // one transaction; they do not change values or stripe ordering.
+          *reinterpret_cast<float2*>(dv_continuation + index) = make_float2(
+              dv_acc[local][tile].v[half * 2],
+              dv_acc[local][tile].v[half * 2 + 1]);
+          *reinterpret_cast<float2*>(dk_continuation + index) = make_float2(
+              dk_acc[local][tile].v[half * 2],
+              dk_acc[local][tile].v[half * 2 + 1]);
         }
       }
     }
