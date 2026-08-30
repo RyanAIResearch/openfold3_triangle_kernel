@@ -1096,7 +1096,21 @@ std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_ou
   auto dgamma = torch::empty({(long)C},
       torch::TensorOptions().dtype(torch::kFloat).device(input.device()));
   auto dbeta = torch::empty_like(dgamma);
-  long chunk_rows = 2048;
+  // Keep enough independent row chunks to occupy the current GPU as N and
+  // batch change.  A fixed 2048-row chunk leaves only 288 CTAs at N=768 and
+  // progressively less parallelism at smaller shapes.  The 64-row quantum
+  // keeps each CTA's fixed-order accumulation useful without encoding a crop
+  // or channel dimension in the launch policy.
+  int sm_count = 0;
+  auto attr_status = cudaDeviceGetAttribute(
+      &sm_count, cudaDevAttrMultiProcessorCount, input.get_device());
+  TORCH_CHECK(attr_status == cudaSuccess && sm_count > 0,
+              "stablefold trimul: could not query SM count");
+  constexpr int target_blocks_per_sm = 16;
+  long target_chunks = (long)sm_count * target_blocks_per_sm;
+  long chunk_rows = (rows + target_chunks - 1) / target_chunks;
+  chunk_rows = ((chunk_rows + 63) / 64) * 64;
+  chunk_rows = std::max(64L, std::min(2048L, chunk_rows));
   int chunks = (int)((rows + chunk_rows - 1) / chunk_rows);
   auto partial = torch::empty({(long)chunks * 2, (long)C},
       torch::TensorOptions().dtype(torch::kFloat).device(input.device()));
