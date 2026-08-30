@@ -22,6 +22,10 @@ All reductions fixed-order, zero atomics, bitwise replay-deterministic.
 Contract (explicit reject, no silent specialization): c_hidden == c_z,
 C in {32, 64, 96, 128}, arbitrary N and batch within the validated CUDA grid
 and memory limits.
+
+The private, versioned ``torch.library`` boundary below is first-order-only.
+Its backward remains an opaque custom op; higher-order differentiation is not
+part of the production contract.
 """
 import torch
 
@@ -81,7 +85,7 @@ def _trimul_forward_impl(
     return out.view(orig_shape).to(z.dtype), saved_tensors, dims, orig_shape, z.dtype
 
 
-def _trimul_backward_impl(
+def _trimul_backward_combined_impl(
     ext, grad_out, saved_tensors, dims, orig_shape, z_dtype,
 ):
     (z_bf, mask_f, z_ln, gate, a, b, x, xlnT, mean_in, rstd_in,
@@ -127,10 +131,302 @@ def _trimul_backward_impl(
                         g_in, mean_in, rstd_in)
     d_gin, d_bin = ext.ln_bwd_dgb(z_bf.view(rows, C), d_zln, rows, C, 1,
                                   C, mean_in, rstd_in)
-    return (d_z.view(orig_shape).to(z_dtype), None,
+    return (
+        d_z.view(orig_shape).to(z_dtype), d_w5, d_wz,
+        d_gin, d_bin, d_gout, d_bout,
+    )
+
+
+def _trimul_backward_impl(
+    ext, grad_out, saved_tensors, dims, orig_shape, z_dtype,
+):
+    d_z, d_w5, d_wz, d_gin, d_bin, d_gout, d_bout = (
+        _trimul_backward_combined_impl(
+            ext, grad_out, saved_tensors, dims, orig_shape, z_dtype,
+        )
+    )
+    H = dims[3]
+    return (d_z, None,
             d_w5[0 * H:1 * H], d_w5[1 * H:2 * H], d_w5[2 * H:3 * H],
             d_w5[3 * H:4 * H], d_w5[4 * H:5 * H], d_wz,
             d_gin, d_bin, d_gout, d_bout, None)
+
+
+@torch.library.custom_op(
+    "openfold3_stablefold::_trimul_fwd_v1",
+    mutates_args=(),
+    device_types="cuda",
+)
+def _trimul_fwd_v1(
+    z_bf: torch.Tensor,
+    mask_f: torch.Tensor,
+    w_ap: torch.Tensor,
+    w_ag: torch.Tensor,
+    w_bp: torch.Tensor,
+    w_bg: torch.Tensor,
+    w_g: torch.Tensor,
+    w_z: torch.Tensor,
+    g_in: torch.Tensor,
+    b_in: torch.Tensor,
+    g_out: torch.Tensor,
+    b_out: torch.Tensor,
+    outgoing: bool,
+    save_state: bool,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    """Run the complete forward while exposing only fresh functional outputs."""
+    ext = _get_ext()
+    output, saved_tensors, _, _, _ = _trimul_forward_impl(
+        ext, z_bf, mask_f, w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+        g_in, b_in, g_out, b_out, outgoing, save_state,
+    )
+    (
+        _saved_z_bf, _saved_mask_f, z_ln, gate, a, b, x, xlnT,
+        mean_in, rstd_in, mean_out, rstd_out,
+        _w_ap, _w_ag, _w_bp, _w_bg, _w_g, _w_z,
+        _g_in, _g_out, _out,
+    ) = saved_tensors
+    return (
+        output, z_ln, gate, a, b, x, xlnT,
+        mean_in, rstd_in, mean_out, rstd_out,
+    )
+
+
+@torch.library.register_fake(_trimul_fwd_v1)
+def _trimul_fwd_v1_fake(
+    z_bf: torch.Tensor,
+    mask_f: torch.Tensor,
+    w_ap: torch.Tensor,
+    w_ag: torch.Tensor,
+    w_bp: torch.Tensor,
+    w_bg: torch.Tensor,
+    w_g: torch.Tensor,
+    w_z: torch.Tensor,
+    g_in: torch.Tensor,
+    b_in: torch.Tensor,
+    g_out: torch.Tensor,
+    b_out: torch.Tensor,
+    outgoing: bool,
+    save_state: bool,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    B, N, _, C = z_bf.shape
+    H = w_ap.shape[0]
+    rows = B * N * N
+    nn = N * N
+    saved_rows = rows if save_state else 0
+    return (
+        z_bf.new_empty((B, N, N, C)),
+        z_bf.new_empty((saved_rows, C)),
+        z_bf.new_empty((rows, H)),
+        z_bf.new_empty((B * H, nn)),
+        z_bf.new_empty((B * H, nn)),
+        z_bf.new_empty((B * H, N, N)),
+        z_bf.new_empty((H if save_state else 0, rows)),
+        g_in.new_empty((rows,)),
+        g_in.new_empty((rows,)),
+        g_out.new_empty((saved_rows,)),
+        g_out.new_empty((saved_rows,)),
+    )
+
+
+@torch.library.custom_op(
+    "openfold3_stablefold::_trimul_bwd_v1",
+    mutates_args=(),
+    device_types="cuda",
+)
+def _trimul_bwd_v1(
+    grad_out: torch.Tensor,
+    z_bf: torch.Tensor,
+    mask_f: torch.Tensor,
+    z_ln: torch.Tensor,
+    gate: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    x: torch.Tensor,
+    xlnT: torch.Tensor,
+    mean_in: torch.Tensor,
+    rstd_in: torch.Tensor,
+    mean_out: torch.Tensor,
+    rstd_out: torch.Tensor,
+    w_ap: torch.Tensor,
+    w_ag: torch.Tensor,
+    w_bp: torch.Tensor,
+    w_bg: torch.Tensor,
+    w_g: torch.Tensor,
+    w_z: torch.Tensor,
+    g_in: torch.Tensor,
+    g_out: torch.Tensor,
+    out: torch.Tensor,
+    outgoing: bool,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    """Run the complete non-traceable backward as one functional custom op."""
+    ext = _get_ext()
+    B, N, _, C = z_bf.shape
+    H = w_ap.shape[0]
+    saved_tensors = (
+        z_bf, mask_f, z_ln, gate, a, b, x, xlnT,
+        mean_in, rstd_in, mean_out, rstd_out,
+        w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+        g_in, g_out, out,
+    )
+    return _trimul_backward_combined_impl(
+        ext, grad_out, saved_tensors, (B, N, C, H, outgoing),
+        z_bf.shape, z_bf.dtype,
+    )
+
+
+@torch.library.register_fake(_trimul_bwd_v1)
+def _trimul_bwd_v1_fake(
+    grad_out: torch.Tensor,
+    z_bf: torch.Tensor,
+    mask_f: torch.Tensor,
+    z_ln: torch.Tensor,
+    gate: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    x: torch.Tensor,
+    xlnT: torch.Tensor,
+    mean_in: torch.Tensor,
+    rstd_in: torch.Tensor,
+    mean_out: torch.Tensor,
+    rstd_out: torch.Tensor,
+    w_ap: torch.Tensor,
+    w_ag: torch.Tensor,
+    w_bp: torch.Tensor,
+    w_bg: torch.Tensor,
+    w_g: torch.Tensor,
+    w_z: torch.Tensor,
+    g_in: torch.Tensor,
+    g_out: torch.Tensor,
+    out: torch.Tensor,
+    outgoing: bool,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    H, C = w_ap.shape
+    return (
+        torch.empty_like(z_bf, memory_format=torch.contiguous_format),
+        w_ap.new_empty((5 * H, C)),
+        torch.empty_like(w_z, memory_format=torch.contiguous_format),
+        torch.empty_like(g_in, memory_format=torch.contiguous_format),
+        torch.empty_like(g_in, memory_format=torch.contiguous_format),
+        torch.empty_like(g_out, memory_format=torch.contiguous_format),
+        torch.empty_like(g_out, memory_format=torch.contiguous_format),
+    )
+
+
+def _trimul_fwd_v1_setup_context(ctx, inputs, output):
+    (
+        z_bf, mask_f, w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+        g_in, _b_in, g_out, _b_out, outgoing, _save_state,
+    ) = inputs
+    if not _save_state and any(ctx.needs_input_grad):
+        raise RuntimeError(
+            "StableFold TriMul requires save_state=True when gradients are enabled"
+        )
+    (
+        out, z_ln, gate, a, b, x, xlnT,
+        mean_in, rstd_in, mean_out, rstd_out,
+    ) = output
+    ctx.save_for_backward(
+        z_bf, mask_f, z_ln, gate, a, b, x, xlnT,
+        mean_in, rstd_in, mean_out, rstd_out,
+        w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+        g_in, g_out, out,
+    )
+    ctx.outgoing = outgoing
+    ctx.mark_non_differentiable(
+        z_ln, gate, a, b, x, xlnT,
+        mean_in, rstd_in, mean_out, rstd_out,
+    )
+    ctx.set_materialize_grads(False)
+
+
+@torch.autograd.function.once_differentiable
+def _trimul_fwd_v1_backward(
+    ctx, grad_out, grad_z_ln, grad_gate, grad_a, grad_b, grad_x,
+    grad_xlnT, grad_mean_in, grad_rstd_in, grad_mean_out, grad_rstd_out,
+):
+    """Compute first-order gradients; auxiliary outputs never accept grads."""
+    aux_grads = (
+        grad_z_ln, grad_gate, grad_a, grad_b, grad_x,
+        grad_xlnT, grad_mean_in, grad_rstd_in, grad_mean_out, grad_rstd_out,
+    )
+    if any(grad is not None for grad in aux_grads):
+        raise RuntimeError("StableFold TriMul auxiliary outputs are non-differentiable")
+    (
+        z_bf, mask_f, z_ln, gate, a, b, x, xlnT,
+        mean_in, rstd_in, mean_out, rstd_out,
+        w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+        g_in, g_out, out,
+    ) = ctx.saved_tensors
+    d_z, d_w5, d_wz, d_gin, d_bin, d_gout, d_bout = _trimul_bwd_v1(
+        grad_out, z_bf, mask_f, z_ln, gate, a, b, x, xlnT,
+        mean_in, rstd_in, mean_out, rstd_out,
+        w_ap, w_ag, w_bp, w_bg, w_g, w_z,
+        g_in, g_out, out, ctx.outgoing,
+    )
+    H = w_ap.shape[0]
+    return (
+        d_z,
+        None,
+        d_w5[0 * H:1 * H],
+        d_w5[1 * H:2 * H],
+        d_w5[2 * H:3 * H],
+        d_w5[3 * H:4 * H],
+        d_w5[4 * H:5 * H],
+        d_wz,
+        d_gin,
+        d_bin,
+        d_gout,
+        d_bout,
+        None,
+        None,
+    )
+
+
+torch.library.register_autograd(
+    _trimul_fwd_v1,
+    _trimul_fwd_v1_backward,
+    setup_context=_trimul_fwd_v1_setup_context,
+)
 
 
 class _StableTrimulFn(torch.autograd.Function):
@@ -160,8 +456,17 @@ def _run_supported_stable_trimul(module, z, mask):
     """Run a call that the shared metadata contract already accepted."""
     if mask is None:
         mask = z.new_ones(z.shape[:-1])
-    return _StableTrimulFn.apply(
-        z, mask,
+    orig_shape = z.shape
+    C = z.shape[-1]
+    N = z.shape[-2]
+    B = z.numel() // (N * N * C)
+    z_bf = z.reshape(B, N, N, C).to(torch.bfloat16).contiguous()
+    mask_f = (
+        mask.expand(*orig_shape[:-1]).reshape(B, N, N)
+        .to(torch.float32).contiguous()
+    )
+    tensor_inputs = (
+        z_bf, mask_f,
         module.linear_a_p.weight, module.linear_a_g.weight,
         module.linear_b_p.weight, module.linear_b_g.weight,
         module.linear_g.weight, module.linear_z.weight,
@@ -169,8 +474,12 @@ def _run_supported_stable_trimul(module, z, mask):
         module.layer_norm_in.bias.float(),
         module.layer_norm_out.weight.float(),
         module.layer_norm_out.bias.float(),
-        module._outgoing,
     )
+    save_state = any(tensor.requires_grad for tensor in tensor_inputs)
+    output, *_ = _trimul_fwd_v1(
+        *tensor_inputs, module._outgoing, save_state,
+    )
+    return output.view(orig_shape).to(z.dtype)
 
 
 def run_stable_trimul(module, z, mask):
