@@ -1297,7 +1297,7 @@ class _StableTrimulFn(torch.autograd.Function):
             d_proj5.view(rows, 5 * H)[:, 4 * H:], H, 5 * H)
         # out GEMM backward (w_z is [C, H]; no transposes materialized)
         d_xln = (d_raw @ w_z.to(torch.bfloat16)).contiguous()
-        d_wz = (d_raw.t() @ xlnT.t()).float()                # [C, H]
+        d_wz = torch.mm(d_raw.t(), xlnT.t(), out_dtype=torch.float32)
         # LN out backward (fused transpose variant, dgb folded)
         d_x, d_gout, d_bout = ext.transpose_ln_bwd(
             x.view(B * H, NN), d_xln, N, H, B, g_out, mean_out, rstd_out)
@@ -1318,7 +1318,7 @@ class _StableTrimulFn(torch.autograd.Function):
         # in GEMM backward: W5 [5H, C] built once, only here
         w5 = torch.cat([w_ap, w_ag, w_bp, w_bg, w_g], 0).to(torch.bfloat16)
         d_zln = (d_proj5 @ w5).contiguous()
-        d_w5 = (d_proj5.t() @ z_ln).float()                  # [5H, C]
+        d_w5 = torch.mm(d_proj5.t(), z_ln, out_dtype=torch.float32)
         # LN in backward
         d_z = ext.ln_bwd_dx(z_bf.view(rows, C), d_zln, rows, C, 1,
                             g_in, mean_in, rstd_in)
