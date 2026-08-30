@@ -16,7 +16,7 @@ Backward: trimul_gate_split_bwd recomputes proj tiles on tensor cores from
 the saved z_ln with the exact forward accumulation order; sig_mul_bwd_out
 reconstructs out_raw from the forward output (r*sig = out identity, so
 d_gate = dy*out*(1-sig)).  Remaining GEMMs are cuBLAS; LN backwards are the
-fixed-order kernels below.  dW5 uses K=4096 BF16 bmm partials under a fixed
+fixed-order kernels below.  dW5 uses K=16384 BF16 bmm partials under a fixed
 48 MiB partial cap, followed by one globally ascending FP32 fold.
 
 All reductions fixed-order, zero atomics, bitwise replay-deterministic.
@@ -34,7 +34,7 @@ import torch
 
 _ext = None
 
-_WGRAD_K_CHUNK = 4096
+_WGRAD_K_CHUNK = 16384
 _WGRAD_PARTIAL_CAP_BYTES = 48 * 1024 * 1024
 _WGRAD_FP32_BYTES = 4
 
@@ -99,7 +99,7 @@ def _plan_wgrad_fixed_fold(rows: int, hidden: int, channels: int) -> _WgradPlan:
 def _wgrad_full_chunk_views(
     d_proj5, z_ln, first_chunk: int, full_chunks: int
 ):
-    """Return transpose-compatible aliases for complete K=4096 chunks."""
+    """Return transpose-compatible aliases for complete K=16384 chunks."""
     row_start = first_chunk * _WGRAD_K_CHUNK
     wave_rows = full_chunks * _WGRAD_K_CHUNK
     five_hidden = d_proj5.shape[1]

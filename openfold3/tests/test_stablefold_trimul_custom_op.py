@@ -39,13 +39,14 @@ _BACKWARD_SCHEMA = (
     "bool outgoing) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
 )
 
+_EXPECTED_WGRAD_K_CHUNK = 16384
 _WGRAD_PLANNER_ROWS = (
     1,
-    4095,
-    4096,
-    4097,
-    153 * 4096,
-    153 * 4096 + 1,
+    _EXPECTED_WGRAD_K_CHUNK - 1,
+    _EXPECTED_WGRAD_K_CHUNK,
+    _EXPECTED_WGRAD_K_CHUNK + 1,
+    153 * _EXPECTED_WGRAD_K_CHUNK,
+    153 * _EXPECTED_WGRAD_K_CHUNK + 1,
 )
 _WGRAD_WAVE_CAPACITY = {32: 2457, 64: 614, 96: 273, 128: 153}
 
@@ -53,6 +54,7 @@ _WGRAD_WAVE_CAPACITY = {32: 2457, 64: 614, 96: 273, 128: 153}
 @pytest.mark.parametrize("rows", _WGRAD_PLANNER_ROWS)
 @pytest.mark.parametrize("channels", (32, 64, 96, 128))
 def test_wgrad_planner_has_bounded_globally_ordered_waves(rows, channels):
+    assert stable._WGRAD_K_CHUNK == _EXPECTED_WGRAD_K_CHUNK
     plan = stable._plan_wgrad_fixed_fold(rows, channels, channels)
     expected_full, expected_tail = divmod(rows, stable._WGRAD_K_CHUNK)
     expected_logical = expected_full + int(expected_tail != 0)
@@ -84,7 +86,10 @@ def test_wgrad_planner_has_bounded_globally_ordered_waves(rows, channels):
     assert observed_full == expected_full
     assert observed_tail == ([expected_tail] if expected_tail else [])
 
-    if rows == 153 * 4096 + 1 and channels == 128:
+    if (
+        rows == 153 * _EXPECTED_WGRAD_K_CHUNK + 1
+        and channels == 128
+    ):
         assert plan.waves == (
             stable._WgradWave(0, 153, 0),
             stable._WgradWave(153, 0, 1),
@@ -514,12 +519,9 @@ class _RecordingWgradFold:
 
 @pytest.mark.slow
 @pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
-@pytest.mark.parametrize(
-    ("sequence", "expected_initialize"),
-    ((792, [True, False]), (800, [True, False, False])),
-)
-def test_h100_wgrad_c128_multiwave_tail_reference_replay_and_memory(
-    sequence, expected_initialize,
+@pytest.mark.parametrize("sequence", (792, 800))
+def test_h100_wgrad_c128_single_wave_large_tail_reference_replay_and_memory(
+    sequence,
 ):
     channels = 128
     rows = sequence * sequence
@@ -530,6 +532,12 @@ def test_h100_wgrad_c128_multiwave_tail_reference_replay_and_memory(
     z_ln = torch.randn(
         (rows, channels), device="cuda", dtype=torch.bfloat16
     )
+    plan = stable._plan_wgrad_fixed_fold(rows, channels, channels)
+    expected_full, expected_tail = divmod(rows, stable._WGRAD_K_CHUNK)
+    assert expected_tail > 0
+    assert plan.waves == (
+        stable._WgradWave(0, expected_full, expected_tail),
+    )
     recorder = _RecordingWgradFold(stable._get_ext())
 
     baseline_bytes = torch.cuda.memory_allocated()
@@ -538,7 +546,10 @@ def test_h100_wgrad_c128_multiwave_tail_reference_replay_and_memory(
     torch.cuda.synchronize()
     peak_extra_bytes = torch.cuda.max_memory_allocated() - baseline_bytes
     assert peak_extra_bytes <= 128 * 1024 * 1024
-    assert recorder.initialize == expected_initialize
+    # Full chunks and the tail are separate zero-copy/tail-only BMMs feeding
+    # one globally ordered fold chain initialized exactly once.
+    assert recorder.initialize == [True, False]
+    assert recorder.initialize.count(True) == 1
 
     reference = _manual_wgrad_fixed_reference(d_proj5, z_ln)
     replay = stable._trimul_wgrad_fixed(stable._get_ext(), d_proj5, z_ln)
@@ -770,7 +781,7 @@ def test_h100_dynamic_fullgraph_backward_crosses_k_chunk_boundary(
     compiled = torch.compile(
         copy.deepcopy(eager), backend=backend, fullgraph=True, dynamic=True
     )
-    for sequence in (63, 65):
+    for sequence in (127, 129):
         z = torch.randn(
             (1, sequence, sequence, channels),
             dtype=torch.bfloat16,
