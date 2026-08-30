@@ -20,9 +20,8 @@ fixed-order kernels below.
 
 All reductions fixed-order, zero atomics, bitwise replay-deterministic.
 Contract (explicit reject, no silent specialization): c_hidden == c_z,
-C % 32 == 0, C <= 128, arbitrary N and batch.  Legacy pack/gather helpers
-remain for benchmark compatibility; production attention owns its fused QKV
-pack in the forward AOT extension and does not import this extension module.
+C in {32, 64, 96, 128}, arbitrary N and batch within the validated CUDA grid
+and memory limits.
 """
 import torch
 

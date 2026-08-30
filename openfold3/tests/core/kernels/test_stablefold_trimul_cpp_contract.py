@@ -201,8 +201,8 @@ def test_cpp_source_pins_device_and_cuda_error_contracts():
         .joinpath("core/kernels/cuda/stablefold_trimul_cuda.cu")
         .read_text()
     )
-    assert source.count("CUDAGuard device_guard") == 9
-    assert source.count("C10_CUDA_KERNEL_LAUNCH_CHECK") == 12
+    assert source.count("CUDAGuard device_guard") == 7
+    assert source.count("C10_CUDA_KERNEL_LAUNCH_CHECK") == 10
     assert source.count("cudaFuncSetAttribute(") == 3
     assert "kTrimulInMaxDynamicSharedBytes = 105984" in source
     assert "kTrimulOutMaxDynamicSharedBytes = 105472" in source

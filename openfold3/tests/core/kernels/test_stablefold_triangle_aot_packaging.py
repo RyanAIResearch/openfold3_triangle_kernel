@@ -88,11 +88,22 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             "ln_bwd_dx",
             "ln_bwd_dgb",
             "transpose_ln_bwd",
-            "pack_rows3",
-            "gather_rows1",
         ):
             self.assertIn(f'"{symbol}"', text)
         self.assertNotIn("--use_fast_math", text)
+
+    def test_trimul_aot_excludes_legacy_row_gather_symbols(self):
+        production_members = (
+            "openfold3/core/kernels/cuda/stablefold_trimul.py",
+            "openfold3/core/kernels/cuda/stablefold_trimul_cuda.py",
+            "openfold3/core/kernels/cuda/stablefold_trimul_cuda.cu",
+            "setup.py",
+            "tools/attest_sm90_wheel.py",
+        )
+        for member in production_members:
+            text = (REPOSITORY / member).read_text()
+            for symbol in ("pack_rows3", "gather_rows1"):
+                self.assertNotIn(symbol, text, member)
 
     def test_pyproject_pins_torch_family_and_ships_manifest(self):
         project = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())

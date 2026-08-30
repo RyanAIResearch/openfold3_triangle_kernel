@@ -79,8 +79,6 @@ EXTENSION_SPECS = {
             "ln_bwd_dx",
             "ln_bwd_dgb",
             "transpose_ln_bwd",
-            "pack_rows3",
-            "gather_rows1",
         ],
     },
 }

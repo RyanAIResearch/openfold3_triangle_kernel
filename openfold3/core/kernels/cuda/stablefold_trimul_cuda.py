@@ -38,8 +38,6 @@ def load_extension(*, verbose: bool | None = None) -> Any:
                 "ln_bwd_dx",
                 "ln_bwd_dgb",
                 "transpose_ln_bwd",
-                "pack_rows3",
-                "gather_rows1",
             ),
             verbose=bool(verbose),
         )

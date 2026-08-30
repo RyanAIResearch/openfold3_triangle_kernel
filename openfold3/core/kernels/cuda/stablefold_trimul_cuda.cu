@@ -299,34 +299,6 @@ __global__ void transpose_ln_bwd_kernel(
   }
 }
 
-// ---- row-regather: contiguous D-rows remapped between [.,H,N,.] layouts ----
-
-__global__ void gather_rows_kernel(
-    const bf16* __restrict__ s0, bf16* __restrict__ d0,
-    const bf16* __restrict__ s1, bf16* __restrict__ d1,
-    const bf16* __restrict__ s2, bf16* __restrict__ d2,
-    long rows, int H, int N, int D, bool src_h_inner) {
-  long row = blockIdx.x * (long)blockDim.y + threadIdx.y;
-  if (row >= rows) return;
-  long bo = row / ((long)H * N);
-  long rem = row % ((long)H * N);
-  long h = rem / N, n = rem % N;
-  long src_row = src_h_inner
-      ? (bo * N + n) * (long)H + h
-      : (bo * H + h) * (long)N + n;
-  const bf16* srcs[3] = {s0, s1, s2};
-  bf16* dsts[3] = {d0, d1, d2};
-  int lane = threadIdx.x;
-  for (int t = 0; t < 3; ++t) {
-    if (srcs[t] == nullptr) break;
-    const __nv_bfloat162* sp = reinterpret_cast<const __nv_bfloat162*>(
-        srcs[t] + src_row * (long)D);
-    __nv_bfloat162* dp = reinterpret_cast<__nv_bfloat162*>(
-        dsts[t] + row * (long)D);
-    for (int c = lane; c < D / 2; c += blockDim.x) dp[c] = sp[c];
-  }
-}
-
 // ---------------- K4: sigmoid-gate multiply ----------------
 
 __device__ __forceinline__ float warp_sum32(float v) {
@@ -1463,46 +1435,6 @@ std::vector<torch::Tensor> transpose_ln_bwd(torch::Tensor x, torch::Tensor d_xln
   return {d_x, dgamma, dbeta};
 }
 
-std::vector<torch::Tensor> pack_rows3(torch::Tensor q, torch::Tensor k,
-                                      torch::Tensor v, long bo, int H, int N,
-                                      int D, bool src_h_inner) {
-  TORCH_CHECK(D % 2 == 0, "stablefold gather: head dim must be even");
-  const c10::cuda::CUDAGuard device_guard(q.device());
-  auto stream = at::cuda::getCurrentCUDAStream();
-  long rows = bo * (long)H * N;
-  auto opts = torch::TensorOptions().dtype(torch::kBFloat16).device(q.device());
-  auto oq = torch::empty({rows, (long)D}, opts);
-  auto ok = torch::empty({rows, (long)D}, opts);
-  auto ov = torch::empty({rows, (long)D}, opts);
-  dim3 block(std::min(D / 2, 32), 8);
-  dim3 grid((unsigned)((rows + 7) / 8));
-  gather_rows_kernel<<<grid, block, 0, stream>>>(
-      (const bf16*)q.data_ptr(), (bf16*)oq.data_ptr(),
-      (const bf16*)k.data_ptr(), (bf16*)ok.data_ptr(),
-      (const bf16*)v.data_ptr(), (bf16*)ov.data_ptr(),
-      rows, H, N, D, src_h_inner);
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-  return {oq, ok, ov};
-}
-
-torch::Tensor gather_rows1(torch::Tensor src, long bo, int H, int N, int D,
-                           bool src_h_inner) {
-  TORCH_CHECK(D % 2 == 0, "stablefold gather: head dim must be even");
-  const c10::cuda::CUDAGuard device_guard(src.device());
-  auto stream = at::cuda::getCurrentCUDAStream();
-  long rows = bo * (long)H * N;
-  auto dst = torch::empty({rows, (long)D},
-      torch::TensorOptions().dtype(torch::kBFloat16).device(src.device()));
-  dim3 block(std::min(D / 2, 32), 8);
-  dim3 grid((unsigned)((rows + 7) / 8));
-  gather_rows_kernel<<<grid, block, 0, stream>>>(
-      (const bf16*)src.data_ptr(), (bf16*)dst.data_ptr(),
-      nullptr, nullptr, nullptr, nullptr,
-      rows, H, N, D, src_h_inner);
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-  return dst;
-}
-
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("trimul_in_fwd", &trimul_in_fwd);
   module.def("trimul_out_fwd", &trimul_out_fwd);
@@ -1511,6 +1443,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("ln_bwd_dx", &ln_bwd_dx);
   module.def("ln_bwd_dgb", &ln_bwd_dgb);
   module.def("transpose_ln_bwd", &transpose_ln_bwd);
-  module.def("pack_rows3", &pack_rows3);
-  module.def("gather_rows1", &gather_rows1);
 }
