@@ -8,8 +8,8 @@ import importlib
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import torch
 
@@ -21,10 +21,34 @@ MODULES = (
     "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
 )
 
+FORWARD_SCHEMA = (
+    "openfold3_stablefold::_trimul_fwd_v1(Tensor z_bf, Tensor mask_f, "
+    "Tensor w_ap, Tensor w_ag, Tensor w_bp, Tensor w_bg, Tensor w_g, "
+    "Tensor w_z, Tensor g_in, Tensor b_in, Tensor g_out, Tensor b_out, "
+    "bool outgoing, bool save_state) -> (Tensor, Tensor, Tensor, Tensor, "
+    "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
+)
+BACKWARD_SCHEMA = (
+    "openfold3_stablefold::_trimul_bwd_v1(Tensor grad_out, Tensor z_bf, "
+    "Tensor mask_f, Tensor z_ln, Tensor gate, Tensor a, Tensor b, Tensor x, "
+    "Tensor xlnT, Tensor mean_in, Tensor rstd_in, Tensor mean_out, "
+    "Tensor rstd_out, Tensor w_ap, Tensor w_ag, Tensor w_bp, Tensor w_bg, "
+    "Tensor w_g, Tensor w_z, Tensor g_in, Tensor g_out, Tensor out, "
+    "bool outgoing) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
+)
+
 
 def raw_sha256(tensor: torch.Tensor) -> str:
     value = tensor.detach().contiguous().cpu().view(torch.uint8).numpy()
     return hashlib.sha256(value.tobytes()).hexdigest()
+
+
+def assert_no_jit_cache(stage: str) -> None:
+    cache_value = os.environ.get("TORCH_EXTENSIONS_DIR")
+    if cache_value is None:
+        raise RuntimeError("clean-install smoke requires a forbidden JIT cache path")
+    if Path(cache_value).exists():
+        raise RuntimeError(f"{stage}: production path touched the forbidden JIT cache")
 
 
 def main() -> None:
@@ -32,18 +56,221 @@ def main() -> None:
         raise RuntimeError("clean-install smoke requires nvcc to be absent from PATH")
     if os.environ.get("OPENFOLD3_TRIANGLE_ALLOW_JIT") is not None:
         raise RuntimeError("clean-install smoke forbids the development JIT switch")
+    assert_no_jit_cache("startup")
 
     binaries = [importlib.import_module(name) for name in MODULES]
     binary_paths = [Path(module.__file__).resolve() for module in binaries]
     if any(path.suffix != ".so" for path in binary_paths):
         raise RuntimeError(f"expected five AOT shared objects, got {binary_paths}")
+    assert_no_jit_cache("AOT binary import")
+
+    from openfold3.core.kernels.cuda import stablefold_trimul as stable
+
+    if stable._ext is not None:
+        raise RuntimeError("custom-op registration eagerly loaded the TriMul facade")
+    forward_schema = str(
+        torch.ops.openfold3_stablefold._trimul_fwd_v1.default._schema
+    )
+    backward_schema = str(
+        torch.ops.openfold3_stablefold._trimul_bwd_v1.default._schema
+    )
+    if forward_schema != FORWARD_SCHEMA or backward_schema != BACKWARD_SCHEMA:
+        raise RuntimeError(
+            "versioned StableFold TriMul schemas differ from the release contract"
+        )
+    assert_no_jit_cache("custom-op import")
+
+    device = torch.device("cuda:0")
+    channels = 32
+
+    class InstalledTriMul(torch.nn.Module):
+        """Exact supported module contract used by clean-install smoke gates."""
+
+        def __init__(self, outgoing: bool):
+            super().__init__()
+            self.c_z = channels
+            self.c_hidden = channels
+            self._outgoing = outgoing
+
+            def linear() -> torch.nn.Linear:
+                return torch.nn.Linear(
+                    channels,
+                    channels,
+                    bias=False,
+                    device=device,
+                    dtype=torch.float32,
+                )
+
+            self.linear_a_p = linear()
+            self.linear_a_g = linear()
+            self.linear_b_p = linear()
+            self.linear_b_g = linear()
+            self.linear_g = linear()
+            self.linear_z = linear()
+            self.layer_norm_in = torch.nn.LayerNorm(
+                channels,
+                eps=1e-5,
+                device=device,
+                dtype=torch.float32,
+            )
+            self.layer_norm_out = torch.nn.LayerNorm(
+                channels,
+                eps=1e-5,
+                device=device,
+                dtype=torch.float32,
+            )
+
+        def forward(self, z: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+            return stable._run_supported_stable_trimul(self, z, mask)
+
+    fake_sequence = 17
+    fake_z = torch.empty(
+        (1, fake_sequence, fake_sequence, channels),
+        device="meta",
+        dtype=torch.bfloat16,
+    )
+    fake_mask = torch.empty(
+        (1, fake_sequence, fake_sequence),
+        device="meta",
+        dtype=torch.float32,
+    )
+    fake_weights = tuple(
+        torch.empty((channels, channels), device="meta") for _ in range(6)
+    )
+    fake_norms = tuple(
+        torch.empty((channels,), device="meta") for _ in range(4)
+    )
+    fake_outputs = stable._trimul_fwd_v1(
+        fake_z, fake_mask, *fake_weights, *fake_norms, True, True
+    )
+    fake_backward_outputs = stable._trimul_bwd_v1(
+        torch.empty_like(fake_z),
+        fake_z,
+        fake_mask,
+        *fake_outputs[1:],
+        *fake_weights,
+        fake_norms[0],
+        fake_norms[2],
+        fake_outputs[0],
+        True,
+    )
+    fake_rows = fake_sequence * fake_sequence
+    expected_forward_shapes = (
+        (1, fake_sequence, fake_sequence, channels),
+        (fake_rows, channels),
+        (fake_rows, channels),
+        (channels, fake_rows),
+        (channels, fake_rows),
+        (channels, fake_sequence, fake_sequence),
+        (channels, fake_rows),
+        (fake_rows,),
+        (fake_rows,),
+        (fake_rows,),
+        (fake_rows,),
+    )
+    expected_backward_shapes = (
+        (1, fake_sequence, fake_sequence, channels),
+        (5 * channels, channels),
+        (channels, channels),
+        (channels,),
+        (channels,),
+        (channels,),
+        (channels,),
+    )
+    expected_forward_dtypes = (torch.bfloat16,) * 7 + (torch.float32,) * 4
+    expected_backward_dtypes = (torch.bfloat16,) + (torch.float32,) * 6
+    if tuple(tuple(value.shape) for value in fake_outputs) != expected_forward_shapes:
+        raise RuntimeError("versioned forward fake metadata differs from its schema")
+    if tuple(value.dtype for value in fake_outputs) != expected_forward_dtypes:
+        raise RuntimeError("versioned forward fake dtypes differ from its schema")
+    if (
+        tuple(tuple(value.shape) for value in fake_backward_outputs)
+        != expected_backward_shapes
+    ):
+        raise RuntimeError("versioned backward fake metadata differs from its schema")
+    if (
+        tuple(value.dtype for value in fake_backward_outputs)
+        != expected_backward_dtypes
+    ):
+        raise RuntimeError("versioned backward fake dtypes differ from its schema")
+    if stable._ext is not None:
+        raise RuntimeError("custom-op fake dispatch loaded the TriMul AOT facade")
+    assert_no_jit_cache("custom-op fake")
+
+    def run_dynamic_export() -> dict[str, object]:
+        torch.manual_seed(20260831)
+        module = InstalledTriMul(True).requires_grad_(False).eval()
+        sample_z = torch.randn(
+            1,
+            17,
+            17,
+            channels,
+            device=device,
+            dtype=torch.bfloat16,
+        )
+        sample_mask = torch.ones(
+            1, 17, 17, device=device, dtype=torch.float32
+        )
+        sequence_dim = torch.export.Dim("sequence", min=1, max=256)
+        exported = torch.export.export(
+            module,
+            (sample_z, sample_mask),
+            dynamic_shapes={
+                "z": {1: sequence_dim, 2: sequence_dim},
+                "mask": {1: sequence_dim, 2: sequence_dim},
+            },
+        )
+        custom_targets = [
+            str(node.target)
+            for node in exported.graph.nodes
+            if node.op == "call_function"
+            and "openfold3_stablefold" in str(node.target)
+        ]
+        expected_target = "openfold3_stablefold._trimul_fwd_v1.default"
+        if custom_targets != [expected_target]:
+            raise RuntimeError(
+                f"dynamic export has unexpected StableFold targets: {custom_targets}"
+            )
+        with tempfile.TemporaryDirectory(
+            prefix="openfold3-trimul-export-"
+        ) as temporary:
+            artifact = Path(temporary) / "trimul_dynamic.pt2"
+            torch.export.save(exported, artifact)
+            loaded = torch.export.load(artifact).module()
+            if stable._ext is not None:
+                raise RuntimeError("dynamic export/save/load eagerly loaded TriMul AOT")
+            assert_no_jit_cache("dynamic export registration")
+            dynamic_z = torch.randn(
+                1,
+                33,
+                33,
+                channels,
+                device=device,
+                dtype=torch.bfloat16,
+            )
+            dynamic_mask = torch.ones(
+                1, 33, 33, device=device, dtype=torch.float32
+            )
+            with torch.no_grad():
+                expected = module(dynamic_z, dynamic_mask)
+                actual = loaded(dynamic_z, dynamic_mask)
+        if not torch.equal(actual, expected):
+            raise RuntimeError("dynamic export/save/load differs from eager inference")
+        assert_no_jit_cache("dynamic export execution")
+        return {
+            "target": expected_target,
+            "sample_sequence": 17,
+            "loaded_sequence": 33,
+            "output": raw_sha256(actual),
+        }
+
+    dynamic_export_receipt = run_dynamic_export()
 
     from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
         invocation_count,
         stablefold_triangle_attention,
     )
 
-    device = torch.device("cuda:0")
     # Exact 64-key tiles deliberately exercise the non-contiguous fused QKV
     # pack. The old N=65 smoke padded Q/K/V first and missed this production
     # fast path entirely.
@@ -147,93 +374,97 @@ def main() -> None:
     for arm in ("two_pass", "sr_r"):
         arm_receipts[arm] = run_arm(arm)
 
-    from openfold3.core.kernels.cuda.stablefold_trimul import run_stable_trimul
-
-    def run_trimul(outgoing: bool) -> dict[str, str]:
+    def run_trimul(outgoing: bool) -> dict[str, dict[str, str]]:
         torch.manual_seed(20260830 + int(outgoing))
-        sequence, channels = 17, 32
-
-        def parameter(*shape: int, ones: bool = False) -> torch.Tensor:
-            value = (
-                torch.ones(shape, device=device, dtype=torch.float32)
-                if ones
-                else torch.randn(shape, device=device, dtype=torch.float32)
-            )
-            return value.requires_grad_(True)
-
-        named_parameters = {
-            "w_ap": parameter(channels, channels),
-            "w_ag": parameter(channels, channels),
-            "w_bp": parameter(channels, channels),
-            "w_bg": parameter(channels, channels),
-            "w_g": parameter(channels, channels),
-            "w_z": parameter(channels, channels),
-            "g_in": parameter(channels, ones=True),
-            "b_in": parameter(channels),
-            "g_out": parameter(channels, ones=True),
-            "b_out": parameter(channels),
-        }
-        module = SimpleNamespace(
-            linear_a_p=SimpleNamespace(weight=named_parameters["w_ap"]),
-            linear_a_g=SimpleNamespace(weight=named_parameters["w_ag"]),
-            linear_b_p=SimpleNamespace(weight=named_parameters["w_bp"]),
-            linear_b_g=SimpleNamespace(weight=named_parameters["w_bg"]),
-            linear_g=SimpleNamespace(weight=named_parameters["w_g"]),
-            linear_z=SimpleNamespace(weight=named_parameters["w_z"]),
-            layer_norm_in=SimpleNamespace(
-                weight=named_parameters["g_in"],
-                bias=named_parameters["b_in"],
-            ),
-            layer_norm_out=SimpleNamespace(
-                weight=named_parameters["g_out"],
-                bias=named_parameters["b_out"],
-            ),
-            _outgoing=outgoing,
+        sequence = 17
+        module = InstalledTriMul(outgoing)
+        named_parameters = (
+            ("w_ap", module.linear_a_p.weight),
+            ("w_ag", module.linear_a_g.weight),
+            ("w_bp", module.linear_b_p.weight),
+            ("w_bg", module.linear_b_g.weight),
+            ("w_g", module.linear_g.weight),
+            ("w_z", module.linear_z.weight),
+            ("g_in", module.layer_norm_in.weight),
+            ("b_in", module.layer_norm_in.bias),
+            ("g_out", module.layer_norm_out.weight),
+            ("b_out", module.layer_norm_out.bias),
         )
-        z = torch.randn(
+        z_value = torch.randn(
             1,
             sequence,
             sequence,
             channels,
             device=device,
             dtype=torch.bfloat16,
-            requires_grad=True,
         )
         mask = torch.ones(
             1, sequence, sequence, device=device, dtype=torch.float32
         )
-        output = run_stable_trimul(module, z, mask)
-        differentiable = (z, *named_parameters.values())
-        gradients = torch.autograd.grad(
-            output,
-            differentiable,
-            torch.randn_like(output),
+        d_output = torch.randn_like(z_value)
+
+        def execute(runner) -> dict[str, torch.Tensor]:
+            z = z_value.detach().clone().requires_grad_(True)
+            output = runner(z)
+            gradients = torch.autograd.grad(
+                output,
+                (z, *(parameter for _, parameter in named_parameters)),
+                d_output,
+            )
+            named = {"output": output, "dZ": gradients[0]}
+            named.update(
+                {
+                    f"d{name}": gradient
+                    for (name, _), gradient in zip(
+                        named_parameters, gradients[1:], strict=True
+                    )
+                }
+            )
+            return named
+
+        eager = execute(lambda z: stable.run_stable_trimul(module, z, mask))
+        compiled_module = torch.compile(
+            module,
+            backend="aot_eager",
+            fullgraph=True,
         )
+        compiled = execute(lambda z: compiled_module(z, mask))
         torch.cuda.synchronize()
-        named = {"output": output, "dZ": gradients[0]}
-        named.update(
-            {
-                f"d{name}": gradient
-                for name, gradient in zip(
-                    named_parameters, gradients[1:], strict=True
-                )
-            }
-        )
-        if not all(torch.isfinite(value).all().item() for value in named.values()):
+        if not all(
+            torch.isfinite(value).all().item()
+            for receipt in (eager, compiled)
+            for value in receipt.values()
+        ):
             direction = "outgoing" if outgoing else "incoming"
             raise RuntimeError(
                 f"trimul {direction}: AOT full F+B produced a non-finite result"
             )
-        return {name: raw_sha256(value) for name, value in named.items()}
+        mismatched = [
+            name for name, value in eager.items()
+            if not torch.equal(value, compiled[name])
+        ]
+        if mismatched:
+            direction = "outgoing" if outgoing else "incoming"
+            raise RuntimeError(
+                f"trimul {direction}: aot_eager fullgraph F+B differs from eager: "
+                + ", ".join(mismatched)
+            )
+        assert_no_jit_cache("TriMul eager and aot_eager")
+        return {
+            "eager": {
+                name: raw_sha256(value) for name, value in eager.items()
+            },
+            "aot_eager": {
+                name: raw_sha256(value) for name, value in compiled.items()
+            },
+        }
 
     trimul_receipts = {
         "outgoing": run_trimul(True),
         "incoming": run_trimul(False),
     }
 
-    forbidden_cache_value = os.environ.get("TORCH_EXTENSIONS_DIR")
-    if forbidden_cache_value and Path(forbidden_cache_value).exists():
-        raise RuntimeError("production import touched the forbidden JIT cache")
+    assert_no_jit_cache("final")
     print(
         json.dumps(
             {
@@ -245,6 +476,18 @@ def main() -> None:
                 "binaries": [str(path) for path in binary_paths],
                 "arms": arm_receipts,
                 "trimul": trimul_receipts,
+                "trimul_custom_ops": {
+                    "forward_schema": forward_schema,
+                    "backward_schema": backward_schema,
+                    "fake_forward_shapes": [
+                        list(value.shape) for value in fake_outputs
+                    ],
+                    "fake_backward_shapes": [
+                        list(value.shape) for value in fake_backward_outputs
+                    ],
+                    "compile_backend": "aot_eager",
+                    "dynamic_export": dynamic_export_receipt,
+                },
             },
             indent=2,
             sort_keys=True,

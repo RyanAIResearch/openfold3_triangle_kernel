@@ -189,6 +189,45 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIn('os.environ["OPENFOLD3_SR_SHADOW"] = "1"', text)
         self.assertIn("mask = torch.zeros(", text)
 
+    def test_clean_install_smoke_covers_versioned_trimul_graph_contract(self):
+        text = (REPOSITORY / "tools/aot_clean_install_smoke.py").read_text()
+        for contract in (
+            "openfold3_stablefold::_trimul_fwd_v1",
+            "openfold3_stablefold::_trimul_bwd_v1",
+            "torch.ops.openfold3_stablefold._trimul_fwd_v1.default._schema",
+            "torch.ops.openfold3_stablefold._trimul_bwd_v1.default._schema",
+            "stable._trimul_fwd_v1(",
+            "stable._trimul_bwd_v1(",
+            "self.c_z = channels",
+            "self.c_hidden = channels",
+            "bias=False",
+            "eps=1e-5",
+            "stable.run_stable_trimul(module, z, mask)",
+            "stable._run_supported_stable_trimul(self, z, mask)",
+            "torch.compile(",
+            'backend="aot_eager"',
+            "fullgraph=True",
+            'torch.export.Dim("sequence", min=1, max=256)',
+            "torch.export.export(",
+            "torch.export.save(",
+            "torch.export.load(",
+            "openfold3_stablefold._trimul_fwd_v1.default",
+            "requires_grad_(False)",
+            "dynamic export/save/load differs from eager inference",
+            "aot_eager fullgraph F+B differs from eager",
+            'assert_no_jit_cache("custom-op import")',
+            'assert_no_jit_cache("custom-op fake")',
+            'assert_no_jit_cache("dynamic export registration")',
+            'assert_no_jit_cache("TriMul eager and aot_eager")',
+            '"trimul_custom_ops"',
+        ):
+            self.assertIn(contract, text)
+        self.assertNotIn('backend="inductor"', text)
+        self.assertLess(
+            text.index('assert_no_jit_cache("dynamic export registration")'),
+            text.index("expected = module(dynamic_z, dynamic_mask)"),
+        )
+
     def test_attestation_is_cp314_sass_only_and_checks_unique_binaries(self):
         text = (REPOSITORY / "tools/attest_sm90_wheel.py").read_text()
         for contract in (
