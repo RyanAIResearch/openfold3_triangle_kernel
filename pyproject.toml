@@ -123,6 +123,7 @@ openfold3 = [
     "core/kernels/cuda/stablefold_triangle_delta.cu",
     "core/kernels/cuda/stablefold_triangle_dkdv.cu",
     "core/kernels/cuda/stablefold_triangle_dq_dbias.cu",
+    "core/kernels/cuda/stablefold_trimul_cuda.cu",
     "core/kernels/cuda/_build_manifest.json"
 ]
 

@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -17,6 +18,7 @@ MODULES = (
     "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
     "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
     "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
+    "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
 )
 
 
@@ -34,7 +36,7 @@ def main() -> None:
     binaries = [importlib.import_module(name) for name in MODULES]
     binary_paths = [Path(module.__file__).resolve() for module in binaries]
     if any(path.suffix != ".so" for path in binary_paths):
-        raise RuntimeError(f"expected four AOT shared objects, got {binary_paths}")
+        raise RuntimeError(f"expected five AOT shared objects, got {binary_paths}")
 
     from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
         invocation_count,
@@ -145,6 +147,90 @@ def main() -> None:
     for arm in ("two_pass", "sr_r"):
         arm_receipts[arm] = run_arm(arm)
 
+    from openfold3.core.kernels.cuda.stablefold_trimul import run_stable_trimul
+
+    def run_trimul(outgoing: bool) -> dict[str, str]:
+        torch.manual_seed(20260830 + int(outgoing))
+        sequence, channels = 17, 32
+
+        def parameter(*shape: int, ones: bool = False) -> torch.Tensor:
+            value = (
+                torch.ones(shape, device=device, dtype=torch.float32)
+                if ones
+                else torch.randn(shape, device=device, dtype=torch.float32)
+            )
+            return value.requires_grad_(True)
+
+        named_parameters = {
+            "w_ap": parameter(channels, channels),
+            "w_ag": parameter(channels, channels),
+            "w_bp": parameter(channels, channels),
+            "w_bg": parameter(channels, channels),
+            "w_g": parameter(channels, channels),
+            "w_z": parameter(channels, channels),
+            "g_in": parameter(channels, ones=True),
+            "b_in": parameter(channels),
+            "g_out": parameter(channels, ones=True),
+            "b_out": parameter(channels),
+        }
+        module = SimpleNamespace(
+            linear_a_p=SimpleNamespace(weight=named_parameters["w_ap"]),
+            linear_a_g=SimpleNamespace(weight=named_parameters["w_ag"]),
+            linear_b_p=SimpleNamespace(weight=named_parameters["w_bp"]),
+            linear_b_g=SimpleNamespace(weight=named_parameters["w_bg"]),
+            linear_g=SimpleNamespace(weight=named_parameters["w_g"]),
+            linear_z=SimpleNamespace(weight=named_parameters["w_z"]),
+            layer_norm_in=SimpleNamespace(
+                weight=named_parameters["g_in"],
+                bias=named_parameters["b_in"],
+            ),
+            layer_norm_out=SimpleNamespace(
+                weight=named_parameters["g_out"],
+                bias=named_parameters["b_out"],
+            ),
+            _outgoing=outgoing,
+        )
+        z = torch.randn(
+            1,
+            sequence,
+            sequence,
+            channels,
+            device=device,
+            dtype=torch.bfloat16,
+            requires_grad=True,
+        )
+        mask = torch.ones(
+            1, sequence, sequence, device=device, dtype=torch.float32
+        )
+        output = run_stable_trimul(module, z, mask)
+        differentiable = (z, *named_parameters.values())
+        gradients = torch.autograd.grad(
+            output,
+            differentiable,
+            torch.randn_like(output),
+        )
+        torch.cuda.synchronize()
+        named = {"output": output, "dZ": gradients[0]}
+        named.update(
+            {
+                f"d{name}": gradient
+                for name, gradient in zip(
+                    named_parameters, gradients[1:], strict=True
+                )
+            }
+        )
+        if not all(torch.isfinite(value).all().item() for value in named.values()):
+            direction = "outgoing" if outgoing else "incoming"
+            raise RuntimeError(
+                f"trimul {direction}: AOT full F+B produced a non-finite result"
+            )
+        return {name: raw_sha256(value) for name, value in named.items()}
+
+    trimul_receipts = {
+        "outgoing": run_trimul(True),
+        "incoming": run_trimul(False),
+    }
+
     forbidden_cache_value = os.environ.get("TORCH_EXTENSIONS_DIR")
     if forbidden_cache_value and Path(forbidden_cache_value).exists():
         raise RuntimeError("production import touched the forbidden JIT cache")
@@ -158,6 +244,7 @@ def main() -> None:
                 "torch_cuda": torch.version.cuda,
                 "binaries": [str(path) for path in binary_paths],
                 "arms": arm_receipts,
+                "trimul": trimul_receipts,
             },
             indent=2,
             sort_keys=True,

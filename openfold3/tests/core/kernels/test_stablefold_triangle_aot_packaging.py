@@ -13,12 +13,14 @@ LOADERS = (
     "stablefold_triangle_delta.py",
     "stablefold_triangle_dkdv.py",
     "stablefold_triangle_dq_dbias.py",
+    "stablefold_trimul_cuda.py",
 )
 EXPECTED_MODULES = {
     "_stablefold_forward_sm90a",
     "_stablefold_delta_sm90a",
     "_stablefold_dkdv_sm90a",
     "_stablefold_dq_dbias_sm90a",
+    "_stablefold_trimul_sm90a",
 }
 
 
@@ -62,7 +64,7 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         )
         self.assertIn("if not _development_jit_enabled():", text)
 
-    def test_setup_defines_four_unique_sm90a_extensions(self):
+    def test_setup_defines_five_unique_sm90a_extensions(self):
         text = (REPOSITORY / "setup.py").read_text()
         discovered = {
             name for name in EXPECTED_MODULES if text.count(name) == 1
@@ -78,6 +80,18 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIn('"stablefold_triangle_delta_shadow_out"', text)
         self.assertIn('"stablefold_triangle_dkdv_delta_true_out"', text)
         self.assertIn('"stablefold_triangle_sr_backward_out"', text)
+        for symbol in (
+            "trimul_in_fwd",
+            "trimul_out_fwd",
+            "trimul_gate_split_bwd",
+            "sig_mul_bwd_out",
+            "ln_bwd_dx",
+            "ln_bwd_dgb",
+            "transpose_ln_bwd",
+            "pack_rows3",
+            "gather_rows1",
+        ):
+            self.assertIn(f'"{symbol}"', text)
         self.assertNotIn("--use_fast_math", text)
 
     def test_pyproject_pins_torch_family_and_ships_manifest(self):
@@ -101,6 +115,7 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             "openfold3"
         ]
         self.assertIn("core/kernels/cuda/_build_manifest.json", package_data)
+        self.assertIn("core/kernels/cuda/stablefold_trimul_cuda.cu", package_data)
         self.assertNotIn("cibuildwheel", project.get("tool", {}))
 
     def test_source_tree_manifest_is_fail_closed(self):
@@ -156,6 +171,9 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIn("prefix, sequence, heads, head_dim = 1, 64, 4, 32", text)
         self.assertIn("non-contiguous fused pack differs", text)
         self.assertIn('for arm in ("two_pass", "sr_r")', text)
+        self.assertIn("_stablefold_trimul_sm90a", text)
+        self.assertIn('"outgoing": run_trimul(True)', text)
+        self.assertIn('"incoming": run_trimul(False)', text)
         self.assertIn('os.environ["OPENFOLD3_SR_BACKWARD"] = "1"', text)
         self.assertIn('os.environ["OPENFOLD3_SR_SHADOW"] = "1"', text)
         self.assertIn("mask = torch.zeros(", text)

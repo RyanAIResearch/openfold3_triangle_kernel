@@ -46,12 +46,27 @@ EXPECTED_EXTENSIONS = {
             "stablefold_triangle_sr_backward_out",
         ],
     },
+    "stablefold_trimul": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
+        "symbols": [
+            "trimul_in_fwd",
+            "trimul_out_fwd",
+            "trimul_gate_split_bwd",
+            "sig_mul_bwd_out",
+            "ln_bwd_dx",
+            "ln_bwd_dgb",
+            "transpose_ln_bwd",
+            "pack_rows3",
+            "gather_rows1",
+        ],
+    },
 }
 LOADER_MEMBERS = (
     "openfold3/core/kernels/cuda/stablefold_triangle_forward.py",
     "openfold3/core/kernels/cuda/stablefold_triangle_delta.py",
     "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.py",
     "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.py",
+    "openfold3/core/kernels/cuda/stablefold_trimul_cuda.py",
 )
 
 
@@ -153,7 +168,7 @@ def main() -> None:
 
         extensions = manifest.get("extensions", {})
         if set(extensions) != set(EXPECTED_EXTENSIONS):
-            raise RuntimeError("wheel does not contain exactly four extensions")
+            raise RuntimeError("wheel does not contain exactly five extensions")
         binary_members: set[str] = set()
         for key, record in extensions.items():
             member = str(record["filename"])

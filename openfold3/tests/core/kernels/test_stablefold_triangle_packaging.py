@@ -33,6 +33,8 @@ class StableFoldTrianglePackagingTest(unittest.TestCase):
             "stablefold_triangle_delta.py",
             "stablefold_triangle_dkdv.py",
             "stablefold_triangle_dq_dbias.py",
+            "stablefold_trimul.py",
+            "stablefold_trimul_cuda.py",
         }
         for module in runtime_modules:
             imports = _top_level_imports(CUDA_PACKAGE / module)
@@ -51,6 +53,7 @@ class StableFoldTrianglePackagingTest(unittest.TestCase):
             "core/kernels/cuda/stablefold_triangle_delta.cu",
             "core/kernels/cuda/stablefold_triangle_dkdv.cu",
             "core/kernels/cuda/stablefold_triangle_dq_dbias.cu",
+            "core/kernels/cuda/stablefold_trimul_cuda.cu",
         }
         self.assertTrue(required.issubset(package_data))
         for relative in required:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the ABI-locked StableFold Triangle Attention sm_90a wheel."""
+"""Build the ABI-locked StableFold CUDA sm_90a wheel."""
 
 from __future__ import annotations
 
@@ -68,6 +68,21 @@ EXTENSION_SPECS = {
             "stablefold_triangle_sr_backward_out",
         ],
     },
+    "stablefold_trimul": {
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
+        "source": "stablefold_trimul_cuda.cu",
+        "symbols": [
+            "trimul_in_fwd",
+            "trimul_out_fwd",
+            "trimul_gate_split_bwd",
+            "sig_mul_bwd_out",
+            "ln_bwd_dx",
+            "ln_bwd_dgb",
+            "transpose_ln_bwd",
+            "pack_rows3",
+            "gather_rows1",
+        ],
+    },
 }
 
 
@@ -129,6 +144,8 @@ def _source_paths() -> list[Path]:
             "stablefold_triangle_dkdv.py",
             "stablefold_triangle_dq_dbias.py",
             "stablefold_triangle_attention.py",
+            "stablefold_trimul.py",
+            "stablefold_trimul_cuda.py",
             "_aot_runtime.py",
         )
     )

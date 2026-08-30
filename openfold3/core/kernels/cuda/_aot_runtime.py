@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fail-closed loader for the AOT StableFold Triangle Attention extensions.
+"""Fail-closed loader for the AOT StableFold CUDA extensions.
 
-Production always imports the four wheel-owned binary modules.  Runtime JIT
+Production always imports wheel-owned binary modules.  Runtime JIT
 exists only for source-tree development and requires the explicit
 ``OPENFOLD3_TRIANGLE_ALLOW_JIT=1`` opt-in.  There is deliberately no automatic
 fallback when an AOT artifact is absent or ABI-incompatible.

@@ -78,9 +78,13 @@ facade 的未填充 direct ABI 调用才走 `StaticSequence=0` 的显式尾块 g
 损坏或 ABI 不匹配的生产二进制会直接报错。生产 facade 不允许依赖
 `scripts/benchmarks` 或任何历史 backward loader。
 
+共享 AOT wheel 还包含独立的 `_stablefold_trimul_sm90a` 模块；它复用同一
+manifest、ABI/hash preflight 与显式 development-JIT gate，但其数值和支持范围
+不属于本 Attention release manifest。
+
 发布 wheel ABI 固定为 CPython 3.14、Torch 2.10.0、Torch CUDA 12.9 与
 H100 `sm_90a` SASS；不包含 PTX。build manifest 必须记录 commit、dirty 状态、
-ABI/toolchain、所有生产源 SHA-256 以及四个 `.so` 的 SHA-256 和导出符号。
+ABI/toolchain、所有生产源 SHA-256 以及全部五个 `.so` 的 SHA-256 和导出符号。
 canonical builder 必须使用 fresh clone，并通过 `nm`、`cuobjdump` 和只读、
 无 NVCC clean-install 的 public-facade F+B smoke。
 

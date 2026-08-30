@@ -85,6 +85,8 @@ The wheel owns four AOT Triangle Attention extensions: forward, delta, `dK/dV`,
 and `dQ/dBias`. Production Triangle Attention does not invoke NVCC or silently
 fall back to JIT. If you received only the GitHub link and no binary bundle, use
 the source-build route below.
+The same wheel owns a fifth, independently named TriMul extension; its Python
+facade uses the identical fail-closed loader and explicit development-JIT gate.
 
 ### Option B: build the H100 wheel from this repository
 
