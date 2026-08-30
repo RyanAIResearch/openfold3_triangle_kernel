@@ -135,8 +135,8 @@ class _StableTrimulFn(torch.autograd.Function):
                 d_gin, d_bin, d_gout, d_bout, None)
 
 
-def run_stable_trimul(module, z, mask):
-    """Differentiable entry point bound to an official module's parameters."""
+def _run_supported_stable_trimul(module, z, mask):
+    """Run a call that the shared metadata contract already accepted."""
     if mask is None:
         mask = z.new_ones(z.shape[:-1])
     return _StableTrimulFn.apply(
@@ -150,6 +150,20 @@ def run_stable_trimul(module, z, mask):
         module.layer_norm_out.bias.float(),
         module._outgoing,
     )
+
+
+def run_stable_trimul(module, z, mask):
+    """Strict differentiable entry point bound to an official module."""
+    from openfold3.core.kernels.cuda.stablefold_trimul_support import (
+        check_stable_trimul_support,
+    )
+
+    support = check_stable_trimul_support(module, z, mask)
+    if not support:
+        raise ValueError(
+            f"StableFold TriMul unsupported [{support.code}]: {support.reason}"
+        )
+    return _run_supported_stable_trimul(module, z, mask)
 
 
 class StableTrimul:

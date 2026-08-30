@@ -20,6 +20,7 @@ Triangle multiplicative update layers. Includes TriangleMultiplicativeUpdate fro
 and FusedTriangleMultiplicativeUpdate from AF2-Multimer.
 """
 
+import logging
 import warnings
 from abc import ABC, abstractmethod
 from functools import partialmethod
@@ -48,6 +49,36 @@ _TRITON_UNAVAILABLE_ERROR = (
     "openfold3.core.kernels.triton is not available. Ensure the package is "
     "installed with Triton support."
 )
+
+_STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
+
+
+def _route_stable_trimul(module, z, mask):
+    """Return ``(selected, output)`` without swallowing fast-path failures."""
+    from openfold3.core.kernels.cuda.stablefold_trimul_support import (
+        check_stable_trimul_support,
+    )
+
+    support = check_stable_trimul_support(module, z, mask)
+    if support:
+        from openfold3.core.kernels.cuda.stablefold_trimul import (
+            _run_supported_stable_trimul,
+        )
+
+        return True, _run_supported_stable_trimul(module, z, mask)
+
+    key = (type(module).__qualname__, support.code)
+    if key not in _STABLEFOLD_TRIMUL_FALLBACK_LOGGED:
+        _STABLEFOLD_TRIMUL_FALLBACK_LOGGED.add(key)
+        logging.getLogger(__name__).warning(
+            "StableFold TriMul fallback to stock for %s at shape %s [%s]: %s",
+            type(module).__qualname__,
+            tuple(z.shape),
+            support.code,
+            support.reason,
+        )
+    return False, None
+
 
 warnings.filterwarnings("once")
 
@@ -1122,15 +1153,17 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         Returns:
             [*, N_res, N_res, C_z] output tensor
         """
+        if use_stable_triangle_multiplicative:
+            stable_selected, stable_output = _route_stable_trimul(self, z, mask)
+            if stable_selected:
+                return stable_output
+            # A StableFold request owns this TriMul site. Unsupported metadata
+            # falls back specifically to stock PyTorch, never another backend.
+            use_cueq_triangle_kernels = False
+            use_triton_triangle_kernels = False
+
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
-
-        if use_stable_triangle_multiplicative:
-            from openfold3.core.kernels.cuda.stablefold_trimul import (
-                run_stable_trimul,
-            )
-
-            return run_stable_trimul(self, z, mask)
 
         ## NOTE: valid for inplace safe and use_cueq_triangle_kernels to be enabled
         ## inplace safe is used across the codebase and so should not
@@ -1422,14 +1455,15 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         Returns:
             [*, N_res, N_res, C_z] output tensor
         """
+        if use_stable_triangle_multiplicative:
+            stable_selected, stable_output = _route_stable_trimul(self, z, mask)
+            if stable_selected:
+                return stable_output
+            use_cueq_triangle_kernels = False
+            use_triton_triangle_kernels = False
+
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
-
-        if use_stable_triangle_multiplicative:
-            raise NotImplementedError(
-                "use_stable_triangle_multiplicative requires "
-                "fuse_projection_weights=False"
-            )
 
         # Supersede inplace_safe conditional if cueq kernel is used
         if use_cueq_triangle_kernels:

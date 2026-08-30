@@ -446,6 +446,10 @@ def test_h100_live_positive_metadata_contract(channels, outgoing, requires_grad)
 
 @pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
 def test_h100_live_negative_metadata_contracts():
+    from openfold3.core.model.layers.triangular_multiplicative_update import (
+        FusedTriangleMultiplicationOutgoing,
+    )
+
     device = torch.device("cuda", torch.cuda.current_device())
     unequal_module = _live_trimul_module(64, 32, True, device)
     z = torch.empty((1, 3, 3, 64), dtype=torch.bfloat16, device=device)
@@ -457,7 +461,12 @@ def test_h100_live_negative_metadata_contracts():
     )
     bad_mask = check_stable_trimul_support(module, z, grad_mask)
 
+    fused_module = FusedTriangleMultiplicationOutgoing(64, 64).to(device)
+    fused = check_stable_trimul_support(fused_module, z)
+
     assert not unequal
     assert unequal.code == "channels_not_equal"
     assert not bad_mask
     assert bad_mask.code == "mask_grad"
+    assert not fused
+    assert fused.code == "fused_projection_layout"

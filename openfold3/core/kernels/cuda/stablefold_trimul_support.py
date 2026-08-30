@@ -391,6 +391,14 @@ def check_stable_trimul_support(
             "direction",
             "module _outgoing must be an explicit bool",
         )
+    if hasattr(module, "linear_ab_p") or hasattr(module, "linear_ab_g"):
+        return _rejected(
+            "fused_projection_layout",
+            (
+                "fused TriMul projection weights are not supported by the "
+                "current StableFold AOT ABI"
+            ),
+        )
 
     weights: list[NamedTensorMetadata] = []
     bias_states: list[tuple[str, bool]] = []
