@@ -1051,6 +1051,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
   const int64_t bias_base =
       ((static_cast<int64_t>(batch_index) * heads + head) * sequence) *
       static_cast<int64_t>(sequence);
+  const bool single_outer = !OuterEqSeq && outer_count == 1;
 
   const int oc = OuterEqSeq ? sequence : outer_count;
   const auto slot_plane = [&](int slot) -> int64_t {
@@ -1066,7 +1067,8 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
 
   // K/V and the additive mask are key-invariant: staged once.
 #pragma unroll 1
-  for (int slot = 0; slot < kOuterLeaf; ++slot) {
+  const int staged_slots = single_outer ? 1 : kOuterLeaf;
+  for (int slot = 0; slot < staged_slots; ++slot) {
     __nv_bfloat16* dst_k = sk + slot * kSrKeyBlock * HeadDim;
     __nv_bfloat16* dst_v = sv + slot * kSrKeyBlock * HeadDim;
     const int64_t tensor_base = (slot_plane(slot) * heads + head) *
@@ -1084,7 +1086,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
           col < io_dim ? v[src] : __float2bfloat16_rn(0.0F);
     }
   }
-  for (int element = threadIdx.x; element < kOuterLeaf * kSrKeyBlock;
+  for (int element = threadIdx.x; element < staged_slots * kSrKeyBlock;
        element += kThreadsWg) {
     const int slot = element / kSrKeyBlock;
     const int key = element - slot * kSrKeyBlock;
@@ -1142,7 +1144,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
     __nv_bfloat16* buf_bias =
         sbias_tile + parity * kSrQueryTile * kSrBiasStride;
 #pragma unroll 1
-    for (int slot = 0; slot < kOuterLeaf; ++slot) {
+    for (int slot = 0; slot < staged_slots; ++slot) {
       __nv_bfloat16* dst_q = buf_q + slot * kSrQueryTile * HeadDim;
       __nv_bfloat16* dst_do = buf_do + slot * kSrQueryTile * HeadDim;
       const int64_t plane = slot_plane(slot);
@@ -1208,6 +1210,9 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
 #pragma unroll
     for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
       const int slot = warpgroup * kSlotsPerWarpgroup + local;
+      if (single_outer && slot != 0) {
+        continue;
+      }
       const __nv_bfloat16* tile_k = sk + slot * kSrKeyBlock * HeadDim;
       const __nv_bfloat16* tile_v = sv + slot * kSrKeyBlock * HeadDim;
       const __nv_bfloat16* tile_q = cur_q + slot * kSrQueryTile * HeadDim;
@@ -1356,9 +1361,11 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
       const int row = element / kSrKeyBlock;
       const int key = element - row * kSrKeyBlock;
       const int cell = row * kSrTreeStride + key;
-      const float tile_sum = __fadd_rn(
-          sbias_acc[cell],
-          sbias_acc[kSrQueryTile * kSrTreeStride + cell]);
+      const float tile_sum = single_outer
+          ? sbias_acc[cell]
+          : __fadd_rn(
+                sbias_acc[cell],
+                sbias_acc[kSrQueryTile * kSrTreeStride + cell]);
       workspace[plane_tile_base + static_cast<int64_t>(row) * sequence +
                 key] = __float2bfloat16_rn(tile_sum);
     }
