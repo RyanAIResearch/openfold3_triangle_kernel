@@ -187,6 +187,7 @@ class MSAStack(nn.Module, ABC):
         use_cueq_triangle_kernels: bool = False,
         use_stable_triangle_attention: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_multiplicative: bool = False,
         use_lma: bool = False,
         _mask_trans: bool = True,
     ):
@@ -203,6 +204,7 @@ class MSAStack(nn.Module, ABC):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=False,
+            use_stable_triangle_multiplicative=(use_stable_triangle_multiplicative),
             use_lma=use_lma,
             msa_mask=msa_mask,
             pair_mask=pair_mask,
