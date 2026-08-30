@@ -1,5 +1,7 @@
 #include <torch/extension.h>
 #include <ATen/MemoryOverlap.h>
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <cuda_bf16.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <algorithm>
@@ -17,6 +19,9 @@ namespace {
 
 constexpr int64_t kMaxGridX = 2147483647LL;
 constexpr int64_t kMaxGridYZ = 65535LL;
+constexpr int kTrimulInMaxDynamicSharedBytes = 105984;
+constexpr int kTrimulOutMaxDynamicSharedBytes = 105472;
+constexpr int kTrimulGateBwdMaxDynamicSharedBytes = 105472;
 
 int64_t checked_positive(int64_t value, const char* op, const char* name) {
   TORCH_CHECK(value > 0, op, ": ", name, " must be positive, got ", value);
@@ -111,6 +116,16 @@ void check_no_overlap(const torch::Tensor& output,
                       std::initializer_list<const torch::Tensor*> inputs) {
   at::assert_no_internal_overlap(output);
   for (const torch::Tensor* input : inputs) at::assert_no_overlap(output, *input);
+}
+
+void check_dynamic_shared_memory_limit(int required_bytes, int device,
+                                       const char* op) {
+  int optin_limit = 0;
+  C10_CUDA_CHECK(cudaDeviceGetAttribute(
+      &optin_limit, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
+  TORCH_CHECK(required_bytes <= optin_limit, op, ": requires ", required_bytes,
+              " bytes of dynamic shared memory, but device limit is ",
+              optin_limit);
 }
 
 }  // namespace
@@ -605,6 +620,7 @@ std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor w_ap,
     check_shape(*named_parameter.second, {C}, op, named_parameter.first);
     check_alignment(*named_parameter.second, 16, op, named_parameter.first);
   }
+  const c10::cuda::CUDAGuard device_guard(z.device());
   long tiles = (rows + 127) / 128;
   auto stream = at::cuda::getCurrentCUDAStream();
   auto opts = torch::TensorOptions().dtype(torch::kBFloat16).device(z.device());
@@ -618,11 +634,16 @@ std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor w_ap,
   int Cp = C + 8;
   size_t smem = ((size_t)160 * Cp + 128 * Cp
                  + 2 * 32 * 136 + 128 * 40) * sizeof(bf16);
-  cudaFuncSetAttribute(trimul_in_fwd_kernel,
-                       cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-  int device = 0; cudaGetDevice(&device);
-  int sm_count = 132;
-  cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
+  int device = z.get_device();
+  check_dynamic_shared_memory_limit(
+      kTrimulInMaxDynamicSharedBytes, device, op);
+  C10_CUDA_CHECK(cudaFuncSetAttribute(
+      trimul_in_fwd_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
+      kTrimulInMaxDynamicSharedBytes));
+  int sm_count = 0;
+  C10_CUDA_CHECK(cudaDeviceGetAttribute(
+      &sm_count, cudaDevAttrMultiProcessorCount, device));
+  TORCH_CHECK(sm_count > 0, op, ": device reports no streaming multiprocessors");
   int S = H / 32;
   long y = std::max(1L, std::min(tiles, (long)(2 * sm_count) / S));
   TORCH_CHECK(y <= 65535, "trimul_in: grid.y overflow");
@@ -635,6 +656,7 @@ std::vector<torch::Tensor> trimul_in_fwd(torch::Tensor z, torch::Tensor w_ap,
       rows, NN, C, H, (bf16*)a.data_ptr(), (bf16*)b.data_ptr(),
       (bf16*)gate.data_ptr(), mean.data_ptr<float>(), rstd.data_ptr<float>(),
       save_zln ? (bf16*)zln.data_ptr() : nullptr);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {a, b, gate, mean, rstd, zln};
 }
 
@@ -888,6 +910,7 @@ std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wz,
     check_same_device(*named_parameter.second, x, op, named_parameter.first);
     check_shape(*named_parameter.second, {H}, op, named_parameter.first);
   }
+  const c10::cuda::CUDAGuard device_guard(x.device());
   long tiles = (rows + 127) / 128;
   auto stream = at::cuda::getCurrentCUDAStream();
   auto opts = torch::TensorOptions().dtype(torch::kBFloat16).device(x.device());
@@ -898,11 +921,16 @@ std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wz,
   auto rstd = torch::empty({training ? rows : 0}, fopts);
   size_t smem = ((size_t)2 * H * 136 + (size_t)C * (H + 8)) * sizeof(bf16)
               + (size_t)2 * H * sizeof(float);
-  cudaFuncSetAttribute(trimul_out_fwd_kernel,
-                       cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-  int device = 0; cudaGetDevice(&device);
-  int sm_count = 132;
-  cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
+  int device = x.get_device();
+  check_dynamic_shared_memory_limit(
+      kTrimulOutMaxDynamicSharedBytes, device, op);
+  C10_CUDA_CHECK(cudaFuncSetAttribute(
+      trimul_out_fwd_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
+      kTrimulOutMaxDynamicSharedBytes));
+  int sm_count = 0;
+  C10_CUDA_CHECK(cudaDeviceGetAttribute(
+      &sm_count, cudaDevAttrMultiProcessorCount, device));
+  TORCH_CHECK(sm_count > 0, op, ": device reports no streaming multiprocessors");
   long g = std::max(1L, std::min(tiles, (long)(2 * sm_count)));
   trimul_out_fwd_kernel<<<dim3((unsigned)g), dim3(256), smem, stream>>>(
       (const bf16*)x.data_ptr(), wz.data_ptr<float>(),
@@ -912,6 +940,7 @@ std::vector<torch::Tensor> trimul_out_fwd(torch::Tensor x, torch::Tensor wz,
       training ? (bf16*)xln.data_ptr() : nullptr,
       training ? mean.data_ptr<float>() : nullptr,
       training ? rstd.data_ptr<float>() : nullptr);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {o, xln, mean, rstd};
 }
 
@@ -1184,16 +1213,23 @@ torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor w_ap,
   check_alignment(d_proj5, 16, op, "d_proj5");
   check_no_overlap(d_proj5,
                    {&zln, &w_ap, &w_ag, &w_bp, &w_bg, &mask, &d_a, &d_b});
+  const c10::cuda::CUDAGuard device_guard(zln.device());
   long tiles = (rows + 127) / 128;
   auto stream = at::cuda::getCurrentCUDAStream();
   int Cp = C + 8;
   size_t smem = ((size_t)128 * Cp + 128 * Cp + 2 * 32 * 136 + 128 * 72)
               * sizeof(bf16);
-  cudaFuncSetAttribute(trimul_gate_split_bwd_kernel,
-                       cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-  int device = 0; cudaGetDevice(&device);
-  int sm_count = 132;
-  cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
+  int device = zln.get_device();
+  check_dynamic_shared_memory_limit(
+      kTrimulGateBwdMaxDynamicSharedBytes, device, op);
+  C10_CUDA_CHECK(cudaFuncSetAttribute(
+      trimul_gate_split_bwd_kernel,
+      cudaFuncAttributeMaxDynamicSharedMemorySize,
+      kTrimulGateBwdMaxDynamicSharedBytes));
+  int sm_count = 0;
+  C10_CUDA_CHECK(cudaDeviceGetAttribute(
+      &sm_count, cudaDevAttrMultiProcessorCount, device));
+  TORCH_CHECK(sm_count > 0, op, ": device reports no streaming multiprocessors");
   int S = H / 32;
   long y = std::max(1L, std::min(tiles, (long)(2 * sm_count) / S));
   TORCH_CHECK(y <= 65535, "trimul_gate_split_bwd: grid.y overflow");
@@ -1204,6 +1240,7 @@ torch::Tensor trimul_gate_split_bwd(torch::Tensor zln, torch::Tensor w_ap,
       mask.data_ptr<float>(), (const bf16*)d_a.data_ptr(),
       (const bf16*)d_b.data_ptr(), rows, NN, C, H,
       (bf16*)d_proj5.data_ptr());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return d_proj5;
 }
 
@@ -1237,12 +1274,14 @@ torch::Tensor sig_mul_bwd_out(torch::Tensor out, torch::Tensor gate,
   int64_t total = checked_mul(rows, H, op, "rows*H");
   TORCH_CHECK(ceil_div_positive(total, 256) <= kMaxGridX, op,
               ": launch grid-x exceeds the production limit");
+  const c10::cuda::CUDAGuard device_guard(out.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   auto draw = torch::empty_like(out);
   sig_mul_bwd_out_kernel<<<(unsigned)((total + 255) / 256), 256, 0, stream>>>(
       (const bf16*)out.data_ptr(), (const bf16*)gate.data_ptr(),
       (const bf16*)grad_out.data_ptr(), total, H, dgate_stride,
       (bf16*)draw.data_ptr(), (bf16*)dgate_dst.data_ptr());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return draw;
 }
 
@@ -1279,6 +1318,7 @@ torch::Tensor ln_bwd_dx(torch::Tensor input, torch::Tensor grad_out, long rows,
   }
   TORCH_CHECK(ceil_div_positive(rows, 8) <= kMaxGridX, op,
               ": launch grid-x exceeds the production limit");
+  const c10::cuda::CUDAGuard device_guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   auto grad_in = torch::empty_like(input);
   int warps_per_block = 8;
@@ -1288,6 +1328,7 @@ torch::Tensor ln_bwd_dx(torch::Tensor input, torch::Tensor grad_out, long rows,
       (const bf16*)input.data_ptr(), (const bf16*)grad_out.data_ptr(), rows, C,
       row_stride, col_stride, gamma.data_ptr<float>(), mean.data_ptr<float>(),
       rstd.data_ptr<float>(), (bf16*)grad_in.data_ptr());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return grad_in;
 }
 
@@ -1315,6 +1356,7 @@ std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_ou
     check_same_device(*named_stat.second, input, op, named_stat.first);
     check_shape(*named_stat.second, {rows}, op, named_stat.first);
   }
+  const c10::cuda::CUDAGuard device_guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   auto dgamma = torch::empty({(long)C},
       torch::TensorOptions().dtype(torch::kFloat).device(input.device()));
@@ -1325,10 +1367,9 @@ std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_ou
   // keeps each CTA's fixed-order accumulation useful without encoding a crop
   // or channel dimension in the launch policy.
   int sm_count = 0;
-  auto attr_status = cudaDeviceGetAttribute(
-      &sm_count, cudaDevAttrMultiProcessorCount, input.get_device());
-  TORCH_CHECK(attr_status == cudaSuccess && sm_count > 0,
-              "stablefold trimul: could not query SM count");
+  C10_CUDA_CHECK(cudaDeviceGetAttribute(
+      &sm_count, cudaDevAttrMultiProcessorCount, input.get_device()));
+  TORCH_CHECK(sm_count > 0, op, ": device reports no streaming multiprocessors");
   constexpr int target_blocks_per_sm = 16;
   long target_chunks = (long)sm_count * target_blocks_per_sm;
   long chunk_rows = (rows + target_chunks - 1) / target_chunks;
@@ -1346,9 +1387,11 @@ std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_ou
       (const bf16*)input.data_ptr(), (const bf16*)grad_out.data_ptr(), rows, C,
       row_stride, col_stride, chunk_rows, mean.data_ptr<float>(),
       rstd.data_ptr<float>(), partial.data_ptr<float>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   ln_bwd_dgb_fold_kernel<<<cdiv(C, 128), 128, 0, stream>>>(
       partial.data_ptr<float>(), chunks, C,
       dgamma.data_ptr<float>(), dbeta.data_ptr<float>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {dgamma, dbeta};
 }
 
@@ -1385,6 +1428,7 @@ std::vector<torch::Tensor> transpose_ln_bwd(torch::Tensor x, torch::Tensor d_xln
     check_same_device(*named_stat.second, x, op, named_stat.first);
     check_shape(*named_stat.second, {rows}, op, named_stat.first);
   }
+  const c10::cuda::CUDAGuard device_guard(x.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   auto d_x = torch::empty({(long)B * H, (long)N, (long)N},
       torch::TensorOptions().dtype(torch::kBFloat16).device(x.device()));
@@ -1399,6 +1443,7 @@ std::vector<torch::Tensor> transpose_ln_bwd(torch::Tensor x, torch::Tensor d_xln
       (const bf16*)x.data_ptr(), (const bf16*)d_xln.data_ptr(), NN, H,
       gamma.data_ptr<float>(), mean.data_ptr<float>(), rstd.data_ptr<float>(),
       (bf16*)d_x.data_ptr(), partial.data_ptr<float>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   auto dgamma = torch::empty({(long)H},
       torch::TensorOptions().dtype(torch::kFloat).device(x.device()));
   auto dbeta = torch::empty_like(dgamma);
@@ -1410,9 +1455,11 @@ std::vector<torch::Tensor> transpose_ln_bwd(torch::Tensor x, torch::Tensor d_xln
   ln_bwd_dgb_group_fold_kernel<<<fold_grid, 128, 0, stream>>>(
       partial.data_ptr<float>(), (int)chunks, H, group_len,
       stage.data_ptr<float>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   ln_bwd_dgb_fold_kernel<<<cdiv(H, 128), 128, 0, stream>>>(
       stage.data_ptr<float>(), groups, H,
       dgamma.data_ptr<float>(), dbeta.data_ptr<float>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {d_x, dgamma, dbeta};
 }
 
@@ -1420,6 +1467,7 @@ std::vector<torch::Tensor> pack_rows3(torch::Tensor q, torch::Tensor k,
                                       torch::Tensor v, long bo, int H, int N,
                                       int D, bool src_h_inner) {
   TORCH_CHECK(D % 2 == 0, "stablefold gather: head dim must be even");
+  const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   long rows = bo * (long)H * N;
   auto opts = torch::TensorOptions().dtype(torch::kBFloat16).device(q.device());
@@ -1433,12 +1481,14 @@ std::vector<torch::Tensor> pack_rows3(torch::Tensor q, torch::Tensor k,
       (const bf16*)k.data_ptr(), (bf16*)ok.data_ptr(),
       (const bf16*)v.data_ptr(), (bf16*)ov.data_ptr(),
       rows, H, N, D, src_h_inner);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {oq, ok, ov};
 }
 
 torch::Tensor gather_rows1(torch::Tensor src, long bo, int H, int N, int D,
                            bool src_h_inner) {
   TORCH_CHECK(D % 2 == 0, "stablefold gather: head dim must be even");
+  const c10::cuda::CUDAGuard device_guard(src.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   long rows = bo * (long)H * N;
   auto dst = torch::empty({rows, (long)D},
@@ -1449,6 +1499,7 @@ torch::Tensor gather_rows1(torch::Tensor src, long bo, int H, int N, int D,
       (const bf16*)src.data_ptr(), (bf16*)dst.data_ptr(),
       nullptr, nullptr, nullptr, nullptr,
       rows, H, N, D, src_h_inner);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return dst;
 }
 

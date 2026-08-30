@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -73,9 +75,7 @@ def _trimul_in_args(tensors):
     )
 
 
-@pytest.mark.parametrize("channels", (32, 64, 96, 128))
-def test_all_seven_production_symbols_accept_valid_inputs(extension, channels):
-    tensors = _make_tensors(channels=channels, sequence=8)
+def _run_all_seven(extension, tensors):
     batch = tensors["B"]
     sequence = tensors["N"]
     nn = tensors["NN"]
@@ -154,10 +154,60 @@ def test_all_seven_production_symbols_accept_valid_inputs(extension, channels):
         mean_in,
         rstd_in,
     )
-    torch.cuda.synchronize()
+    return (out, d_raw, d_x, d_gout, d_bout, d_z, d_gin, d_bin, d_proj5)
 
-    outputs = (out, d_raw, d_x, d_gout, d_bout, d_z, d_gin, d_bin, d_proj5)
+
+@pytest.mark.parametrize("channels", (32, 64, 96, 128))
+def test_all_seven_production_symbols_accept_valid_inputs(extension, channels):
+    tensors = _make_tensors(channels=channels, sequence=8)
+    outputs = _run_all_seven(extension, tensors)
+    torch.cuda.synchronize()
     assert all(torch.isfinite(value).all() for value in outputs)
+
+
+def test_all_symbols_follow_a_non_default_stream(extension):
+    stream = torch.cuda.Stream()
+    tensors = _make_tensors(channels=64, sequence=8)
+    with torch.cuda.stream(stream):
+        outputs = _run_all_seven(extension, tensors)
+        completion = torch.cuda.Event()
+        completion.record()
+    completion.synchronize()
+    assert all(torch.isfinite(value).all() for value in outputs)
+
+
+def test_c32_c128_repeat_on_independent_streams(extension):
+    streams = (torch.cuda.Stream(), torch.cuda.Stream())
+    all_outputs = []
+    for _ in range(4):
+        for stream, channels in zip(streams, (32, 128)):
+            with torch.cuda.stream(stream):
+                all_outputs.extend(
+                    _run_all_seven(
+                        extension,
+                        _make_tensors(channels=channels, sequence=8),
+                    )
+                )
+    for stream in streams:
+        stream.synchronize()
+    assert all(torch.isfinite(value).all() for value in all_outputs)
+
+
+def test_cpp_source_pins_device_and_cuda_error_contracts():
+    source = (
+        Path(__file__)
+        .resolve()
+        .parents[3]
+        .joinpath("core/kernels/cuda/stablefold_trimul_cuda.cu")
+        .read_text()
+    )
+    assert source.count("CUDAGuard device_guard") == 9
+    assert source.count("C10_CUDA_KERNEL_LAUNCH_CHECK") == 12
+    assert source.count("cudaFuncSetAttribute(") == 3
+    assert "kTrimulInMaxDynamicSharedBytes = 105984" in source
+    assert "kTrimulOutMaxDynamicSharedBytes = 105472" in source
+    assert "kTrimulGateBwdMaxDynamicSharedBytes = 105472" in source
+    assert "cudaDevAttrMaxSharedMemoryPerBlockOptin" in source
 
 
 @pytest.mark.parametrize(
