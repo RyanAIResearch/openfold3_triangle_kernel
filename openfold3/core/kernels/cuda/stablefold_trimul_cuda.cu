@@ -136,6 +136,27 @@ __device__ __forceinline__ float warp_sum(float v) {
     return __shfl_sync(FULL, v, 0);
 }
 
+// Fixed-order fold for FP32 split-K weight-gradient partials.  Each thread
+// exclusively owns one output element and consumes logical chunks in ascending
+// order.  The accumulator is fresh on the first wave and carries the exact
+// ordered prefix across later waves; no atomics or inter-CTA reduction occur.
+template <bool Initialize>
+__global__ void trimul_wgrad_fixed_fold_kernel(
+    const float* __restrict__ partials, int chunks, long elements,
+    float* __restrict__ accumulator) {
+  long idx = blockIdx.x * (long)blockDim.x + threadIdx.x;
+  if (idx >= elements) return;
+  float sum = 0.f;
+  if constexpr (!Initialize) {
+    sum = accumulator[idx];
+  }
+  #pragma unroll 1
+  for (int chunk = 0; chunk < chunks; ++chunk) {
+    sum = __fadd_rn(sum, partials[(long)chunk * elements + idx]);
+  }
+  accumulator[idx] = sum;
+}
+
 // ---------------- K1 / K3: LayerNorm forward, strided read ----------------
 // one warp per row; C multiple of 32.
 
@@ -1368,6 +1389,49 @@ std::vector<torch::Tensor> ln_bwd_dgb(torch::Tensor input, torch::Tensor grad_ou
 }
 
 
+torch::Tensor trimul_wgrad_fixed_fold(torch::Tensor partials,
+                                      torch::Tensor accumulator,
+                                      bool initialize) {
+  constexpr const char* op = "trimul_wgrad_fixed_fold";
+  check_cuda_contiguous(partials, at::kFloat, op, "partials");
+  TORCH_CHECK(partials.dim() == 3, op,
+              ": partials must have shape [chunks, M, C]; got ",
+              partials.sizes());
+  int64_t chunks64 = checked_positive(partials.size(0), op, "chunks");
+  int64_t matrix_rows = checked_positive(partials.size(1), op, "M");
+  int64_t matrix_cols = checked_positive(partials.size(2), op, "C");
+  TORCH_CHECK(chunks64 <= std::numeric_limits<int>::max(), op,
+              ": chunks exceed int32");
+
+  check_cuda_contiguous(accumulator, at::kFloat, op, "accumulator");
+  check_same_device(accumulator, partials, op, "accumulator");
+  check_shape(accumulator, {matrix_rows, matrix_cols}, op, "accumulator");
+  check_no_overlap(accumulator, {&partials});
+
+  int64_t elements = checked_mul(matrix_rows, matrix_cols, op, "M*C");
+  int64_t partial_elements =
+      checked_mul(chunks64, elements, op, "chunks*M*C");
+  TORCH_CHECK(partial_elements == partials.numel(), op,
+              ": chunks*M*C does not match partials.numel()");
+  TORCH_CHECK(ceil_div_positive(elements, 256) <= kMaxGridX, op,
+              ": launch grid-x exceeds the production limit");
+  const c10::cuda::CUDAGuard device_guard(partials.device());
+  auto stream = at::cuda::getCurrentCUDAStream();
+  unsigned blocks = (unsigned)ceil_div_positive(elements, 256);
+  if (initialize) {
+    trimul_wgrad_fixed_fold_kernel<true><<<blocks, 256, 0, stream>>>(
+        partials.data_ptr<float>(), static_cast<int>(chunks64), elements,
+        accumulator.data_ptr<float>());
+  } else {
+    trimul_wgrad_fixed_fold_kernel<false><<<blocks, 256, 0, stream>>>(
+        partials.data_ptr<float>(), static_cast<int>(chunks64), elements,
+        accumulator.data_ptr<float>());
+  }
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return accumulator;
+}
+
+
 std::vector<torch::Tensor> transpose_ln_bwd(torch::Tensor x, torch::Tensor d_xln, int N,
                                int H, int B, torch::Tensor gamma,
                                torch::Tensor mean, torch::Tensor rstd) {
@@ -1443,4 +1507,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("ln_bwd_dx", &ln_bwd_dx);
   module.def("ln_bwd_dgb", &ln_bwd_dgb);
   module.def("transpose_ln_bwd", &transpose_ln_bwd);
+  module.def("trimul_wgrad_fixed_fold", &trimul_wgrad_fixed_fold);
 }

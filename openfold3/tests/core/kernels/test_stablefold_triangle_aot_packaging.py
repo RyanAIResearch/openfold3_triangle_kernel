@@ -88,6 +88,7 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             "ln_bwd_dx",
             "ln_bwd_dgb",
             "transpose_ln_bwd",
+            "trimul_wgrad_fixed_fold",
         ):
             self.assertIn(f'"{symbol}"', text)
         self.assertNotIn("--use_fast_math", text)

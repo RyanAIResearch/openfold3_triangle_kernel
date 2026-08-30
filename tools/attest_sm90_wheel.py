@@ -56,6 +56,7 @@ EXPECTED_EXTENSIONS = {
             "ln_bwd_dx",
             "ln_bwd_dgb",
             "transpose_ln_bwd",
+            "trimul_wgrad_fixed_fold",
         ],
     },
 }

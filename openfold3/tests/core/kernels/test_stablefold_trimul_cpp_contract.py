@@ -75,7 +75,17 @@ def _trimul_in_args(tensors):
     )
 
 
-def _run_all_seven(extension, tensors):
+def _strict_ascending_fold(partials, initial=None):
+    if initial is None:
+        output = torch.zeros_like(partials[0])
+    else:
+        output = initial.clone()
+    for chunk in partials.unbind(0):
+        output.add_(chunk)
+    return output
+
+
+def _run_all_eight(extension, tensors):
     batch = tensors["B"]
     sequence = tensors["N"]
     nn = tensors["NN"]
@@ -154,13 +164,31 @@ def _run_all_seven(extension, tensors):
         mean_in,
         rstd_in,
     )
-    return (out, d_raw, d_x, d_gout, d_bout, d_z, d_gin, d_bin, d_proj5)
+    partials = torch.randn(
+        3, 5 * channels, channels, device="cuda", dtype=torch.float32
+    )
+    d_w5 = torch.empty(
+        5 * channels, channels, device="cuda", dtype=torch.float32
+    )
+    folded = extension.trimul_wgrad_fixed_fold(partials, d_w5, True)
+    return (
+        out,
+        d_raw,
+        d_x,
+        d_gout,
+        d_bout,
+        d_z,
+        d_gin,
+        d_bin,
+        d_proj5,
+        folded,
+    )
 
 
 @pytest.mark.parametrize("channels", (32, 64, 96, 128))
-def test_all_seven_production_symbols_accept_valid_inputs(extension, channels):
+def test_all_eight_production_symbols_accept_valid_inputs(extension, channels):
     tensors = _make_tensors(channels=channels, sequence=8)
-    outputs = _run_all_seven(extension, tensors)
+    outputs = _run_all_eight(extension, tensors)
     torch.cuda.synchronize()
     assert all(torch.isfinite(value).all() for value in outputs)
 
@@ -169,7 +197,7 @@ def test_all_symbols_follow_a_non_default_stream(extension):
     stream = torch.cuda.Stream()
     tensors = _make_tensors(channels=64, sequence=8)
     with torch.cuda.stream(stream):
-        outputs = _run_all_seven(extension, tensors)
+        outputs = _run_all_eight(extension, tensors)
         completion = torch.cuda.Event()
         completion.record()
     completion.synchronize()
@@ -183,7 +211,7 @@ def test_c32_c128_repeat_on_independent_streams(extension):
         for stream, channels in zip(streams, (32, 128)):
             with torch.cuda.stream(stream):
                 all_outputs.extend(
-                    _run_all_seven(
+                    _run_all_eight(
                         extension,
                         _make_tensors(channels=channels, sequence=8),
                     )
@@ -191,6 +219,125 @@ def test_c32_c128_repeat_on_independent_streams(extension):
     for stream in streams:
         stream.synchronize()
     assert all(torch.isfinite(value).all() for value in all_outputs)
+
+
+@pytest.mark.parametrize("channels", (32, 64, 96, 128))
+def test_wgrad_fold_matches_strict_ascending_reference(extension, channels):
+    torch.manual_seed(9187 + channels)
+    partials = torch.randn(
+        17, 5 * channels, channels, device="cuda", dtype=torch.float32
+    )
+    expected = _strict_ascending_fold(partials)
+    actual = torch.empty_like(expected)
+    returned = extension.trimul_wgrad_fixed_fold(partials, actual, True)
+    assert returned.data_ptr() == actual.data_ptr()
+    assert torch.equal(actual, expected)
+
+
+def test_wgrad_fold_carries_a_fixed_order_across_waves(extension):
+    channels = 64
+    torch.manual_seed(9923)
+    first = torch.randn(
+        7, 5 * channels, channels, device="cuda", dtype=torch.float32
+    )
+    second = torch.randn(
+        11, 5 * channels, channels, device="cuda", dtype=torch.float32
+    )
+    expected = _strict_ascending_fold(
+        second, _strict_ascending_fold(first)
+    )
+    actual = torch.empty_like(expected)
+    extension.trimul_wgrad_fixed_fold(first, actual, True)
+    extension.trimul_wgrad_fixed_fold(second, actual, False)
+    assert torch.equal(actual, expected)
+
+
+def test_wgrad_fold_order_is_numerically_observable(extension):
+    channels = 32
+    partials = torch.empty(
+        4, 5 * channels, channels, device="cuda", dtype=torch.float32
+    )
+    for chunk, value in enumerate((1.0e20, 1.0, -1.0e20, 1.0)):
+        partials[chunk].fill_(value)
+    actual = torch.empty_like(partials[0])
+    extension.trimul_wgrad_fixed_fold(partials, actual, True)
+    assert torch.equal(actual, torch.ones_like(actual))
+
+
+def test_wgrad_fold_is_bitwise_replayable(extension):
+    channels = 96
+    torch.manual_seed(10103)
+    partials = torch.randn(
+        23, 5 * channels, channels, device="cuda", dtype=torch.float32
+    )
+    baseline = torch.empty_like(partials[0])
+    extension.trimul_wgrad_fixed_fold(partials, baseline, True)
+    for _ in range(5):
+        replay = torch.empty_like(baseline)
+        extension.trimul_wgrad_fixed_fold(partials, replay, True)
+        assert torch.equal(replay, baseline)
+
+
+def test_wgrad_fold_rejects_invalid_inputs(extension):
+    channels = 32
+    partials = torch.randn(
+        3, 5 * channels, channels, device="cuda", dtype=torch.float32
+    )
+    accumulator = torch.empty_like(partials[0])
+
+    with pytest.raises(RuntimeError, match="partials must be a CUDA tensor"):
+        extension.trimul_wgrad_fixed_fold(
+            partials.cpu(), accumulator, True
+        )
+    with pytest.raises(RuntimeError, match="partials has the wrong dtype"):
+        extension.trimul_wgrad_fixed_fold(
+            partials.to(torch.bfloat16), accumulator, True
+        )
+    with pytest.raises(RuntimeError, match="partials must be contiguous"):
+        extension.trimul_wgrad_fixed_fold(
+            partials.transpose(1, 2), accumulator, True
+        )
+    with pytest.raises(RuntimeError, match="chunks must be positive"):
+        extension.trimul_wgrad_fixed_fold(partials[:0], accumulator, True)
+    with pytest.raises(RuntimeError, match="M must be positive"):
+        extension.trimul_wgrad_fixed_fold(
+            torch.empty(
+                3, 0, channels, device="cuda", dtype=torch.float32
+            ),
+            torch.empty(0, channels, device="cuda", dtype=torch.float32),
+            True,
+        )
+    with pytest.raises(RuntimeError, match="C must be positive"):
+        extension.trimul_wgrad_fixed_fold(
+            torch.empty(
+                3, 5 * channels, 0, device="cuda", dtype=torch.float32
+            ),
+            torch.empty(5 * channels, 0, device="cuda", dtype=torch.float32),
+            True,
+        )
+    with pytest.raises(RuntimeError, match="accumulator has wrong shape"):
+        extension.trimul_wgrad_fixed_fold(
+            partials, accumulator[:-1], True
+        )
+    with pytest.raises(RuntimeError, match="accumulator must be a CUDA tensor"):
+        extension.trimul_wgrad_fixed_fold(
+            partials, accumulator.cpu(), True
+        )
+    with pytest.raises(RuntimeError, match="accumulator has the wrong dtype"):
+        extension.trimul_wgrad_fixed_fold(
+            partials, accumulator.to(torch.bfloat16), True
+        )
+    with pytest.raises(RuntimeError, match="accumulator must be contiguous"):
+        noncontiguous = torch.empty(
+            channels, 5 * channels, device="cuda", dtype=torch.float32
+        ).t()
+        extension.trimul_wgrad_fixed_fold(
+            partials, noncontiguous, True
+        )
+    with pytest.raises(RuntimeError, match="written-to tensor"):
+        extension.trimul_wgrad_fixed_fold(
+            partials[:1], partials[0], True
+        )
 
 
 def test_cpp_source_pins_device_and_cuda_error_contracts():
@@ -201,11 +348,18 @@ def test_cpp_source_pins_device_and_cuda_error_contracts():
         .joinpath("core/kernels/cuda/stablefold_trimul_cuda.cu")
         .read_text()
     )
-    assert source.count("CUDAGuard device_guard") == 7
-    assert source.count("C10_CUDA_KERNEL_LAUNCH_CHECK") == 10
+    assert source.count("CUDAGuard device_guard") == 8
+    assert source.count("C10_CUDA_KERNEL_LAUNCH_CHECK") == 11
     assert source.count("cudaFuncSetAttribute(") == 3
     assert "kTrimulInMaxDynamicSharedBytes = 105984" in source
     assert "kTrimulOutMaxDynamicSharedBytes = 105472" in source
+    assert "template <bool Initialize>" in source
+    assert "if constexpr (!Initialize)" in source
+    assert "trimul_wgrad_fixed_fold_kernel<true>" in source
+    assert "trimul_wgrad_fixed_fold_kernel<false>" in source
+    assert "sum = __fadd_rn(sum," in source
+    assert 'checked_mul(chunks64, elements, op, "chunks*M*C")' in source
+    assert "check_same_device(accumulator, partials" in source
     assert "kTrimulGateBwdMaxDynamicSharedBytes = 105472" in source
     assert "cudaDevAttrMaxSharedMemoryPerBlockOptin" in source
 
