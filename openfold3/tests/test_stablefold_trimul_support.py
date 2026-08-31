@@ -14,6 +14,7 @@ import pytest
 import torch
 
 from openfold3.core.kernels.cuda import (
+    STABLE_TRIMUL_STOCK_FALLBACK_THRESHOLD,
     check_stable_trimul_support,
     evaluate_stable_trimul_support,
 )
@@ -147,6 +148,22 @@ def test_pure_contract_accepts_dimension_scalable_domain(channels, sequence):
     assert bool(result)
 
 
+@pytest.mark.parametrize("sequence", (1, 31, 99, 100))
+def test_valid_short_sequences_are_reasoned_stock_fallbacks(sequence):
+    result = evaluate_stable_trimul_support(_metadata(sequence=sequence))
+
+    assert not result
+    assert result.code == "sequence_stock_fallback"
+    assert f"N={sequence}" in result.reason
+
+
+def test_fixed_short_sequence_boundary_starts_aot_at_101():
+    assert STABLE_TRIMUL_STOCK_FALLBACK_THRESHOLD == 100
+    result = evaluate_stable_trimul_support(_metadata(sequence=101))
+
+    assert result.supported
+
+
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("requires_grad", (False, True))
 def test_pure_contract_accepts_both_directions_and_autograd_modes(
@@ -155,6 +172,7 @@ def test_pure_contract_accepts_both_directions_and_autograd_modes(
 ):
     result = evaluate_stable_trimul_support(
         _metadata(
+            sequence=101,
             outgoing=outgoing,
             z_requires_grad=requires_grad,
             prefix=(),
@@ -167,7 +185,7 @@ def test_pure_contract_accepts_both_directions_and_autograd_modes(
 
 def test_contract_accepts_arbitrary_batch_prefix_and_packed_input_layout():
     result = evaluate_stable_trimul_support(
-        _metadata(prefix=(2, 3), z_contiguous=False)
+        _metadata(sequence=101, prefix=(2, 3), z_contiguous=False)
     )
 
     assert result.supported
@@ -315,11 +333,13 @@ def test_layer_norm_epsilon_is_exact(name):
 @pytest.mark.parametrize("dtype", (torch.bool, torch.bfloat16, torch.float32))
 @pytest.mark.parametrize(
     "shape",
-    ((), (17, 17), (1, 17, 17), (2, 1, 17, 1), (2, 3, 17, 17)),
+    ((), (101, 101), (1, 101, 101), (2, 1, 101, 1), (2, 3, 101, 101)),
 )
 def test_mask_accepts_valid_dtypes_and_standard_broadcasting(dtype, shape):
     mask = _tensor_metadata(shape, dtype=dtype, requires_grad=False)
-    result = evaluate_stable_trimul_support(_metadata(prefix=(2, 3), mask=mask))
+    result = evaluate_stable_trimul_support(
+        _metadata(sequence=101, prefix=(2, 3), mask=mask)
+    )
 
     assert result.supported
 
@@ -431,12 +451,12 @@ def test_h100_live_positive_metadata_contract(channels, outgoing, requires_grad)
     module = _live_trimul_module(channels, channels, outgoing, device)
     module.requires_grad_(requires_grad)
     z = torch.empty(
-        (1, 3, 3, channels),
+        (1, 101, 101, channels),
         dtype=torch.bfloat16,
         device=device,
         requires_grad=requires_grad,
     )
-    mask = torch.ones((3, 3), dtype=torch.bool, device=device)
+    mask = torch.ones((101, 101), dtype=torch.bool, device=device)
 
     result = check_stable_trimul_support(module, z, mask)
 

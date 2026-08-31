@@ -227,6 +227,15 @@ Unsupported StableFold Attention shapes are explicitly routed to the stock
 OpenFold3 implementation; the public StableFold facade itself fails closed.
 Monitor fallback counts rather than assuming every call used the custom kernel.
 
+StableFold TriMul uses a fixed, non-configurable short-sequence boundary:
+valid TriMul calls with `N <= 100` are metadata-unsupported by the AOT path and
+the model selector routes them directly to stock PyTorch. The H100 BF16 AOT
+path starts at `N = 101` for `C_z = C_hidden` in `{32, 64, 96, 128}`. The
+boundary value matches cuEquivariance 0.10's
+`CUEQ_TRIMUL_FALLBACK_THRESHOLD=100`, but StableFold does not read that or any
+other environment variable. Unsupported direct-facade calls remain
+fail-closed; only the model selector owns the stock fallback.
+
 ## Supported scope and claim boundaries
 
 - Main measured crops: 384, 640, and 768

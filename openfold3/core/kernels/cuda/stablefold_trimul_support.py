@@ -18,6 +18,11 @@ import torch
 SUPPORTED_CHANNELS = frozenset((32, 64, 96, 128))
 SUPPORTED_MASK_DTYPES = frozenset((torch.bool, torch.bfloat16, torch.float32))
 
+# Fixed selector boundary. This is intentionally not environment-configurable:
+# short TriMul sites remain on the stock PyTorch route, while the AOT contract
+# begins at the first sequence above this threshold.
+STABLE_TRIMUL_STOCK_FALLBACK_THRESHOLD = 100
+
 # Hopper launch limits used by the current CUDA implementation.  Grid x has
 # the larger signed-int limit; grid y/z use the legacy 16-bit limit.
 MAX_GRID_X = 2_147_483_647
@@ -353,6 +358,16 @@ def evaluate_stable_trimul_support(
                 f"mask shape {mask.shape} cannot broadcast to {z.shape[:-1]}",
             )
 
+    if sequence <= STABLE_TRIMUL_STOCK_FALLBACK_THRESHOLD:
+        return _rejected(
+            "sequence_stock_fallback",
+            (
+                f"N={sequence} is at or below the fixed stock PyTorch fallback "
+                f"threshold {STABLE_TRIMUL_STOCK_FALLBACK_THRESHOLD}; "
+                "StableFold TriMul AOT starts at N=101"
+            ),
+        )
+
     return _accepted(batch, sequence, channels)
 
 
@@ -474,6 +489,7 @@ __all__ = [
     "MAX_GRID_X",
     "MAX_GRID_YZ",
     "NamedTensorMetadata",
+    "STABLE_TRIMUL_STOCK_FALLBACK_THRESHOLD",
     "SUPPORTED_CHANNELS",
     "SUPPORTED_MASK_DTYPES",
     "StableTrimulSupportMetadata",

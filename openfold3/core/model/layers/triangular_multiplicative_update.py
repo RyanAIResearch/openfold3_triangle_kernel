@@ -1459,6 +1459,8 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
             stable_selected, stable_output = _route_stable_trimul(self, z, mask)
             if stable_selected:
                 return stable_output
+            # A StableFold request owns this TriMul site. Unsupported metadata
+            # falls back specifically to stock PyTorch, never another backend.
             use_cueq_triangle_kernels = False
             use_triton_triangle_kernels = False
 
