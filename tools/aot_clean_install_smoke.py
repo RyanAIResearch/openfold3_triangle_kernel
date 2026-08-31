@@ -374,9 +374,9 @@ def main() -> None:
     for arm in ("two_pass", "sr_r"):
         arm_receipts[arm] = run_arm(arm)
 
-    def run_trimul(outgoing: bool) -> dict[str, dict[str, str]]:
+    def run_trimul(outgoing: bool) -> dict[str, object]:
         torch.manual_seed(20260830 + int(outgoing))
-        sequence = 17
+        sequence = 101
         module = InstalledTriMul(outgoing)
         named_parameters = (
             ("w_ap", module.linear_a_p.weight),
@@ -451,6 +451,7 @@ def main() -> None:
             )
         assert_no_jit_cache("TriMul eager and aot_eager")
         return {
+            "sequence": sequence,
             "eager": {
                 name: raw_sha256(value) for name, value in eager.items()
             },
@@ -459,10 +460,129 @@ def main() -> None:
             },
         }
 
+    def run_short_sequence_stock() -> dict[str, object]:
+        from openfold3.core.kernels.cuda.stablefold_trimul_support import (
+            check_stable_trimul_support,
+        )
+        from openfold3.core.model.layers import (
+            triangular_multiplicative_update as model_module,
+        )
+        from openfold3.core.model.layers.triangular_multiplicative_update import (
+            TriangleMultiplicationOutgoing,
+        )
+
+        torch.manual_seed(20260901)
+        sequence = 17
+        module = TriangleMultiplicationOutgoing(channels, channels).to(device).train()
+        with torch.no_grad():
+            for name, parameter in module.named_parameters():
+                if "layer_norm" in name and name.endswith("weight"):
+                    parameter.normal_(mean=1.0, std=0.05)
+                else:
+                    parameter.normal_(mean=0.0, std=0.02)
+        named_parameters = tuple(module.named_parameters())
+        z_value = torch.randn(
+            1,
+            sequence,
+            sequence,
+            channels,
+            device=device,
+            dtype=torch.bfloat16,
+        )
+        mask = torch.ones(1, sequence, sequence, device=device, dtype=torch.float32)
+        d_output = torch.randn_like(z_value)
+
+        def execute(use_stable: bool) -> dict[str, torch.Tensor]:
+            z = z_value.detach().clone().requires_grad_(True)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                output = module(
+                    z,
+                    mask=mask,
+                    inplace_safe=False,
+                    use_cueq_triangle_kernels=use_stable,
+                    use_triton_triangle_kernels=use_stable,
+                    use_stable_triangle_multiplicative=use_stable,
+                )
+            gradients = torch.autograd.grad(
+                output,
+                (z, *(parameter for _, parameter in named_parameters)),
+                d_output,
+            )
+            named = {"output": output, "d_z": gradients[0]}
+            named.update(
+                {
+                    f"d_{name}": gradient
+                    for (name, _), gradient in zip(
+                        named_parameters, gradients[1:], strict=True
+                    )
+                }
+            )
+            return named
+
+        stock = execute(False)
+        support = check_stable_trimul_support(module, z_value, mask)
+        original_fallback_logged = set(
+            model_module._STABLEFOLD_TRIMUL_FALLBACK_LOGGED
+        )
+        if support or support.code != "sequence_stock_fallback":
+            raise RuntimeError(
+                "N=17 must be metadata-unsupported by the StableFold AOT route"
+            )
+
+        counts = {"runner": 0, "get_ext": 0, "cueq": 0}
+        original_runner = stable._run_supported_stable_trimul
+        original_get_ext = stable._get_ext
+        original_cueq = model_module._cueq_triangle_mult
+        original_triton_available = model_module.TRITON_AVAILABLE
+
+        def forbidden(name: str):
+            def wrapped(*args, **kwargs):
+                counts[name] += 1
+                raise RuntimeError(f"N=17 stock selector entered {name}")
+
+            return wrapped
+
+        stable._run_supported_stable_trimul = forbidden("runner")
+        stable._get_ext = forbidden("get_ext")
+        model_module._cueq_triangle_mult = forbidden("cueq")
+        model_module.TRITON_AVAILABLE = False
+        try:
+            fallback = execute(True)
+        finally:
+            stable._run_supported_stable_trimul = original_runner
+            stable._get_ext = original_get_ext
+            model_module._cueq_triangle_mult = original_cueq
+            model_module.TRITON_AVAILABLE = original_triton_available
+            model_module._STABLEFOLD_TRIMUL_FALLBACK_LOGGED.clear()
+            model_module._STABLEFOLD_TRIMUL_FALLBACK_LOGGED.update(
+                original_fallback_logged
+            )
+
+        if any(counts.values()):
+            raise RuntimeError(f"N=17 did not remain on stock PyTorch: {counts}")
+        mismatched = [
+            name
+            for name, value in fallback.items()
+            if not torch.equal(value, stock[name])
+        ]
+        if mismatched:
+            raise RuntimeError(
+                "N=17 StableFold selector differs from stock PyTorch: "
+                + ", ".join(mismatched)
+            )
+        assert_no_jit_cache("TriMul N=17 stock selector")
+        return {
+            "sequence": sequence,
+            "support_code": support.code,
+            "route_counts": counts,
+            "fields": {name: raw_sha256(value) for name, value in fallback.items()},
+        }
+
     trimul_receipts = {
         "outgoing": run_trimul(True),
         "incoming": run_trimul(False),
     }
+    short_sequence_stock_receipt = run_short_sequence_stock()
 
     assert_no_jit_cache("final")
     print(
@@ -476,6 +596,7 @@ def main() -> None:
                 "binaries": [str(path) for path in binary_paths],
                 "arms": arm_receipts,
                 "trimul": trimul_receipts,
+                "trimul_short_sequence_stock": short_sequence_stock_receipt,
                 "trimul_custom_ops": {
                     "forward_schema": forward_schema,
                     "backward_schema": backward_schema,
