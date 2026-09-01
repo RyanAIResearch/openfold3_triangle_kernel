@@ -26,7 +26,7 @@ export PATH="$HOME/.pixi/bin:$PATH"
 # Node 0 only; /mnt/shared must be mounted on every node.
 export OF3_SRC=/mnt/shared/openfold3/src
 mkdir -p /mnt/shared/openfold3
-git clone --branch v0.4.3.post1 --single-branch \
+git clone --branch v0.4.3.post2 --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git "$OF3_SRC"
 cd "$OF3_SRC"
 git rev-parse HEAD
@@ -50,9 +50,9 @@ unset PYTHONPATH PYTHONHOME LD_PRELOAD
 pixi install --locked -e openfold3-h100
 pixi run --locked -e openfold3-h100 setup-stablefold-h100
 
-# Every host; --as-is prevents Pixi from modifying the shared prefix.
-pixi run --as-is -e openfold3-h100 doctor-h100
-pixi run --as-is -e openfold3-h100 verify-aot
+# Every host.
+pixi run -e openfold3-h100 doctor-h100
+pixi run -e openfold3-h100 verify-aot
 ```
 
 ## 3. Run a one-step StableFold smoke test
@@ -70,11 +70,11 @@ mkdir -p "$SUBSET_ROOT" "$OF3_WORK/configs" "$OF3_WORK/outputs/smoke"
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run --as-is -e openfold3-h100 generate-pdb-subset -- \
+pixi run -e openfold3-h100 generate-pdb-subset -- \
   --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --runner-yaml "$SUBSET_ROOT/train_pdb_subset.yaml"
-pixi run --as-is -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-h100 python - <<'PY'
 import json
 import os
 from pathlib import Path
@@ -88,18 +88,18 @@ path.write_text(json.dumps({
 }))
 print(path)
 PY
-pixi run --as-is -e openfold3-h100 download-pdb-subset -- \
+pixi run -e openfold3-h100 download-pdb-subset -- \
   --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --val-size 0
-pixi run --as-is -e openfold3-h100 download-pdb-subset -- \
+pixi run -e openfold3-h100 download-pdb-subset -- \
   --verify --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --val-size 0
 
 export SMOKE_BASE="$OF3_WORK/configs/smoke.base.yml"
 export SMOKE_YAML="$OF3_WORK/configs/smoke.stablefold.yml"
-pixi run --as-is -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-h100 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -130,12 +130,12 @@ dst.write_text(yaml.safe_dump(cfg, sort_keys=False))
 print(dst)
 PY
 
-pixi run --as-is -e openfold3-h100 select-training-backend \
+pixi run -e openfold3-h100 select-training-backend \
   "$SMOKE_BASE" --backend stablefold --output "$SMOKE_YAML"
 export OF3_RUN_CWD="$OF3_WORK"
 export CUDA_VISIBLE_DEVICES=0
 set -o pipefail
-pixi run --as-is -e openfold3-h100 train-single-gpu \
+pixi run -e openfold3-h100 train-single-gpu \
   train --runner-yaml "$SMOKE_YAML" --seed 42 \
   2>&1 | tee "$OF3_WORK/outputs/smoke/train.log"
 ```
@@ -156,17 +156,17 @@ mkdir -p "$OF3_WORK/configs" "$OF3_WORK/outputs" "$OF3_WORK/logs"
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run --as-is -e openfold3-h100 generate-pdb-subset -- \
+pixi run -e openfold3-h100 generate-pdb-subset -- \
   --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --runner-yaml "$SUBSET_ROOT/train_pdb_subset_4096.yaml" \
   --train-size 4096 --seed 42
-pixi run --as-is -e openfold3-h100 download-pdb-subset -- \
+pixi run -e openfold3-h100 download-pdb-subset -- \
   --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --train-size 4096 --val-size 0 --workers 24 \
   2>&1 | tee "$OF3_WORK/logs/download_subset_4096.log"
-pixi run --as-is -e openfold3-h100 download-pdb-subset -- \
+pixi run -e openfold3-h100 download-pdb-subset -- \
   --verify --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --train-size 4096 --val-size 0 \
@@ -174,7 +174,7 @@ pixi run --as-is -e openfold3-h100 download-pdb-subset -- \
 
 export TRAIN_BASE="$OF3_WORK/configs/train_4096_crop384.base.yml"
 export TRAIN_BACKEND="$OF3_WORK/configs/train_4096_crop384.${BACKEND}.yml"
-pixi run --as-is -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-h100 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -204,7 +204,7 @@ dst.write_text(yaml.safe_dump(cfg, sort_keys=False))
 print(dst)
 PY
 
-pixi run --as-is -e openfold3-h100 select-training-backend \
+pixi run -e openfold3-h100 select-training-backend \
   "$TRAIN_BASE" --backend "$BACKEND" --output "$TRAIN_BACKEND"
 ```
 
@@ -228,7 +228,7 @@ mkdir -p "$OUTPUT_DIR"
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run --as-is -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-h100 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -241,7 +241,7 @@ Path(os.environ["RUNNER_YAML"]).write_text(yaml.safe_dump(cfg, sort_keys=False))
 PY
 
 set -o pipefail
-pixi run --as-is -e openfold3-h100 train-single-gpu \
+pixi run -e openfold3-h100 train-single-gpu \
   train --runner-yaml "$RUNNER_YAML" --seed 42 \
   2>&1 | tee "$OUTPUT_DIR/train.log"
 ```
@@ -266,7 +266,7 @@ mkdir -p "$OUTPUT_DIR"
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run --as-is -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-h100 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -279,7 +279,7 @@ Path(os.environ["RUNNER_YAML"]).write_text(yaml.safe_dump(cfg, sort_keys=False))
 PY
 
 set -o pipefail
-pixi run --as-is -e openfold3-h100 train-single-node \
+pixi run -e openfold3-h100 train-single-node \
   train --runner-yaml "$RUNNER_YAML" --seed 42 \
   2>&1 | tee "$OUTPUT_DIR/train.log"
 ```
@@ -302,7 +302,7 @@ export OUTPUT_DIR="$OF3_WORK/outputs/two_node_8gpu.${BACKEND}"
 mkdir -p "$OUTPUT_DIR"
 cd "$OF3_SRC"
 
-pixi run --as-is -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-h100 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -332,7 +332,7 @@ cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 set -o pipefail
-pixi run --as-is -e openfold3-h100 train-multinode \
+pixi run -e openfold3-h100 train-multinode \
   --nnodes="$NNODES" --nproc-per-node="$GPUS_PER_NODE" \
   --node-rank="$NODE_RANK" --master-addr="$MASTER_ADDR" \
   --master-port="$MASTER_PORT" --module openfold3.run_openfold \
@@ -351,7 +351,7 @@ export PATH="$HOME/.pixi/bin:$PATH"
 export OF3_SRC=/mnt/shared/openfold3/src
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
-pixi run --as-is -e openfold3-h100 verify-aot
+pixi run -e openfold3-h100 verify-aot
 
 grep -RIE 'Traceback|CUDA error|out of memory|OOM|NCCL.*timeout' \
   /mnt/shared/openfold3/outputs --include='*.log' || true

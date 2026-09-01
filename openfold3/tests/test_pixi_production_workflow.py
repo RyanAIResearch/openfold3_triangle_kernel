@@ -64,6 +64,16 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         assert "production_training" not in " ".join(commands[name])
 
 
+def test_h100_user_docs_use_normal_pixi_run():
+    for relative in (
+        "README.md",
+        "docs/source/bare_metal_distributed_quickstart.md",
+    ):
+        text = (REPOSITORY / relative).read_text()
+        assert "--as-is" not in text
+        assert "pixi run -e openfold3-h100" in text
+
+
 def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():
     wrapper = (REPOSITORY / "tools/run_official_training.sh").read_text()
     assert "tools.manage_attested_sm90_wheel verify-prebuilt" in wrapper

@@ -56,7 +56,7 @@ Clone the fixed H100 runtime tag into a clean checkout:
 
 ```bash
 mkdir -p /mnt/shared/openfold3
-git clone --branch v0.4.3.post1 --single-branch \
+git clone --branch v0.4.3.post2 --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git \
   /mnt/shared/openfold3/src
 cd /mnt/shared/openfold3/src
@@ -72,8 +72,8 @@ curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
 pixi install --locked -e openfold3-h100
 pixi run --locked -e openfold3-h100 setup-stablefold-h100
-pixi run --as-is -e openfold3-h100 doctor-h100
-pixi run --as-is -e openfold3-h100 verify-aot
+pixi run -e openfold3-h100 doctor-h100
+pixi run -e openfold3-h100 verify-aot
 ```
 
 The production Pixi environment deliberately contains no editable OpenFold3
