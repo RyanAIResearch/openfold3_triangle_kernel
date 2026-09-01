@@ -46,7 +46,8 @@ export OF3_SRC=/mnt/shared/openfold3/src
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-# Node 0 only.
+# Node 0 only when /mnt/shared/openfold3/src is the same shared filesystem on every host.
+# Pixi does not synchronize node-local prefixes; for local storage, run both commands on every host.
 pixi install -e openfold3-h100
 pixi run -e openfold3-h100 setup-stablefold-h100
 
