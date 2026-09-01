@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -76,7 +75,7 @@ def prepare_data(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def doctor_h100(_: argparse.Namespace) -> dict[str, Any]:
-    """Verify the exact local H100 build/runtime prerequisites."""
+    """Verify the exact local H100 runtime prerequisites."""
 
     import pytorch_lightning as pl
     import torch
@@ -118,14 +117,6 @@ def doctor_h100(_: argparse.Namespace) -> dict[str, Any]:
     if not devices:
         raise WorkflowError("the H100 Pixi environment exposes no CUDA devices")
 
-    nvcc = shutil.which("nvcc")
-    if nvcc is None:
-        raise WorkflowError("the H100 Pixi environment has no nvcc")
-    version = subprocess.run(
-        (nvcc, "--version"), check=True, capture_output=True, text=True
-    ).stdout
-    if "release 12.9" not in version:
-        raise WorkflowError("the H100 Pixi environment does not provide nvcc 12.9")
     return {
         "status": "PASS",
         "commit": source_commit(),
@@ -133,7 +124,6 @@ def doctor_h100(_: argparse.Namespace) -> dict[str, Any]:
         "torch": torch.__version__,
         "torch_cuda": torch.version.cuda,
         "lightning": pl.__version__,
-        "nvcc": nvcc,
         "devices": devices,
     }
 

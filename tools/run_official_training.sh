@@ -44,11 +44,9 @@ case "$run_cwd/" in
     ;;
 esac
 
-artifact_dir=${OF3_ARTIFACT_DIR:-/mnt/shared/openfold3/artifacts}
 (
   cd "$source_root"
-  "$prefix/bin/python" -m tools.manage_attested_sm90_wheel verify \
-    --artifact-dir "$artifact_dir"
+  "$prefix/bin/python" -m tools.manage_attested_sm90_wheel verify-prebuilt
 )
 
 cd "$run_cwd"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, validate, install, and verify the attested StableFold H100 wheel."""
+"""Install, validate, or maintain the attested StableFold H100 wheel."""
 
 from __future__ import annotations
 
@@ -20,6 +20,27 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_DIR = ROOT / "dist"
+PREBUILT_COMMIT = "df1957e623d1283ba2a572cb730a6b130fbf1b0c"
+PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "stablefold-h100-df1957e6"
+PREBUILT_FILE_SHA256 = {
+    "RECEIPT.json": (
+        "40a1bf6ed96cbfccca99abdd84620c6912495cd3932071136d72c8c3c18e2b94"
+    ),
+    "SHA256SUMS": ("30c5a53897367506d3195e5d3e6bbb57de6a960573781ee209613834515c63e5"),
+    "aot_clean_install_smoke.json": (
+        "ec108f2c6fa944b88a99e0db3463f969baf4daac2253d0d7e6e6f96642d4cc2c"
+    ),
+    (
+        "openfold3-0.4.3.dev5503+gdf1957e62-cp314-cp314-linux_x86_64.whl"
+    ): "85fc7b4843727cd13b7b88d9a5d3e6a7a86f309ce290bb22ee2f102963377ac5",
+    (
+        "openfold3-0.4.3.dev5503+gdf1957e62-cp314-cp314-"
+        "linux_x86_64.whl.attestation.json"
+    ): "44f1fe9dd3f2c73e23acc7f93cf4fc44d385d1bf57a18f2cbeb2b597d6d19644",
+    (
+        "openfold3-0.4.3.dev5503+gdf1957e62-cp314-cp314-linux_x86_64.whl.sha256"
+    ): "03671dd51c5de12414a12b65817042871ec5d35fb2b2c1d7e6005d6e832d7f9f",
+}
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 MODULE_KEYS = (
     "stablefold_forward",
@@ -36,7 +57,7 @@ class ArtifactError(RuntimeError):
 
 @dataclass(frozen=True)
 class ArtifactBundle:
-    """The exact four files emitted by the canonical AOT builder."""
+    """The exact four runtime files emitted by the canonical AOT builder."""
 
     wheel: Path
     checksum: Path
@@ -133,6 +154,7 @@ def discover_bundle(
     artifact_dir: Path = DEFAULT_ARTIFACT_DIR,
     *,
     expected_commit: str | None = None,
+    verify_checkout_sources: bool = True,
 ) -> ArtifactBundle:
     """Discover and fail-closed validate one canonical artifact bundle."""
 
@@ -218,10 +240,11 @@ def discover_bundle(
     }:
         raise ArtifactError("attestation extension digests do not match")
 
-    for relative, expected_sha256 in manifest.get("sources", {}).items():
-        source = ROOT / relative
-        if not source.is_file() or sha256_file(source) != expected_sha256:
-            raise ArtifactError(f"packaged source receipt mismatch: {relative}")
+    if verify_checkout_sources:
+        for relative, expected_sha256 in manifest.get("sources", {}).items():
+            source = ROOT / relative
+            if not source.is_file() or sha256_file(source) != expected_sha256:
+                raise ArtifactError(f"packaged source receipt mismatch: {relative}")
 
     bundle = ArtifactBundle(
         wheel=wheel,
@@ -245,6 +268,45 @@ def discover_bundle(
     ):
         raise ArtifactError("clean-install smoke names a different wheel RECORD")
     return bundle
+
+
+def prebuilt_bundle() -> ArtifactBundle:
+    """Return the repository-pinned, qualified H100 runtime bundle."""
+
+    if not PREBUILT_ARTIFACT_DIR.is_dir():
+        raise ArtifactError(
+            f"prebuilt StableFold bundle is missing: {PREBUILT_ARTIFACT_DIR}"
+        )
+    actual_names = {
+        path.name for path in PREBUILT_ARTIFACT_DIR.iterdir() if path.is_file()
+    }
+    if actual_names != set(PREBUILT_FILE_SHA256):
+        raise ArtifactError(
+            "prebuilt StableFold bundle has missing or unexpected files: "
+            f"{sorted(actual_names)}"
+        )
+    for name, expected_sha256 in PREBUILT_FILE_SHA256.items():
+        path = PREBUILT_ARTIFACT_DIR / name
+        if sha256_file(path) != expected_sha256:
+            raise ArtifactError(f"prebuilt StableFold artifact digest mismatch: {name}")
+
+    receipt = _read_json(PREBUILT_ARTIFACT_DIR / "RECEIPT.json")
+    if receipt.get("schema_version") != 1:
+        raise ArtifactError("unsupported prebuilt StableFold receipt schema")
+    if receipt.get("status") != "PASS_SINGLE_H100_PRODUCTION_CANDIDATE":
+        raise ArtifactError("prebuilt StableFold artifact is not qualified")
+    if receipt.get("git_commit") != PREBUILT_COMMIT:
+        raise ArtifactError("prebuilt StableFold receipt names another commit")
+    wheel_receipt = receipt.get("wheel", {})
+    if wheel_receipt.get("name") not in PREBUILT_FILE_SHA256 or wheel_receipt.get(
+        "sha256"
+    ) != PREBUILT_FILE_SHA256.get(wheel_receipt.get("name")):
+        raise ArtifactError("prebuilt StableFold receipt names another wheel")
+    return discover_bundle(
+        PREBUILT_ARTIFACT_DIR,
+        expected_commit=PREBUILT_COMMIT,
+        verify_checkout_sources=False,
+    )
 
 
 def _expected_aot_identity(bundle: ArtifactBundle) -> dict[str, Any]:
@@ -465,34 +527,53 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action",
-        choices=("build-install", "install", "ensure", "verify", "check"),
+        choices=(
+            "install-prebuilt",
+            "verify-prebuilt",
+            "build-install",
+            "install",
+            "ensure",
+            "verify",
+            "check",
+        ),
     )
     parser.add_argument(
         "--artifact-dir",
         type=Path,
-        default=DEFAULT_ARTIFACT_DIR,
+        default=None,
     )
     parser.add_argument("--copy-to", type=Path)
     args = parser.parse_args()
 
-    expected_commit = source_commit()
+    checkout_commit = source_commit()
+    is_prebuilt = args.action in ("install-prebuilt", "verify-prebuilt")
+    expected_commit = PREBUILT_COMMIT if is_prebuilt else checkout_commit
     if args.action == "build-install":
         build_bundle()
-    bundle = discover_bundle(args.artifact_dir, expected_commit=expected_commit)
+    if is_prebuilt:
+        if args.artifact_dir is not None or args.copy_to is not None:
+            raise ArtifactError(
+                "prebuilt actions use only the repository-pinned artifact bundle"
+            )
+        bundle = prebuilt_bundle()
+    else:
+        artifact_dir = args.artifact_dir or DEFAULT_ARTIFACT_DIR
+        bundle = discover_bundle(artifact_dir, expected_commit=expected_commit)
     if args.copy_to is not None:
         bundle = _copy_bundle(bundle, args.copy_to, expected_commit)
 
     result: dict[str, Any] = {
         "action": args.action,
-        "commit": expected_commit,
+        "checkout_commit": checkout_commit,
+        "artifact_commit": expected_commit,
         "wheel": str(bundle.wheel),
         "wheel_sha256": bundle.wheel_sha256,
     }
-    if args.action in ("build-install", "install"):
+    if args.action in ("install-prebuilt", "build-install", "install"):
         result["runtime"] = install_bundle(bundle, expected_commit)
     elif args.action == "ensure":
         result["runtime"] = ensure_bundle(bundle, expected_commit)
-    elif args.action == "verify":
+    elif args.action in ("verify-prebuilt", "verify"):
         result["runtime"] = verify_installed(bundle, expected_commit)
     print(json.dumps(result, indent=2, sort_keys=True))
 

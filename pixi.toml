@@ -20,7 +20,7 @@
 #                     On Apple Silicon the same conda-forge pytorch always ships Metal (MPS)
 #                     support, so this environment is not CPU-only there.
 #   - openfold3-cuda12 and openfold-cuda13: environments with cuda, deepspeed and cuequivariance
-#   - openfold3-h100: pinned, non-editable StableFold H100 build and training workflow
+#   - openfold3-h100: pinned, non-editable StableFold H100 runtime and training workflow
 #   - openfold3-cuda12-pypi and openfold-cuda13-pypi: environments with python and cuda from conda,
 #                                                     everything else from pypi
 #                                                     keeping the environments as sane and consistent as possible
@@ -456,29 +456,28 @@ prepare-training-data.cmd = [
     "tools.production_training",
     "prepare-training-data",
 ]
-build-install-aot.cmd = [
+generate-pdb-subset.cmd = [
     "python",
-    "-m",
-    "tools.manage_attested_sm90_wheel",
-    "build-install",
-    "--copy-to",
-    "/mnt/shared/openfold3/artifacts",
+    "-u",
+    "scripts/datasets/generate_subset_cache.py",
 ]
-install-aot.cmd = [
+download-pdb-subset.cmd = [
+    "python",
+    "-u",
+    "scripts/datasets/download_subset.py",
+]
+setup-pdb-subset.depends-on = ["generate-pdb-subset", "download-pdb-subset"]
+setup-stablefold-h100.cmd = [
     "python",
     "-m",
     "tools.manage_attested_sm90_wheel",
-    "install",
-    "--artifact-dir",
-    "/mnt/shared/openfold3/artifacts",
+    "install-prebuilt",
 ]
 verify-aot.cmd = [
     "python",
     "-m",
     "tools.manage_attested_sm90_wheel",
-    "verify",
-    "--artifact-dir",
-    "/mnt/shared/openfold3/artifacts",
+    "verify-prebuilt",
 ]
 select-training-backend.cmd = ["python", "-m", "tools.select_training_backend"]
 train-single-gpu.cmd = [

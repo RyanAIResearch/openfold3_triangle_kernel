@@ -1,3 +1,4 @@
+import hashlib
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,27 +42,31 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
     tasks = _manifest()["feature"]["stablefold-h100"]["tasks"]
     assert set(tasks) == {
         "doctor-h100",
+        "download-pdb-subset",
+        "generate-pdb-subset",
         "prepare-training-data",
-        "build-install-aot",
-        "install-aot",
+        "setup-pdb-subset",
+        "setup-stablefold-h100",
         "verify-aot",
         "select-training-backend",
         "train-single-gpu",
         "train-single-node",
         "train-multinode",
     }
-    commands = {name: value["cmd"] for name, value in tasks.items()}
+    commands = {name: value["cmd"] for name, value in tasks.items() if "cmd" in value}
     assert commands["train-single-gpu"][-1] == "run_openfold"
     assert commands["train-single-node"][-1] == "run_openfold"
     assert commands["train-multinode"][-1] == "torchrun"
-    assert commands["verify-aot"][3] == "verify"
+    assert commands["setup-stablefold-h100"][3] == "install-prebuilt"
+    assert commands["verify-aot"][3] == "verify-prebuilt"
+    assert not any("build" in " ".join(command) for command in commands.values())
     for name in ("train-single-gpu", "train-single-node", "train-multinode"):
         assert "production_training" not in " ".join(commands[name])
 
 
 def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():
     wrapper = (REPOSITORY / "tools/run_official_training.sh").read_text()
-    assert "tools.manage_attested_sm90_wheel verify" in wrapper
+    assert "tools.manage_attested_sm90_wheel verify-prebuilt" in wrapper
     assert "PYTHONPATH PYTHONHOME LD_PRELOAD" in wrapper
     assert '"$prefix/bin/"*' in wrapper
     assert 'exec "$launcher_path" "$@"' in wrapper
@@ -74,6 +79,48 @@ def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():
         "max-restarts",
     ):
         assert forbidden not in wrapper
+
+
+def test_prebuilt_bundle_is_checked_in_and_pinned_by_digest():
+    artifact_dir = artifact_manager.PREBUILT_ARTIFACT_DIR
+    assert artifact_dir.is_dir()
+    assert {path.name for path in artifact_dir.iterdir() if path.is_file()} == set(
+        artifact_manager.PREBUILT_FILE_SHA256
+    )
+    for name, expected in artifact_manager.PREBUILT_FILE_SHA256.items():
+        digest = hashlib.sha256((artifact_dir / name).read_bytes()).hexdigest()
+        assert digest == expected
+
+    bundle = artifact_manager.prebuilt_bundle()
+
+    assert bundle.manifest["git"] == {
+        "commit": artifact_manager.PREBUILT_COMMIT,
+        "dirty": False,
+    }
+    assert (
+        bundle.wheel_sha256 == artifact_manager.PREBUILT_FILE_SHA256[bundle.wheel.name]
+    )
+
+
+def test_prebuilt_is_the_only_path_allowed_to_decouple_checkout_docs():
+    with pytest.raises(ArtifactError, match="packaged source receipt mismatch"):
+        discover_bundle(
+            artifact_manager.PREBUILT_ARTIFACT_DIR,
+            expected_commit=artifact_manager.PREBUILT_COMMIT,
+        )
+
+    assert artifact_manager.prebuilt_bundle().wheel.is_file()
+
+
+def test_prebuilt_bundle_rejects_a_pinned_file_digest_change(monkeypatch):
+    monkeypatch.setitem(
+        artifact_manager.PREBUILT_FILE_SHA256,
+        "RECEIPT.json",
+        "0" * 64,
+    )
+
+    with pytest.raises(ArtifactError, match="digest mismatch: RECEIPT.json"):
+        artifact_manager.prebuilt_bundle()
 
 
 def test_prepare_data_does_not_materialize_or_modify_a_runner_yaml(tmp_path):

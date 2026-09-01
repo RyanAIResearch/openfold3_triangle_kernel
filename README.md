@@ -25,7 +25,7 @@ backward without changing the public BF16 output.
 
 The wheel checksum and attestation are reproducibility and integrity records,
 not an external signature or Sigstore provenance chain; this preview assumes
-the GitHub repository, build host, and shared artifact storage are trusted.
+the Git repository and the qualified build host are trusted.
 
 ## Validated result
 
@@ -43,7 +43,7 @@ models, hardware, software ABIs, or shapes.
 - NVIDIA H100 80 GB, compute capability 9.0 (`sm_90a`)
 - CPython 3.14
 - PyTorch 2.10.0 built for CUDA 12.9
-- CUDA toolkit/NVCC 12.9 only when building the five AOT extensions from source
+- NVIDIA driver compatible with the locked CUDA 12.9 runtime; users do not need NVCC
 - BF16 Q/K/V; BF16 or FP32 pair bias; FP16, BF16, or FP32 additive mask
 
 The prebuilt Triangle Attention extensions contain Hopper-specific SASS and no
@@ -52,11 +52,11 @@ binary anyway.
 
 ## Pixi production workflow
 
-Clone the maintained `main` branch into a clean checkout:
+Clone the fixed H100 runtime tag into a clean checkout:
 
 ```bash
 mkdir -p /mnt/shared/openfold3
-git clone --branch main --single-branch \
+git clone --branch v0.4.3.post1 --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git \
   /mnt/shared/openfold3/src
 cd /mnt/shared/openfold3/src
@@ -64,48 +64,37 @@ git rev-parse HEAD
 test -z "$(git status --porcelain=v1)"
 ```
 
-Create the locked, non-editable H100 environment and let the checked-in Pixi
-tasks prepare the published PDB portion and build all five AOT extensions;
-provision the other datasets named by AQLab's official recipe before training:
+Create the locked, non-editable H100 environment and install the qualified
+wheel already stored in the repository; no kernel build command is required:
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
 pixi install --locked -e openfold3-h100
-pixi run --locked -e openfold3-h100 prepare-training-data
-pixi run --locked -e openfold3-h100 doctor-h100
-pixi run --locked -e openfold3-h100 build-install-aot
+pixi run --locked -e openfold3-h100 setup-stablefold-h100
+pixi run --as-is -e openfold3-h100 doctor-h100
 pixi run --as-is -e openfold3-h100 verify-aot
 ```
 
-Copy and explicitly configure AQLab's official runner YAML, choose one backend,
-and start with one H100:
-
-```bash
-export BACKEND=stablefold  # aqlab | cueq | stablefold | deepspeed-evo
-export OF3_RUN_CWD=/mnt/shared/openfold3/run
-mkdir -p "$OF3_RUN_CWD"
-cp examples/training_yamls/initial_training.yml "$OF3_RUN_CWD/base.yml"
-${EDITOR:-vi} "$OF3_RUN_CWD/base.yml"
-pixi run --as-is -e openfold3-h100 select-training-backend \
-  "$OF3_RUN_CWD/base.yml" --backend "$BACKEND" \
-  --output "$OF3_RUN_CWD/train.${BACKEND}.yml"
-pixi run --as-is -e openfold3-h100 train-single-gpu \
-  train --runner-yaml "$OF3_RUN_CWD/train.${BACKEND}.yml" --seed 42
-```
-
 The production Pixi environment deliberately contains no editable OpenFold3
-dependency. The build task emits and installs one attested wheel, while every
-training task checks that the installed package, Git commit, ABI, embedded
-manifest, and five extension hashes still match before launching outside the
-source checkout. The task then directly executes AQLab `run_openfold` or
-standard `torchrun`; it does not replace any training, strategy, checkpoint,
-logging, or loss behavior. StableFold runtime is compiler-free and keeps JIT
-disabled, while the selector changes only the training kernel-route flags.
+dependency. `setup-stablefold-h100` verifies and installs the repository-pinned
+wheel without compiling any StableFold source, while every training task checks
+that the installed package, artifact commit, ABI, embedded manifest, wheel
+RECORD, and five extension hashes still match before launching outside the
+source checkout. Dependencies may probe the Pixi-provided compiler ABI and
+CUDA version, but the task does not invoke a StableFold kernel build, CMake,
+Ninja, or JIT. It then directly executes AQLab `run_openfold` or standard
+`torchrun` without replacing training, strategy, checkpoint, logging, or loss
+behavior, and the selector changes only the training kernel-route flags.
 
-For an end-to-end bare-metal path covering clone, data, compilation, backend
-selection, single-GPU training, single-node DDP, and multi-node launch—with
-three plain-English sentences per step—see
+The integration checkout and the binary artifact intentionally have separate
+identities: the fixed runtime tag contains the installer and guide, while the
+wheel records the qualified kernel source commit `df1957e623d1283ba2a572cb730a6b130fbf1b0c`.
+Training runs from that installed wheel outside the source checkout.
+
+For a copy-and-run bare-metal path covering clone, data, prebuilt installation,
+backend selection, single-GPU training, single-node DDP, and multi-node launch,
+see the
 [Bare-metal training quickstart](docs/source/bare_metal_distributed_quickstart.md).
 
 ## Enable StableFold manually

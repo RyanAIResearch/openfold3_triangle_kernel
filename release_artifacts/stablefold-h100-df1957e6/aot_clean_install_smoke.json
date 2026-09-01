@@ -1,0 +1,303 @@
+{
+  "aot_identity": {
+    "abi": {
+      "python_soabi": "cpython-314-x86_64-linux-gnu",
+      "python_version": "3.14.7",
+      "torch_cuda_version": "12.9",
+      "torch_cxx11_abi": true,
+      "torch_version": "2.10.0"
+    },
+    "extensions": {
+      "stablefold_delta": {
+        "filename": "_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
+        "sha256": "cc0e1bef5e9bec155149037d9a95e649b1cade01cbafec75723b6ea98a16a415",
+        "symbols": [
+          "stablefold_triangle_delta_out",
+          "stablefold_triangle_delta_shadow_out"
+        ]
+      },
+      "stablefold_dkdv": {
+        "filename": "_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
+        "sha256": "c4d4425d8775ce70484fd26940732cd590cac6506a49534677633259cd70617a",
+        "symbols": [
+          "stablefold_triangle_dkdv_out",
+          "stablefold_triangle_dkdv_delta_true_out"
+        ]
+      },
+      "stablefold_dq_dbias": {
+        "filename": "_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
+        "sha256": "11d43db60e0313aff41a0135de417513552b4edc8e7b2039228d7dd15cf5b730",
+        "symbols": [
+          "stablefold_triangle_dq_dbias_out",
+          "stablefold_reduce_broadcast_dbias_out",
+          "stablefold_triangle_sr_backward_out"
+        ]
+      },
+      "stablefold_forward": {
+        "filename": "_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
+        "sha256": "f5c1c3f658782e43a4cf12900bd0ce4875cf78bb4cc08b4bf46c63c1564c456b",
+        "symbols": [
+          "stablefold_triangle_forward_out",
+          "stablefold_pack_qkv",
+          "stablefold_triangle_forward_shadow_out"
+        ]
+      },
+      "stablefold_trimul": {
+        "filename": "_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
+        "sha256": "b5838ca8bf007205c6a84fe4099734e0b0c66cf8e2c0e31a2a345819232cd57b",
+        "symbols": [
+          "trimul_in_fwd",
+          "trimul_out_fwd",
+          "trimul_gate_split_bwd",
+          "sig_mul_bwd_out",
+          "ln_bwd_dx",
+          "ln_bwd_dgb",
+          "transpose_ln_bwd",
+          "trimul_wgrad_fixed_fold"
+        ]
+      }
+    },
+    "git": {
+      "commit": "df1957e623d1283ba2a572cb730a6b130fbf1b0c",
+      "dirty": false
+    },
+    "manifest_sha256": "22d0e3c9601474ac360ba1e0d691105addb9e3fe67f9e3f6a5a9590fdea88c68",
+    "packaged_source_sha256": {
+      "openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md": "029c3eb0db9190718d101e778207f6b1ba896c9d5252b254ff7c0b845de24cf9",
+      "openfold3/core/kernels/cuda/_aot_runtime.py": "70983c8bb66d9ff26701365eee5ea4999732ef194d9bc40d1a676a9a04c7a473",
+      "openfold3/core/kernels/cuda/_ext/__init__.py": "94429df87bcc4294ba55e771e650b41fec40fa8a55c384271f4dc4c2cdb14818",
+      "openfold3/core/kernels/cuda/stablefold_triangle_attention.py": "37ca0c8f24bd10b12f2231563f16f23ce9c05c2f2a49a94fe0294af64455576a",
+      "openfold3/core/kernels/cuda/stablefold_triangle_delta.cu": "450430158a3977fdd54d7c6a7c31a6f504e0cb1efc367765001903175acd3c63",
+      "openfold3/core/kernels/cuda/stablefold_triangle_delta.py": "feda3c10bf8cc10db5f34eb26b384dac32ef4df6cd8c7b9eb08dbc52d66cc145",
+      "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.cu": "751ea17a0f898639accca70df2c4ffb753a322750fe14318372749668a35df3d",
+      "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.py": "9bea8154a0385c2434517abd5823833ccb3cf6d9bce10cc761099a9f376e35f9",
+      "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.cu": "269e9d2a017e0e53c52de5355f1f5ebdd07f1a7c7f41a0eab6985fa8924a6b2c",
+      "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.py": "2330622a2d5b3932e03d8525e2f6ef153944fa2c0e47cc9e712f43319770c73b",
+      "openfold3/core/kernels/cuda/stablefold_triangle_forward.cu": "fddb8404ea4a62932559701d9c18ac616044a5f2d1b692fc66cae904c859ff14",
+      "openfold3/core/kernels/cuda/stablefold_triangle_forward.py": "bfbdce2eda1ff1b42370ea52cdf823c8aeed69d87c8504c0a385491c5423b642",
+      "openfold3/core/kernels/cuda/stablefold_trimul.py": "221f7b14174831eadb2005838779a6542086f44193061571c6ec983f6ade9d5e",
+      "openfold3/core/kernels/cuda/stablefold_trimul_cuda.cu": "8962ca3513538070e5fb21259bd57a38a586641123aadfda40c62c44f9c9aa03",
+      "openfold3/core/kernels/cuda/stablefold_trimul_cuda.py": "69e971738e6ffe5a1ed689cd6c978076d84bb945fc905089ca19145a9687ce03"
+    },
+    "schema_version": 1,
+    "target": {
+      "cuda_arch": "sm_90a",
+      "ptx_embedded": false,
+      "torch_cuda_arch_list": "9.0a"
+    }
+  },
+  "arms": {
+    "sr_r": {
+      "dBias": "31c4bd3597c0f808f6e9c942d56f43c87cf64efca8f970e9011dc8582c0696dd",
+      "dK": "8b9d694d691891ef1d2c26801344b947ba13b4b1b94188b62c8b19b84ec98621",
+      "dQ": "111b6c605858283aae75aad6fc88d9aa6777a7bf4e661ef8269a49790a431371",
+      "dV": "ccf863a2c9a6a7bf7ded8ba2e631946d70e8c1f5936c846665b3537d6f16a4b3",
+      "output": "e8282c5dd434893f2285be2f65f44561db9895ed0a83cbdeb73631d3600963da"
+    },
+    "two_pass": {
+      "dBias": "e9a1558f501234824c4ceb918340bb84a5c3594293cd94886112550af04bb3fa",
+      "dK": "f5ac44c1815519cfef9a57c9575a3c8a00e93e2d11265663639530a4a67241f1",
+      "dQ": "8ed19832820685d7b06b002bbeb6760897f83b973961c8c92641f50d93ef3182",
+      "dV": "ccf863a2c9a6a7bf7ded8ba2e631946d70e8c1f5936c846665b3537d6f16a4b3",
+      "output": "e8282c5dd434893f2285be2f65f44561db9895ed0a83cbdeb73631d3600963da"
+    }
+  },
+  "binaries": [
+    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so"
+  ],
+  "compute_capability": [
+    9,
+    0
+  ],
+  "device": "NVIDIA H100 80GB HBM3",
+  "installed_distribution": {
+    "installed_package_tree_sha256": "ccf462557ed444358b68e01cd35a647e3f6e7b5c33d59127a48124a3b85cc6e9",
+    "name": "openfold3",
+    "runtime_from_verified_distribution": true,
+    "verified_package_files": 458,
+    "version": "0.4.3.dev5503+gdf1957e62"
+  },
+  "torch": "2.10.0",
+  "torch_cuda": "12.9",
+  "trimul": {
+    "incoming": {
+      "aot_eager": {
+        "dZ": "a76f30216a4d167eabb8ff8bac0970d98bd324e9ecb09d53170538061e1c95ce",
+        "db_in": "f10655ab30c3c0d4d3c4a6c5edb428f741517775e1b2292fe6f9226a3152f2dd",
+        "db_out": "65c27e5bbb2c70a6ae00746b1f2cc16c6d9274b45edf9c5eb2220daceef6ffa7",
+        "dg_in": "3d099796f85a3c24e94fd2eafe54f4bb7bacdbb933e468505f809571e293641a",
+        "dg_out": "2ca71efee53657aa00010be4842ca1ca39f55c874367e4caa62a4836cac4b528",
+        "dw_ag": "2cb7b01254e5631cc6b6f1b7ae766eefd6040bc81ea0c429d33c10a1920e320e",
+        "dw_ap": "e2bbc69159f350905db57ea3ffc1c8d0a99c3b8fb0380322226d1f4f57fffe92",
+        "dw_bg": "9f8881d4c475971550c115bb341203c3231de8dd7670f6102effdf86e3ff605d",
+        "dw_bp": "36f6cc7983f51b4c5cf67edb23d1cac6bec33b2eb8dc34b6b4cf276125ebbaa4",
+        "dw_g": "fc0d302cc7663b6f65b647a43cdce5e8071bda16d1710227e388c30b2eee1ee8",
+        "dw_z": "a2c7dab9cd2673094536a9e6a0b89f7f2f6587357bb8f7d4523d43eb5ffbc819",
+        "output": "b0305faa75946652293e14f902d9d487775d15eaaac6bc9deac44f56f7fa22d5"
+      },
+      "eager": {
+        "dZ": "a76f30216a4d167eabb8ff8bac0970d98bd324e9ecb09d53170538061e1c95ce",
+        "db_in": "f10655ab30c3c0d4d3c4a6c5edb428f741517775e1b2292fe6f9226a3152f2dd",
+        "db_out": "65c27e5bbb2c70a6ae00746b1f2cc16c6d9274b45edf9c5eb2220daceef6ffa7",
+        "dg_in": "3d099796f85a3c24e94fd2eafe54f4bb7bacdbb933e468505f809571e293641a",
+        "dg_out": "2ca71efee53657aa00010be4842ca1ca39f55c874367e4caa62a4836cac4b528",
+        "dw_ag": "2cb7b01254e5631cc6b6f1b7ae766eefd6040bc81ea0c429d33c10a1920e320e",
+        "dw_ap": "e2bbc69159f350905db57ea3ffc1c8d0a99c3b8fb0380322226d1f4f57fffe92",
+        "dw_bg": "9f8881d4c475971550c115bb341203c3231de8dd7670f6102effdf86e3ff605d",
+        "dw_bp": "36f6cc7983f51b4c5cf67edb23d1cac6bec33b2eb8dc34b6b4cf276125ebbaa4",
+        "dw_g": "fc0d302cc7663b6f65b647a43cdce5e8071bda16d1710227e388c30b2eee1ee8",
+        "dw_z": "a2c7dab9cd2673094536a9e6a0b89f7f2f6587357bb8f7d4523d43eb5ffbc819",
+        "output": "b0305faa75946652293e14f902d9d487775d15eaaac6bc9deac44f56f7fa22d5"
+      },
+      "sequence": 101
+    },
+    "outgoing": {
+      "aot_eager": {
+        "dZ": "74168bb8155c8f318681561d3d844152881b55919101e7da41b643ac8a83010b",
+        "db_in": "21e3141c60d2eb451fc2efa9d82b2edc85dc79836d95aa9dffc3629d62516342",
+        "db_out": "edd1b6c97fbb6b5d3a69d1c922a1b4948879073f18f29edca0e6d7717d224e57",
+        "dg_in": "6ec8b9e89d55c6b8bde02e8833a1274c420e5241ccd10d6f9d1a782084167694",
+        "dg_out": "5a33f32f5a32797d6298fb42736c617e3ae26e63c4d19a2b447a8f2f45186aa3",
+        "dw_ag": "b202f761e6f5dc2a67bb21f8487bf1fa93bca45031bead13d7ea833450d9a576",
+        "dw_ap": "495a5ef99754cf5cc1c989ac7b71df1b9d6c8488a914bd491ae212f71c3b60a6",
+        "dw_bg": "59af6abb3cfc986fef684e262baa8d87271b81bb934c742ce7a35bfc48ab35a5",
+        "dw_bp": "e1f67c8d0ca42a82b296c9d1f8c9c4511498ceca6d0191a3d526df103503a66b",
+        "dw_g": "8b71678037f36ad7f8cc9bdf9ee67b79cb00505561ca2952a313f89cbe8c6eb9",
+        "dw_z": "6c4c604b247d959697055e62503ff8c02ed22da22a0ac76d94c2f0bc3bce4c1c",
+        "output": "83daeed994d460617fb64e7c97795fb9b9e50b81e531400a9535369383d6586c"
+      },
+      "eager": {
+        "dZ": "74168bb8155c8f318681561d3d844152881b55919101e7da41b643ac8a83010b",
+        "db_in": "21e3141c60d2eb451fc2efa9d82b2edc85dc79836d95aa9dffc3629d62516342",
+        "db_out": "edd1b6c97fbb6b5d3a69d1c922a1b4948879073f18f29edca0e6d7717d224e57",
+        "dg_in": "6ec8b9e89d55c6b8bde02e8833a1274c420e5241ccd10d6f9d1a782084167694",
+        "dg_out": "5a33f32f5a32797d6298fb42736c617e3ae26e63c4d19a2b447a8f2f45186aa3",
+        "dw_ag": "b202f761e6f5dc2a67bb21f8487bf1fa93bca45031bead13d7ea833450d9a576",
+        "dw_ap": "495a5ef99754cf5cc1c989ac7b71df1b9d6c8488a914bd491ae212f71c3b60a6",
+        "dw_bg": "59af6abb3cfc986fef684e262baa8d87271b81bb934c742ce7a35bfc48ab35a5",
+        "dw_bp": "e1f67c8d0ca42a82b296c9d1f8c9c4511498ceca6d0191a3d526df103503a66b",
+        "dw_g": "8b71678037f36ad7f8cc9bdf9ee67b79cb00505561ca2952a313f89cbe8c6eb9",
+        "dw_z": "6c4c604b247d959697055e62503ff8c02ed22da22a0ac76d94c2f0bc3bce4c1c",
+        "output": "83daeed994d460617fb64e7c97795fb9b9e50b81e531400a9535369383d6586c"
+      },
+      "sequence": 101
+    }
+  },
+  "trimul_custom_ops": {
+    "backward_schema": "openfold3_stablefold::_trimul_bwd_v1(Tensor grad_out, Tensor z_bf, Tensor mask_f, Tensor z_ln, Tensor gate, Tensor a, Tensor b, Tensor x, Tensor xlnT, Tensor mean_in, Tensor rstd_in, Tensor mean_out, Tensor rstd_out, Tensor w_ap, Tensor w_ag, Tensor w_bp, Tensor w_bg, Tensor w_g, Tensor w_z, Tensor g_in, Tensor g_out, Tensor out, bool outgoing) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)",
+    "compile_backend": "aot_eager",
+    "dynamic_export": {
+      "loaded_sequence": 33,
+      "output": "94d73e61664fd907eb162a93327471f75d28e5a467069f1277f28d384931d6ed",
+      "sample_sequence": 17,
+      "target": "openfold3_stablefold._trimul_fwd_v1.default"
+    },
+    "fake_backward_shapes": [
+      [
+        1,
+        17,
+        17,
+        32
+      ],
+      [
+        160,
+        32
+      ],
+      [
+        32,
+        32
+      ],
+      [
+        32
+      ],
+      [
+        32
+      ],
+      [
+        32
+      ],
+      [
+        32
+      ]
+    ],
+    "fake_forward_shapes": [
+      [
+        1,
+        17,
+        17,
+        32
+      ],
+      [
+        289,
+        32
+      ],
+      [
+        289,
+        32
+      ],
+      [
+        32,
+        289
+      ],
+      [
+        32,
+        289
+      ],
+      [
+        32,
+        17,
+        17
+      ],
+      [
+        32,
+        289
+      ],
+      [
+        289
+      ],
+      [
+        289
+      ],
+      [
+        289
+      ],
+      [
+        289
+      ]
+    ],
+    "forward_schema": "openfold3_stablefold::_trimul_fwd_v1(Tensor z_bf, Tensor mask_f, Tensor w_ap, Tensor w_ag, Tensor w_bp, Tensor w_bg, Tensor w_g, Tensor w_z, Tensor g_in, Tensor b_in, Tensor g_out, Tensor b_out, bool outgoing, bool save_state) -> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
+  },
+  "trimul_short_sequence_stock": {
+    "fields": {
+      "d_layer_norm_in.bias": "c424d12d805b5889f18ced8d79e8ac5bb1facc897a71980493444ad2e79d7f25",
+      "d_layer_norm_in.weight": "1691615d8d740a11e714104f5ed89ff6d954f87c80a9d0728be84dcd0d567812",
+      "d_layer_norm_out.bias": "d917b438686876d89e325a1461e99fe09e030d2e1073132016f7f5afe9ec68b5",
+      "d_layer_norm_out.weight": "9a0e7cbadf1a70b0698c26f339de5bc4dc62506995aad7e3c86a4cea036b8030",
+      "d_linear_a_g.weight": "98935863cc5ddf4f2f93a9058f0e8a7a5bbfad3f00f4e3868305ea15f81a556c",
+      "d_linear_a_p.weight": "50c013ad14265da0a3ddddd76c98e863c37eb552555ca8e21537cd906efb9c16",
+      "d_linear_b_g.weight": "41fe8ecc1b6d69e73cd9c01711c38e398937b638bfc1940517ff2118cd5122c8",
+      "d_linear_b_p.weight": "46551628fc8e7e181e693d434a9a4d55b470301337a7a45a96104909bb6960a8",
+      "d_linear_g.weight": "ad1ffa392e7b61e7a40a2e50fb4f249c6587e3a75dfe49a6efbdcea2d55712aa",
+      "d_linear_z.weight": "1bb12fc012503ec6fdd4c9079917cd2afc9a6887c7108cae3843863f8cfc1f63",
+      "d_z": "de2022e229a785619e6bdde5eccefd84e8dc147a6b3427f162b22895af6a04f9",
+      "output": "b9e9ae6e7e638fa019450ecb85aa187f9994f2fb3f1e9d0ab777f782387c2bce"
+    },
+    "route_counts": {
+      "cueq": 0,
+      "get_ext": 0,
+      "runner": 0
+    },
+    "sequence": 17,
+    "support_code": "sequence_stock_fallback"
+  },
+  "verdict": "PASS"
+}
