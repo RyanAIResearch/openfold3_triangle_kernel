@@ -52,11 +52,11 @@ binary anyway.
 
 ## Pixi production workflow
 
-Clone the fixed H100 runtime tag into a clean checkout:
+Clone the current `main` branch into a clean checkout:
 
 ```bash
 mkdir -p /mnt/shared/openfold3
-git clone --branch v0.4.3.post3 --single-branch \
+git clone --branch main --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git \
   /mnt/shared/openfold3/src
 cd /mnt/shared/openfold3/src
@@ -88,7 +88,7 @@ Ninja, or JIT. It then directly executes AQLab `run_openfold` or standard
 behavior, and the selector changes only the training kernel-route flags.
 
 The integration checkout and the binary artifact intentionally have separate
-identities: the fixed runtime tag contains the installer and guide, while the
+identities: the `main` checkout contains the installer and guide, while the
 wheel records the qualified kernel source commit `df1957e623d1283ba2a572cb730a6b130fbf1b0c`.
 Training runs from that installed wheel outside the source checkout.
 

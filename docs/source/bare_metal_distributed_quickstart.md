@@ -13,7 +13,7 @@ Complete steps 1–4, choose exactly one launch topology from steps 5–7, and u
 ## 1. Bootstrap every H100 host
 
 Use Linux x86-64 with full NVIDIA H100 80 GB GPUs, a compatible NVIDIA driver, `git`, `curl`, `tmux`, and a filesystem mounted at `/mnt/shared` on every node; a system CUDA Toolkit and NVCC are not required.
-Install Pixi on every host, then clone the fixed runtime tag once on node 0 into the shared filesystem after configuring GitHub read access if the repository is private.
+Install Pixi on every host, then clone the `main` branch once on node 0 into the shared filesystem after configuring GitHub read access if the repository is private.
 Confirm that every host reads the same clean checkout and that `git rev-parse HEAD` returns the same value everywhere.
 
 ```bash
@@ -26,7 +26,7 @@ export PATH="$HOME/.pixi/bin:$PATH"
 # Node 0 only; /mnt/shared must be mounted on every node.
 export OF3_SRC=/mnt/shared/openfold3/src
 mkdir -p /mnt/shared/openfold3
-git clone --branch v0.4.3.post3 --single-branch \
+git clone --branch main --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git "$OF3_SRC"
 cd "$OF3_SRC"
 git rev-parse HEAD
