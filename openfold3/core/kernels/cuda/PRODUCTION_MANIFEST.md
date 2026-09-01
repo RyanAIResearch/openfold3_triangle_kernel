@@ -31,11 +31,9 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 
 正式放行仍缺少：
 
-1. release commit 的 H100 AOT wheel 动态构建、二进制核验和无编译器
-   clean-install 回执；
-2. 完整 Compute Sanitizer release suite；
-3. 2-GPU 与多节点 DDP 正确性、恢复等价性和扩展效率证据；
-4. 长期训练轨迹、validation quality 与 time-to-quality。
+1. 完整 Compute Sanitizer release suite；
+2. 2-GPU 与多节点 DDP 正确性、恢复等价性和扩展效率证据；
+3. 长期训练轨迹、validation quality 与 time-to-quality。
 
 原计划的 1000-step training soak 未在本发布周期内执行。这不构成失败证据，
 但也不能替代长期收敛证据；因此当前状态仍是 production candidate。

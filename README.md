@@ -14,10 +14,12 @@ an optional forward rounding residual improves the row-scalar used by the
 backward without changing the public BF16 output.
 
 > **Status: internal preview / production candidate, not GA.** Use a feature
-> flag and retain the stock or cuEquivariance route as a rollback. The validated
-> scope is a single NVIDIA H100, BF16 training, local batch size 1, and the
-> OpenFold3 shapes described below. Multi-GPU/DDP, H200, FSDP, `torch.compile`,
-> and local batch sizes greater than 1 are not part of this release claim.
+> flag and retain the stock or cuEquivariance route as a rollback. Single-H100
+> BF16 training with local batch size 1 is validated; the fail-closed DDP and
+> multi-node implementation is available, but real 2-GPU and 2-node hardware
+> qualification is still pending. H200, FSDP, `torch.compile`, Lightning
+> DeepSpeedStrategy/ZeRO, and local batch sizes greater than 1 are not part of
+> this release claim.
 
 ## Validated result
 
@@ -35,8 +37,7 @@ models, hardware, software ABIs, or shapes.
 - NVIDIA H100 80 GB, compute capability 9.0 (`sm_90a`)
 - CPython 3.14
 - PyTorch 2.10.0 built for CUDA 12.9
-- CUDA toolkit/NVCC 12.9 when building from source or enabling the current
-  StableFold Triangle Multiplicative Update implementation
+- CUDA toolkit/NVCC 12.9 only when building the five AOT extensions from source
 - BF16 Q/K/V; BF16 or FP32 pair bias; FP16, BF16, or FP32 additive mask
 
 The prebuilt Triangle Attention extensions contain Hopper-specific SASS and no
@@ -81,12 +82,10 @@ sha256sum --check openfold3-*.whl.sha256
 python -m pip install --no-deps --force-reinstall openfold3-*.whl
 ```
 
-The wheel owns four AOT Triangle Attention extensions: forward, delta, `dK/dV`,
-and `dQ/dBias`. Production Triangle Attention does not invoke NVCC or silently
-fall back to JIT. If you received only the GitHub link and no binary bundle, use
-the source-build route below.
-The same wheel owns a fifth, independently named TriMul extension; its Python
-facade uses the identical fail-closed loader and explicit development-JIT gate.
+The wheel owns five AOT extensions: Triangle Attention forward, delta, `dK/dV`,
+and `dQ/dBias`, plus Triangle Multiplicative Update. Production runtime does not
+invoke NVCC or silently fall back to JIT. If you received only the GitHub link
+and no binary bundle, use the source-build route below.
 
 ### Option B: build the H100 wheel from this repository
 
@@ -100,29 +99,17 @@ tools/build_sm90_wheel.sh
 python -m pip install --no-deps --force-reinstall dist/openfold3-*.whl
 ```
 
-The builder clones the exact commit into a temporary directory, produces the
-four `sm_90a` extensions, attests their symbols and SASS, and runs a
-compiler-free forward/backward smoke test.
+The builder clones the exact commit into a temporary directory, produces all
+five `sm_90a` extensions, attests their symbols and SASS, and runs a
+compiler-free Attention and TriMul forward/backward smoke test.
 
-### Current full-backend packaging note
+The installed full backend is compiler-free: both Triangle Attention and
+TriMul are loaded from the attested wheel, and production should keep
+`OPENFOLD3_TRIANGLE_ALLOW_JIT` unset or set to `0`.
 
-The Triangle Multiplicative Update source is included, but it currently uses
-`torch.utils.cpp_extension.load_inline` on first use. Therefore:
-
-- Triangle Attention alone can run compiler-free from the AOT wheel;
-- the full StableFold backend currently requires NVCC 12.9 once to build TMU;
-- use a persistent absolute `TORCH_EXTENSIONS_DIR` so the TMU cache is not
-  rebuilt between runs;
-- do not advertise the full backend as a compiler-free wheel until TMU is
-  included as an additional attested AOT extension.
-
-For an internal full-backend trial:
-
-```bash
-export CUDA_HOME=/path/to/cuda-12.9
-export TORCH_EXTENSIONS_DIR=/absolute/persistent/path/stablefold_torch_extensions
-mkdir -p "$TORCH_EXTENSIONS_DIR"
-```
+For a three-step bare-metal path covering data, compilation, backend selection,
+and multi-node launch, see
+[Bare-metal distributed quickstart](docs/source/bare_metal_distributed_quickstart.md).
 
 ## 3. Enable StableFold
 
@@ -160,9 +147,8 @@ Triangle Multiplicative Update: every relevant MSA, Pairformer, and template
 stack must retain `fuse_projection_weights: false`. Everything else in the
 existing OpenFold3 training command can remain unchanged.
 
-For an Attention-only compiler-free canary, set:
-
-replace the corresponding values in the same `memory.train` block:
+For an Attention-only compiler-free canary, replace the corresponding values
+in the same `memory.train` block:
 
 ```yaml
 model_update:
@@ -203,7 +189,8 @@ data order, precision, crop, and logging configuration as the comparator. Check:
 
 - finite loss and gradients;
 - expected StableFold route counts and no silent fallback;
-- no JIT/rebuild of the four Triangle Attention extensions;
+- no JIT/rebuild of the four Triangle Attention extensions or the fifth TriMul
+  extension;
 - peak memory and OOM headroom on the largest real sample;
 - synchronized training-step time after warmup;
 - checkpoint save/resume and validation.

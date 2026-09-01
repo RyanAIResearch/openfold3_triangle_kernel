@@ -1,0 +1,103 @@
+experiment_settings:
+  mode: train
+  output_dir: /mnt/shared/openfold3/runs/stablefold
+  restart_checkpoint_path: null
+  seed: 42
+
+data_module_args:
+  batch_size: 1
+  num_workers: 16
+  epoch_len: 128000
+
+logging_config:
+  log_lr: true
+  log_level: info
+  wandb_config: null
+
+pl_trainer_args:
+  devices: 8
+  num_nodes: 2
+  precision: bf16-mixed
+  max_epochs: -1
+  log_every_n_steps: 50
+  mpi_plugin: false
+  deepspeed_config_path: null
+
+checkpoint_config:
+  every_n_epochs: 1
+  auto_insert_metric_name: false
+  save_last: true
+  save_top_k: -1
+
+model_update:
+  presets:
+    - train
+  custom:
+    settings:
+      memory:
+        train:
+          chunk_size: null
+          use_deepspeed_evo_attention: false
+          use_cueq_triangle_kernels: false
+          use_stable_triangle_attention: true
+          use_stable_triangle_multiplicative: true
+          use_triton_triangle_kernels: false
+          use_lma: false
+    architecture:
+      shared:
+        use_confidence_emb_prob: 0.8
+        diffusion:
+          use_conditioning_prob: 0.8
+
+dataset_configs:
+  train:
+    weighted-pdb:
+      dataset_class: WeightedPDBDataset
+      weight: 1.0
+      config:
+        debug_mode: true
+        template:
+          n_templates: 4
+          take_top_k: false
+        crop:
+          token_crop:
+            enabled: true
+            token_budget: 384
+            crop_weights:
+              contiguous: 0.2
+              spatial: 0.4
+              spatial_interface: 0.4
+          chain_crop:
+            enabled: true
+  validation:
+    val-weighted-pdb:
+      dataset_class: ValidationPDBDataset
+      config:
+        debug_mode: true
+        msa:
+          subsample_main: false
+        template:
+          n_templates: 4
+          take_top_k: true
+        crop:
+          token_crop:
+            enabled: false
+
+dataset_paths:
+  weighted-pdb: &pdb_paths
+    alignments_directory: none
+    alignment_db_directory: none
+    alignment_array_directory: /mnt/shared/openfold3/pdb_training_set/alignment_arrays
+    dataset_cache_file: /mnt/shared/openfold3/pdb_training_set/dataset_caches/training_cache_with_templates.json
+    target_structures_directory: /mnt/shared/openfold3/pdb_training_set/preprocessed_pdb_data/standard/structure_files
+    target_structure_file_format: npz
+    reference_molecule_directory: /mnt/shared/openfold3/pdb_training_set/preprocessed_pdb_data/standard/reference_mols
+    template_cache_directory: /mnt/shared/openfold3/pdb_training_set/templates/train_template_cache
+    template_structure_array_directory: /mnt/shared/openfold3/pdb_training_set/templates/template_structure_arrays
+    template_structures_directory: none
+    template_file_format: npz
+    ccd_file: null
+  val-weighted-pdb:
+    <<: *pdb_paths
+    dataset_cache_file: /mnt/shared/openfold3/pdb_training_set/dataset_caches/validation_cache_with_templates.json
+    template_cache_directory: /mnt/shared/openfold3/pdb_training_set/templates/val_template_cache

@@ -181,7 +181,7 @@ Setting ``num_nodes`` does not start remote workers. Use a real multi-node
 launcher with one task per GPU. For example, under Slurm:
 
 ```bash
-srun --nodes=2 --ntasks-per-node=8 --gres=gpu:8 --gpu-bind=closest \
+srun --nodes=2 --ntasks-per-node=8 --gres=gpu:8 \
   --kill-on-bad-exit=1 \
   run_openfold train --runner-yaml training.yaml --seed 42
 ```
@@ -204,10 +204,11 @@ nodes.
 
 #### StableFold distributed production contract
 
-The first qualified StableFold distributed target is homogeneous NVIDIA H100
+The enforced StableFold distributed candidate target is homogeneous NVIDIA H100
 (``sm_90``), DDP with per-sample gradient clipping, local batch size one, and
 one process per GPU. The v1 lifecycle gate is qualified against
-PyTorch Lightning 2.6.1 and rejects other Lightning versions. Every node must
+PyTorch Lightning 2.6.1 and rejects other Lightning versions; real 2-GPU and
+2-node hardware qualification is still pending. Every node must
 install the same clean AOT wheel and use:
 
 ```bash
@@ -247,6 +248,11 @@ the effective optimizer-step means reduced across ranks and accumulated
 microbatches. The last rank-local microbatch is logged separately with the
 ``_rank_local`` suffix. Optional losses with zero active samples are omitted
 instead of being reported as zero.
+
+For a concise source-to-launch example and an explicit selector for native
+AQLab/OpenFold3 stock PyTorch, cuEquivariance, StableFold, and DeepSpeed Evo
+attention, see
+{doc}`bare_metal_distributed_quickstart`.
 
 ## 5. Monitoring Training
 

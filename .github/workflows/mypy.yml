@@ -33,7 +33,7 @@ jobs:
           # Only refresh the environment cache from the default branch, so that
           # PR branches can read it but cannot evict the other caches this repo
           # relies on (e.g. the shared-params_of3 checkpoint).
-          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'sr/dq-warpgroup' }}
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
 
       # `typecheck` runs `mypy | mypy-baseline filter`, so the baseline decides:
       # only errors absent from mypy-baseline.txt fail the job. It also fails

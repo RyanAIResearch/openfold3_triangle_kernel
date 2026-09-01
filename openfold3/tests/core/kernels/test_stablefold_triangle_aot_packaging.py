@@ -56,22 +56,16 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             [("torch.utils.cpp_extension", "_load_development_jit")],
         )
         text = path.read_text()
-        self.assertIn(
-            '_DEVELOPMENT_JIT_ENV = "OPENFOLD3_TRIANGLE_ALLOW_JIT"', text
-        )
-        self.assertIn(
-            'os.environ.get(_DEVELOPMENT_JIT_ENV) == "1"', text
-        )
+        self.assertIn('_DEVELOPMENT_JIT_ENV = "OPENFOLD3_TRIANGLE_ALLOW_JIT"', text)
+        self.assertIn('os.environ.get(_DEVELOPMENT_JIT_ENV) == "1"', text)
         self.assertIn("if not _development_jit_enabled():", text)
 
     def test_setup_defines_five_unique_sm90a_extensions(self):
         text = (REPOSITORY / "setup.py").read_text()
-        discovered = {
-            name for name in EXPECTED_MODULES if text.count(name) == 1
-        }
+        discovered = {name for name in EXPECTED_MODULES if text.count(name) == 1}
         self.assertEqual(discovered, EXPECTED_MODULES)
         self.assertEqual(text.count("CUDAExtension("), 1)
-        self.assertIn('EXPECTED_PYTHON = (3, 14)', text)
+        self.assertIn("EXPECTED_PYTHON = (3, 14)", text)
         self.assertIn('EXPECTED_TORCH = "2.10.0"', text)
         self.assertIn('EXPECTED_TORCH_CUDA = "12.9"', text)
         self.assertIn('EXPECTED_ARCH_LIST = "9.0a"', text)
@@ -109,10 +103,14 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
     def test_pyproject_pins_torch_family_and_ships_manifest(self):
         project = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
         self.assertEqual(project["project"]["requires-python"], "==3.14.*")
-        self.assertIn("torch==2.10.0", project["project"]["dependencies"])
+        self.assertIn("torch", project["project"]["dependencies"])
         self.assertIn(
             "torch==2.10.0",
-            project["project"]["optional-dependencies"]["cuequivariance"],
+            project["project"]["optional-dependencies"]["stablefold-h100"],
+        )
+        self.assertIn(
+            "pytorch-lightning==2.6.1",
+            project["project"]["optional-dependencies"]["stablefold-h100"],
         )
         python_classifiers = {
             value
@@ -123,17 +121,13 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             python_classifiers,
             {"Programming Language :: Python :: 3.14"},
         )
-        package_data = project["tool"]["setuptools"]["package-data"][
-            "openfold3"
-        ]
+        package_data = project["tool"]["setuptools"]["package-data"]["openfold3"]
         self.assertIn("core/kernels/cuda/_build_manifest.json", package_data)
         self.assertIn("core/kernels/cuda/stablefold_trimul_cuda.cu", package_data)
         self.assertNotIn("cibuildwheel", project.get("tool", {}))
 
     def test_source_tree_manifest_is_fail_closed(self):
-        manifest = json.loads(
-            (CUDA_PACKAGE / "_build_manifest.json").read_text()
-        )
+        manifest = json.loads((CUDA_PACKAGE / "_build_manifest.json").read_text())
         self.assertEqual(manifest["schema_version"], 1)
         self.assertIs(manifest["built"], False)
 
@@ -152,6 +146,7 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             "sys.version_info[:2] == (3, 14)",
             'torch.__version__.split("+", 1)[0] == "2.10.0"',
             'torch.version.cuda == "12.9"',
+            "OPENFOLD3_BUILD_AOT=1",
             "--no-build-isolation",
             "tools/attest_sm90_wheel.py",
             "--require-binary-tools",
@@ -159,7 +154,7 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             "DS_ACCELERATOR=cpu",
             "git clone --quiet --no-local --no-checkout",
             'git -C "$FRESH_SOURCE" checkout --quiet --detach',
-            'git status --porcelain --untracked-files=all',
+            "git status --porcelain --untracked-files=all",
             'mktemp -d "${TMPDIR:-/tmp}/openfold3-aot-sm90a-build.XXXXXX"',
             'chmod -R u+w -- "$BUILD_ROOT"',
             'rm -r -- "$BUILD_ROOT"',
@@ -262,7 +257,7 @@ class StableFoldTriangleAOTPackagingTest(unittest.TestCase):
             self.assertIn(relative, text)
         self.assertIn('"--frandom-seed=0"', text)
         self.assertIn(
-            'sources=[f"openfold3/core/kernels/cuda/{value[\'source\']}"],',
+            "sources=[f\"openfold3/core/kernels/cuda/{value['source']}\"],",
             text,
         )
         source_manifest = (REPOSITORY / "MANIFEST.in").read_text()

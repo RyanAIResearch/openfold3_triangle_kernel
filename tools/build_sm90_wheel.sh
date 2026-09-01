@@ -17,6 +17,7 @@ export ZERO_AR_DATE=1
 export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 export OPENFOLD3_AOT_GIT_COMMIT="$(git rev-parse HEAD)"
 export OPENFOLD3_AOT_GIT_DIRTY=0
+export OPENFOLD3_BUILD_AOT=1
 export MAX_JOBS="${MAX_JOBS:-8}"
 if [[ -z "${CUDA_HOME:-}" ]]; then
   echo "CUDA_HOME must name the pinned CUDA 12.9 build environment" >&2

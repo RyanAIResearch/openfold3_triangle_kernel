@@ -54,6 +54,7 @@ and more features to come...
 :maxdepth: 2
 
 Installation.md
+modern-conda-environments-with-pixi
 kernels.md
 ```
 
@@ -63,6 +64,7 @@ kernels.md
 
 inference
 training
+bare_metal_distributed_quickstart
 data_pipeline_reference
 precomputed_msa_generation_how_to
 precomputed_msa_how_to
