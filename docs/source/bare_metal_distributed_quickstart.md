@@ -26,7 +26,7 @@ export PATH="$HOME/.pixi/bin:$PATH"
 # Node 0 only; /mnt/shared must be mounted on every node.
 export OF3_SRC=/mnt/shared/openfold3/src
 mkdir -p /mnt/shared/openfold3
-git clone --branch v0.4.3.post2 --single-branch \
+git clone --branch v0.4.3.post3 --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git "$OF3_SRC"
 cd "$OF3_SRC"
 git rev-parse HEAD
@@ -47,8 +47,8 @@ cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 # Node 0 only.
-pixi install --locked -e openfold3-h100
-pixi run --locked -e openfold3-h100 setup-stablefold-h100
+pixi install -e openfold3-h100
+pixi run -e openfold3-h100 setup-stablefold-h100
 
 # Every host.
 pixi run -e openfold3-h100 doctor-h100
