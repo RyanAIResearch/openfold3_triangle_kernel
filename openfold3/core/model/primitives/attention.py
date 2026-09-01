@@ -90,6 +90,18 @@ DEFAULT_LMA_KV_CHUNK_SIZE = 4096
 _ZERO_PAIR_BIAS_CACHE: dict = {}
 
 
+def _raise_if_strict_stablefold_fallback(reason: str, shape: tuple[int, ...]) -> None:
+    from openfold3.core.utils.distributed_contract import (
+        stablefold_distributed_strict_enabled,
+    )
+
+    if stablefold_distributed_strict_enabled():
+        raise RuntimeError(
+            "StableFold distributed strict route rejected an Attention fallback "
+            f"at shape {shape}: {reason}"
+        )
+
+
 def _get_zero_pair_bias(
     device: torch.device, dtype: torch.dtype, B: int, H: int, L: int
 ) -> torch.Tensor:
@@ -462,13 +474,21 @@ class Attention(nn.Module):
                 while zero_pb.ndim < target:
                     zero_pb = zero_pb.unsqueeze(1)
                 biases = biases + [zero_pb]
-            if (
-                len(biases) != 2
-                or not q_x.is_cuda
-                or hidden_dim > 64
-                or q_x.shape[-2] < 2
-                or torch.cuda.get_device_capability(q_x.device) != (9, 0)
-            ):
+            blanket_reasons = []
+            if len(biases) != 2:
+                blanket_reasons.append("requires exactly two biases")
+            if not q_x.is_cuda:
+                blanket_reasons.append("requires CUDA inputs")
+            if hidden_dim > 64:
+                blanket_reasons.append("head dimension exceeds 64")
+            if q_x.shape[-2] < 2:
+                blanket_reasons.append("sequence length is below 2")
+            if q_x.is_cuda and torch.cuda.get_device_capability(q_x.device) != (9, 0):
+                blanket_reasons.append("requires Hopper compute capability 9.0")
+            if blanket_reasons:
+                _raise_if_strict_stablefold_fallback(
+                    "; ".join(blanket_reasons), tuple(q_x.shape)
+                )
                 use_stable_triangle_attention = False
 
         if use_stable_triangle_attention and len(biases) != 2:
@@ -529,6 +549,7 @@ class Attention(nn.Module):
                 if orig_dtype != torch.bfloat16:
                     o = o.to(orig_dtype)
             else:
+                _raise_if_strict_stablefold_fallback(reason, tuple(q.shape))
                 global _STABLEFOLD_FALLBACK_LOGGED
                 key = (reason, tuple(q.shape))
                 if key not in _STABLEFOLD_FALLBACK_LOGGED:

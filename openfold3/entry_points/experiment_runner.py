@@ -14,6 +14,8 @@
 # limitations under the License.
 
 import contextlib
+import copy
+import hashlib
 import json
 import logging
 import os
@@ -50,6 +52,14 @@ from openfold3.core.utils.checkpoint_loading_utils import (
     get_state_dict_from_checkpoint,
     load_checkpoint,
 )
+from openfold3.core.utils.distributed_contract import (
+    DistributedContractCallback,
+    StableFoldDDPStrategy,
+    install_rank_file_handler,
+    stablefold_aot_modules_from_config,
+    validate_multinode_launcher,
+    validate_stablefold_distributed_checkpoint_config,
+)
 from openfold3.core.utils.precision_utils import OF3DeepSpeedPrecision
 from openfold3.core.utils.script_utils import set_ulimits
 from openfold3.entry_points.validator import (
@@ -69,6 +79,24 @@ from openfold3.projects.of3_all_atom.config.inference_query_format import (
 from openfold3.projects.of3_all_atom.project_entry import ModelUpdate, OF3ProjectEntry
 
 logger = logging.getLogger(__name__)
+
+_EXTERNAL_RANK_ENV_KEYS = (
+    "RANK",
+    "SLURM_PROCID",
+    "OMPI_COMM_WORLD_RANK",
+    "PMI_RANK",
+)
+
+
+def _current_process_rank() -> int:
+    rank = _get_rank()
+    if rank is not None:
+        return int(rank)
+    for name in _EXTERNAL_RANK_ENV_KEYS:
+        value = os.environ.get(name)
+        if value is not None:
+            return int(value)
+    return 0
 
 
 def rank_zero_only(fn):
@@ -221,8 +249,7 @@ class ExperimentRunner(ABC):
         if self.is_mpi:
             return self.cluster_environment.global_rank() == 0
         else:
-            _rank = _get_rank()
-            return (_rank is None) or (_rank == 0)
+            return _current_process_rank() == 0
 
     @property
     def cluster_environment(self) -> MPIEnvironment | None:
@@ -246,6 +273,18 @@ class ExperimentRunner(ABC):
             return _strategy
 
         if self.is_distributed:
+            contract_callback = getattr(
+                self,
+                "stablefold_distributed_contract_callback",
+                None,
+            )
+            if contract_callback is not None:
+                return StableFoldDDPStrategy(
+                    contract_callback=contract_callback,
+                    find_unused_parameters=False,
+                    cluster_environment=self.cluster_environment,
+                    timeout=self.pl_trainer_args.distributed_timeout,
+                )
             return DDPStrategy(
                 find_unused_parameters=False,
                 cluster_environment=self.cluster_environment,
@@ -297,6 +336,12 @@ class ExperimentRunner(ABC):
         Depending on the mode (train, eval, test, predict), the corresponding
         PyTorch Lightning method is invoked.
         """
+        validate_multinode_launcher(
+            num_nodes=self.num_nodes,
+            devices_per_node=self.num_gpus,
+            mpi_plugin=self.is_mpi,
+        )
+
         # Run process appropriate process
         logger.info(f"Running {self.mode} mode.")
         # Training + validation
@@ -356,6 +401,21 @@ class TrainingExperimentRunner(ExperimentRunner):
         and initializing WandB if enabled.
         """
         super().setup()
+        # Standard Lightning checkpoint loading happens after setup. Mark the
+        # module now so an old distributed resume cannot silently restart the
+        # model's synchronized recycle RNG from its seed.
+        self.lightning_module._require_distributed_resume_state = (
+            self.is_distributed
+            and bool(stablefold_aot_modules_from_config(self.model_config))
+        )
+        # DDP must delay EMA capture until after its parameter broadcast.  Keep
+        # the established DeepSpeed behavior, however: capture FP32 module
+        # weights before the strategy may convert or shard them.
+        if (
+            self.deepspeed_config_path is not None
+            and len(self.lightning_module.ema.params) <= 1
+        ):
+            self.lightning_module.ema.init_params(self.lightning_module.model)
         self._setup_logger()
         if self.use_wandb:
             self._wandb_setup()
@@ -368,7 +428,46 @@ class TrainingExperimentRunner(ExperimentRunner):
         Update trainer configuration based on model settings.
         This handles gradient clipping and accumulation settings.
         """
-        if self.model_config.settings.gradient_clipping.per_sample_clipping:
+        stablefold_modules = stablefold_aot_modules_from_config(self.model_config)
+        per_sample_clipping = (
+            self.model_config.settings.gradient_clipping.per_sample_clipping
+        )
+        if self.is_distributed and stablefold_modules:
+            if self.deepspeed_config_path is not None:
+                raise ValueError(
+                    "StableFold distributed production v1 requires DDP; "
+                    "Lightning DeepSpeedStrategy/ZeRO is not qualified. "
+                    "use_deepspeed_evo_attention is an independent operator flag."
+                )
+            if not per_sample_clipping:
+                raise ValueError(
+                    "StableFold distributed production v1 requires per-sample "
+                    "gradient clipping; automatic DDP has unqualified "
+                    "sample-dependent unused-parameter behavior."
+                )
+            if int(self.data_module_args.batch_size) != 1:
+                raise ValueError(
+                    "StableFold distributed production v1 requires local "
+                    "batch_size=1."
+                )
+            validate_stablefold_distributed_checkpoint_config(
+                checkpoint=self.restart_checkpoint_path,
+                manual_checkpoint_loading=(
+                    self.ckpt_load_settings.manual_checkpoint_loading
+                ),
+                preemption_safe_resume=self.preemption_safe_resume,
+            )
+        if (
+            self.is_distributed
+            and per_sample_clipping
+            and self.deepspeed_config_path is not None
+        ):
+            raise ValueError(
+                "Distributed per-sample gradient clipping requires DDP; "
+                "Lightning DeepSpeedStrategy/ZeRO is not qualified."
+            )
+
+        if per_sample_clipping:
             # The training step with per-sample gradient clipping handles this
             # internally PL does not support manual optimization with
             # accumulate_grad_batches
@@ -406,6 +505,27 @@ class TrainingExperimentRunner(ExperimentRunner):
         # Update distributed sync seed used in the model
         # Currently used to sync the number of recycles across ranks
         self.model_config.update({"architecture": {"shared": {"sync_seed": self.seed}}})
+
+        if self.is_distributed:
+            epoch_len = int(self.data_module_args.epoch_len)
+            if epoch_len % self.world_size != 0:
+                raise ValueError(
+                    "Distributed production training requires epoch_len to be "
+                    f"divisible by world_size ({epoch_len} % {self.world_size} != 0); "
+                    "otherwise the sampler pads duplicate training samples."
+                )
+            local_steps = epoch_len // self.world_size
+            if self.model_config.settings.gradient_clipping.per_sample_clipping:
+                accumulation = int(
+                    self.model_config.settings.manual_optimization.accumulate_grad_batches
+                )
+            else:
+                accumulation = int(self.pl_trainer_args.accumulate_grad_batches)
+            if local_steps % accumulation != 0:
+                raise ValueError(
+                    "Per-rank steps per epoch must be divisible by gradient "
+                    f"accumulation ({local_steps} % {accumulation} != 0)."
+                )
 
     @cached_property
     def data_module_config(self) -> DataModuleConfig:
@@ -448,6 +568,27 @@ class TrainingExperimentRunner(ExperimentRunner):
         )
 
         self.lightning_module.ema.load_state_dict(ema)
+        generator_state = ckpt.get("synced_generator_state")
+        if (
+            self.is_distributed
+            and bool(stablefold_aot_modules_from_config(self.model_config))
+            and self.ckpt_load_settings.restore_time_step
+            and generator_state is None
+        ):
+            raise ValueError(
+                "Distributed time-step restore requires synced_generator_state "
+                "in the checkpoint"
+            )
+        if (
+            self.ckpt_load_settings.restore_time_step
+            and generator_state is not None
+            and hasattr(
+                self.lightning_module.model, "synced_generator"
+            )
+        ):
+            self.lightning_module.model.synced_generator.bit_generator.state = (
+                copy.deepcopy(generator_state)
+            )
 
         configured_ema_decay = self.model_config.settings.ema.decay
         loaded_ema_decay = self.lightning_module.ema.decay
@@ -525,8 +666,12 @@ class TrainingExperimentRunner(ExperimentRunner):
             return
 
         log_level = log_level.upper()
-        log_filepath = self.log_dir / "console_logs.log"
-        logging.basicConfig(filename=log_filepath, level=log_level, filemode="w")
+        rank = _current_process_rank()
+        log_filepath = self.log_dir / f"console_logs.rank{rank}.log"
+        install_rank_file_handler(
+            log_filepath,
+            logging._nameToLevel[log_level],
+        )
 
     @cached_property
     def loggers(self):
@@ -537,9 +682,40 @@ class TrainingExperimentRunner(ExperimentRunner):
         return _loggers
 
     @cached_property
+    def stablefold_distributed_contract_callback(
+        self,
+    ) -> DistributedContractCallback | None:
+        stablefold_modules = stablefold_aot_modules_from_config(self.model_config)
+        if not self.is_distributed or not stablefold_modules:
+            return None
+        resolved_contract = {
+            "experiment": self.experiment_config.model_dump(mode="json"),
+            "model": self.model_config.to_dict(),
+            "data_module": self.data_module_config.model_dump(mode="json"),
+            "checkpoint_path": self.restart_checkpoint_path,
+        }
+        contract_bytes = json.dumps(
+            resolved_contract,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return DistributedContractCallback(
+            expected_world_size=self.world_size,
+            expected_num_nodes=self.num_nodes,
+            expected_devices_per_node=self.num_gpus,
+            expected_aot_modules=stablefold_modules,
+            training_contract_sha256=hashlib.sha256(contract_bytes).hexdigest(),
+            checkpoint_path=self.restart_checkpoint_path,
+            receipt_path=self.log_dir / "distributed_contract.json",
+        )
+
+    @cached_property
     def callbacks(self):
         """Set up and return the list of training callbacks."""
         _callbacks = [RankSpecificSeedCallback(base_seed=self.seed)]
+
+        if self.stablefold_distributed_contract_callback is not None:
+            _callbacks.append(self.stablefold_distributed_contract_callback)
 
         _checkpoint = self.checkpoint_config
         if _checkpoint is not None:

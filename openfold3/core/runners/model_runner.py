@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+
 import pytorch_lightning as pl
 import torch
 from ml_collections import ConfigDict
@@ -98,6 +100,9 @@ class ModelRunner(pl.LightningModule):
             )
 
     def training_step(self, batch, batch_idx):
+        if len(self.ema.params) <= 1:
+            self.ema.init_params(self.model)
+
         example_feat = next(
             iter(v for v in batch.values() if isinstance(v, torch.Tensor))
         )
@@ -126,7 +131,7 @@ class ModelRunner(pl.LightningModule):
 
     def eval_step(self, batch, batch_idx):
         # At the start of validation, load the EMA weights
-        if self.cached_weights is None:
+        if self.cached_weights is None and len(self.ema.params) > 1:
             # model.state_dict() contains references to model weights rather
             # than copies. Therefore, we need to clone them before calling
             # load_state_dict().
@@ -166,18 +171,38 @@ class ModelRunner(pl.LightningModule):
                 k: v for k, v in ema["params"].items() if "template" not in k
             }
         self.ema.load_state_dict(ema)
+        self._restore_synced_generator_state(checkpoint)
+
+    def _restore_synced_generator_state(self, checkpoint) -> None:
+        generator_state = checkpoint.get("synced_generator_state")
+        if generator_state is None:
+            if getattr(self, "_require_distributed_resume_state", False):
+                raise RuntimeError(
+                    "distributed resume requires synced_generator_state in the "
+                    "checkpoint"
+                )
+            return
+        if hasattr(self.model, "synced_generator"):
+            self.model.synced_generator.bit_generator.state = copy.deepcopy(
+                generator_state
+            )
 
     def on_save_checkpoint(self, checkpoint):
         checkpoint["ema"] = self.ema.state_dict()
+        if hasattr(self.model, "synced_generator"):
+            checkpoint["synced_generator_state"] = copy.deepcopy(
+                self.model.synced_generator.bit_generator.state
+            )
 
     def resume_last_lr_step(self, lr_step):
         """A helper method to manually specify the lr_step."""
         self.last_lr_step = lr_step
 
     def on_validation_epoch_end(self):
-        # Restore the model weights to normal
-        self.model.load_state_dict(self.cached_weights)
-        self.cached_weights = None
+        # Restore the model weights if validation swapped in initialized EMA.
+        if self.cached_weights is not None:
+            self.model.load_state_dict(self.cached_weights)
+            self.cached_weights = None
 
     def _compute_validation_metrics(
         self, batch, outputs, superimposition_metrics=False

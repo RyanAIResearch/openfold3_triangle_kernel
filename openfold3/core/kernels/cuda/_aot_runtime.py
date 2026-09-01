@@ -15,6 +15,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 import sysconfig
 from pathlib import Path
 from threading import Lock
@@ -26,6 +27,52 @@ _DEVELOPMENT_JIT_ENV = "OPENFOLD3_TRIANGLE_ALLOW_JIT"
 _MANIFEST_PATH = Path(__file__).with_name("_build_manifest.json")
 _LOCK = Lock()
 _MODULE_CACHE: dict[str, Any] = {}
+
+_PRODUCTION_MODULE_CONTRACT: dict[str, tuple[str, tuple[str, ...]]] = {
+    "stablefold_forward": (
+        "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
+        (
+            "stablefold_triangle_forward_out",
+            "stablefold_pack_qkv",
+            "stablefold_triangle_forward_shadow_out",
+        ),
+    ),
+    "stablefold_delta": (
+        "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
+        (
+            "stablefold_triangle_delta_out",
+            "stablefold_triangle_delta_shadow_out",
+        ),
+    ),
+    "stablefold_dkdv": (
+        "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
+        (
+            "stablefold_triangle_dkdv_out",
+            "stablefold_triangle_dkdv_delta_true_out",
+        ),
+    ),
+    "stablefold_dq_dbias": (
+        "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
+        (
+            "stablefold_triangle_dq_dbias_out",
+            "stablefold_reduce_broadcast_dbias_out",
+            "stablefold_triangle_sr_backward_out",
+        ),
+    ),
+    "stablefold_trimul": (
+        "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
+        (
+            "trimul_in_fwd",
+            "trimul_out_fwd",
+            "trimul_gate_split_bwd",
+            "sig_mul_bwd_out",
+            "ln_bwd_dx",
+            "ln_bwd_dgb",
+            "transpose_ln_bwd",
+            "trimul_wgrad_fixed_fold",
+        ),
+    ),
+}
 
 
 class AOTExtensionError(RuntimeError):
@@ -189,7 +236,8 @@ def load_extension_module(
                 raise AOTExtensionError(
                     f"unable to load production AOT extension {aot_module}; install "
                     "the Python 3.14 / Torch 2.10 / CUDA 12.9 sm_90a wheel. "
-                    f"Source-tree developers may explicitly set {_DEVELOPMENT_JIT_ENV}=1."
+                    "Source-tree developers may explicitly set "
+                    f"{_DEVELOPMENT_JIT_ENV}=1."
                 ) from error
             module = _load_development_jit(
                 module_key=module_key,
@@ -202,9 +250,84 @@ def load_extension_module(
             if missing:
                 raise AOTExtensionError(
                     f"development JIT module is missing symbols: {missing}"
-                )
+                ) from error
         _MODULE_CACHE[module_key] = module
         return module
+
+
+def distributed_aot_identity(module_keys: tuple[str, ...]) -> dict[str, Any]:
+    """Preload and identify AOT modules before a distributed train step.
+
+    Every rank calls this function independently and then exchanges the returned
+    JSON-compatible identity.  Local failures are expected to be caught by the
+    distributed contract so all ranks can leave together instead of one rank
+    failing lazily while its peers wait in a later collective.
+    """
+
+    if _development_jit_enabled():
+        raise AOTExtensionError(
+            "distributed production training forbids development JIT"
+        )
+
+    manifest = _manifest()
+    git = manifest.get("git", {})
+    if git.get("dirty") is not False or re.fullmatch(
+        r"[0-9a-f]{40}", str(git.get("commit", ""))
+    ) is None:
+        raise AOTExtensionError("distributed AOT manifest must attest dirty=false")
+    target = manifest.get("target", {})
+    if target.get("cuda_arch") != "sm_90a" or target.get("ptx_embedded") is not False:
+        raise AOTExtensionError(
+            "distributed production requires sm_90a SASS with no embedded PTX"
+        )
+
+    requested = tuple(sorted(set(module_keys)))
+    unknown = [key for key in requested if key not in _PRODUCTION_MODULE_CONTRACT]
+    if unknown:
+        raise AOTExtensionError(f"unknown distributed AOT modules: {unknown}")
+
+    install_root = Path(__file__).resolve().parents[4]
+    packaged_sources: dict[str, str] = {}
+    for relative, expected_hash in sorted(manifest.get("sources", {}).items()):
+        if not relative.startswith("openfold3/"):
+            continue
+        source_path = install_root / relative
+        if not source_path.is_file() or _sha256(source_path) != expected_hash:
+            raise AOTExtensionError(
+                f"packaged source does not match AOT manifest: {relative}"
+            )
+        packaged_sources[relative] = expected_hash
+    if not packaged_sources:
+        raise AOTExtensionError(
+            "distributed AOT manifest has no verifiable packaged sources"
+        )
+
+    extensions: dict[str, dict[str, Any]] = {}
+    with _LOCK:
+        for module_key in requested:
+            aot_module, expected_symbols = _PRODUCTION_MODULE_CONTRACT[module_key]
+            artifact_path = _preflight_aot_artifact(module_key, aot_module)
+            module = importlib.import_module(aot_module)
+            _validate_loaded_aot_module(
+                module_key, module, expected_symbols, artifact_path
+            )
+            _MODULE_CACHE[module_key] = module
+            extensions[module_key] = {
+                "filename": artifact_path.name,
+                "module": aot_module,
+                "sha256": _sha256(artifact_path),
+                "symbols": list(expected_symbols),
+            }
+
+    return {
+        "schema_version": 1,
+        "manifest_sha256": _sha256(_MANIFEST_PATH),
+        "git": git,
+        "target": target,
+        "abi": manifest.get("abi"),
+        "packaged_source_sha256": packaged_sources,
+        "extensions": extensions,
+    }
 
 
 def source_sha256_for(module_key: str, source: Path) -> dict[str, str]:
@@ -232,6 +355,7 @@ def source_sha256_for(module_key: str, source: Path) -> dict[str, str]:
 
 __all__ = [
     "AOTExtensionError",
+    "distributed_aot_identity",
     "load_extension_module",
     "source_sha256_for",
 ]

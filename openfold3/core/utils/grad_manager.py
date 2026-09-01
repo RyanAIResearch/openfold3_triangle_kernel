@@ -25,6 +25,39 @@ from openfold3.core.utils.tensor_utils import tensor_tree_map
 
 logger = logging.getLogger(__name__)
 
+_GRAD_REDUCE_BUCKET_BYTES = 64 * 1024 * 1024
+_FLOAT32_BYTES = 4
+
+
+def _bucket_tensors_by_numel(
+    tensors: list[torch.Tensor], max_float32_bytes: int
+) -> list[list[torch.Tensor]]:
+    """Partition tensors in parameter order for bounded FP32 reductions.
+
+    A tensor larger than the target occupies a bucket by itself and is sliced
+    by the reduction loop.
+    """
+
+    max_numel = max(1, max_float32_bytes // _FLOAT32_BYTES)
+    buckets: list[list[torch.Tensor]] = []
+    current: list[torch.Tensor] = []
+    current_numel = 0
+    for tensor in tensors:
+        tensor_numel = tensor.numel()
+        if current and current_numel + tensor_numel > max_numel:
+            buckets.append(current)
+            current = []
+            current_numel = 0
+        current.append(tensor)
+        current_numel += tensor_numel
+        if current_numel >= max_numel:
+            buckets.append(current)
+            current = []
+            current_numel = 0
+    if current:
+        buckets.append(current)
+    return buckets
+
 
 @torch.no_grad()
 def compute_global_norm(
@@ -103,7 +136,7 @@ class PerSampleGradManager:
         self._max_norm_tensor = None
 
     def setup(
-        self, model: torch.nn.Module, trainer: "pl.Trainer", logger: "pl.loggers.Logger"
+        self, model: torch.nn.Module, trainer: pl.Trainer, logger: pl.loggers.Logger
     ):
         """
         Initializes the gradient accumulator and links essential components.
@@ -164,9 +197,10 @@ class PerSampleGradManager:
         if self.max_grad_norm is None:
             return
 
-        self.log_outlier_samples(
-            logging_info=logging_info, global_norm=global_norm.item()
-        )
+        if logging_info is not None and self._trainer.global_step > 1000:
+            self.log_outlier_samples(
+                logging_info=logging_info, global_norm=global_norm.item()
+            )
 
         # Clip norm and compute rescale factor
         # Note: We use maximum here to avoid CPU <-> GPU synchronization that can
@@ -221,22 +255,78 @@ class PerSampleGradManager:
             torch.tensor(local_counts, device=self.device), reduce_op=dist.ReduceOp.SUM
         )
 
-        # Reduce gradients (flatten -> reduce -> unflatten)
-        flat_grad = _flatten_dense_tensors(grads).float()
-        reduced_flat = self._trainer.strategy.reduce(
-            flat_grad, reduce_op=dist.ReduceOp.SUM
-        )
-        summed_grads = _unflatten_dense_tensors(reduced_flat, grads)
+        if int(self._trainer.world_size) == 1:
+            # Preserve the qualified single-GPU execution path byte-for-byte;
+            # distributed bucketing is intentionally scoped to world_size > 1.
+            flat_grad = _flatten_dense_tensors(grads).float()
+            reduced_flat = self._trainer.strategy.reduce(
+                flat_grad, reduce_op=dist.ReduceOp.SUM
+            )
+            summed_grads = _unflatten_dense_tensors(reduced_flat, grads)
+            for index, (parameter, summed_grad) in enumerate(
+                zip(params, summed_grads)
+            ):
+                count = global_active_counts[index]
+                if count > 0:
+                    parameter.grad.copy_(summed_grad / count)
+                else:
+                    parameter.grad.zero_()
+            return
 
-        # Average grads by active counts
-        for i, (p, summed_grad) in enumerate(zip(params, summed_grads)):
-            count = global_active_counts[i]
-            if count > 0:
-                # Average by actual sample count for that parameter
-                p.grad.copy_(summed_grad / count)
+        # Reduce fixed-order FP32 buckets.  Write each result back immediately
+        # so views do not retain every reduced flat buffer until the final
+        # parameter.  Oversized tensors are sliced to preserve the same memory
+        # bound.  This changes collective boundaries, so equivalence is
+        # numerical rather than cross-protocol bitwise.
+        max_numel = _GRAD_REDUCE_BUCKET_BYTES // _FLOAT32_BYTES
+        param_offset = 0
+        for grad_bucket in _bucket_tensors_by_numel(
+            grads, _GRAD_REDUCE_BUCKET_BYTES
+        ):
+            bucket_size = len(grad_bucket)
+            bucket_params = params[param_offset : param_offset + bucket_size]
+            bucket_counts = global_active_counts[
+                param_offset : param_offset + bucket_size
+            ]
+            if bucket_size == 1 and grad_bucket[0].numel() > max_numel:
+                grad_flat = grad_bucket[0].reshape(-1)
+                output_flat = bucket_params[0].grad.reshape(-1)
+                count = bucket_counts[0]
+                for start in range(0, grad_flat.numel(), max_numel):
+                    stop = min(start + max_numel, grad_flat.numel())
+                    reduced = self._trainer.strategy.reduce(
+                        grad_flat[start:stop].float(),
+                        reduce_op=dist.ReduceOp.SUM,
+                    )
+                    denominator = count.clamp_min(1).to(dtype=reduced.dtype)
+                    active = (count > 0).to(dtype=reduced.dtype)
+                    output_flat[start:stop].copy_(
+                        (reduced / denominator) * active
+                    )
+                    del reduced
             else:
-                # No samples used this parameter globally
-                p.grad.zero_()
+                flat_grad = _flatten_dense_tensors(grad_bucket).float()
+                reduced_flat = self._trainer.strategy.reduce(
+                    flat_grad, reduce_op=dist.ReduceOp.SUM
+                )
+                summed_views = _unflatten_dense_tensors(
+                    reduced_flat, grad_bucket
+                )
+                for p, summed_grad, count in zip(
+                    bucket_params, summed_views, bucket_counts
+                ):
+                    # Keep this branch on device.  Python ``if count > 0``
+                    # performs one GPU-to-host sync per parameter.
+                    denominator = count.clamp_min(1).to(dtype=summed_grad.dtype)
+                    active = (count > 0).to(dtype=summed_grad.dtype)
+                    p.grad.copy_((summed_grad / denominator) * active)
+                del flat_grad, reduced_flat, summed_views
+            param_offset += bucket_size
+
+        if param_offset != len(params):
+            raise RuntimeError(
+                "gradient bucket traversal did not consume every parameter"
+            )
 
     @torch.no_grad()
     def clip_and_accumulate(

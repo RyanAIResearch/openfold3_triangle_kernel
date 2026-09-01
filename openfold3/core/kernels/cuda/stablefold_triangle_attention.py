@@ -15,10 +15,13 @@ Internal layout [*, O, H, N, D]; the public return is contiguous
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import torch
+
+from openfold3.core.utils.distributed_contract import (
+    stablefold_distributed_execution_flag,
+)
 
 _PAD_HEAD_LANES = (16, 32, 64)               # any D pads up to the next lane
 _CAPABILITY_CACHE: dict = {}
@@ -246,11 +249,16 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
             )
             lse = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
             shadow = None
-            if (
-                os.environ.get("OPENFOLD3_SR_BACKWARD") == "1"
-                and os.environ.get("OPENFOLD3_SR_SHADOW") == "1"
+            use_sr = (
+                stablefold_distributed_execution_flag("OPENFOLD3_SR_BACKWARD")
                 and q.shape[-2] % 64 == 0
                 and q.shape[-1] <= 64
+            )
+            if (
+                use_sr
+                and stablefold_distributed_execution_flag(
+                    "OPENFOLD3_SR_SHADOW"
+                )
             ):
                 # SR shadow lane: the forward also emits the BF16 rounding
                 # residual of the output, the compressed state that lets
@@ -270,6 +278,10 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
                 q, k, v, mask, expanded_bias, out, lse, shadow
             )
         ctx.has_shadow = shadow is not None
+        # Freeze the forward execution mode for this autograd context.  Reading
+        # the environment again in backward can otherwise select a different
+        # numerical path on one distributed rank.
+        ctx.use_sr = use_sr
         ctx.sequence = int(sequence)
         ctx.target_prefix = tuple(int(value) for value in target_prefix)
         ctx.bias_prefix = tuple(int(value) for value in bias_prefix)
@@ -281,20 +293,18 @@ class _StableFoldTriangleAttention(torch.autograd.Function):
         # Module-level lazy siblings: importing them binds no CUDA state (the
         # extensions load on first use), and hoisting keeps the per-call
         # backward free of import-machinery overhead.
+        from openfold3.core.kernels.cuda.stablefold_triangle_dkdv import (
+            stablefold_triangle_dkdv as dkdv,
+        )
         from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
             stablefold_reduce_broadcast_dbias,
             stablefold_triangle_dq_dbias,
-        )
-        from openfold3.core.kernels.cuda.stablefold_triangle_dkdv import (
-            stablefold_triangle_dkdv as dkdv,
         )
 
         saved = ctx.saved_tensors
         q, k, v, mask, expanded_bias, out, lse = saved[:7]
         shadow = saved[7] if getattr(ctx, "has_shadow", False) else None
-        use_sr = os.environ.get("OPENFOLD3_SR_BACKWARD") == "1" and (
-            q.shape[-2] % 64 == 0 and q.shape[-1] <= 64
-        )
+        use_sr = bool(ctx.use_sr)
         with torch.cuda.device(q.device):
             d_output = d_output.contiguous()
             delta = torch.empty_like(lse)

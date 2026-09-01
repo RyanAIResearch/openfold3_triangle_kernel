@@ -6,7 +6,7 @@ on:
     # labeled: run CI on public repo PRs only after the 'safe-to-test' label is applied
     types: [labeled, opened, synchronize]
   push:
-    branches: [sr/dq-warpgroup]
+    branches: [main]
   workflow_dispatch:
 
 jobs:

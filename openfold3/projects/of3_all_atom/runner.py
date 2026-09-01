@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
+import torch.distributed as dist
 from pytorch_lightning.strategies import DDPStrategy, DeepSpeedStrategy
 from torchmetrics import MeanMetric, MetricCollection, PearsonCorrCoef
 
@@ -72,6 +73,7 @@ warnings.filterwarnings(
 )
 
 REFERENCE_CONFIG_PATH = Path(__file__).parent.resolve() / "config/reference_config.yml"
+_DISTRIBUTED_STEP_LOSS_NAMES = {"loss", "diffusion_loss", "distogram_loss"}
 
 
 class OpenFold3AllAtom(ModelRunner):
@@ -99,6 +101,8 @@ class OpenFold3AllAtom(ModelRunner):
             )
             self.automatic_optimization = False
             self.log_lr = model_config.settings.manual_optimization.log_lr
+        self._distributed_loss_sums: dict[str, torch.Tensor] = {}
+        self._distributed_loss_counts: dict[str, int] = {}
 
     @property
     def version(self):
@@ -295,7 +299,13 @@ class OpenFold3AllAtom(ModelRunner):
             return metrics
 
     def _log(
-        self, loss_breakdown, batch, outputs, train=True, log_train_step_metrics=True
+        self,
+        loss_breakdown,
+        batch,
+        outputs,
+        train=True,
+        log_train_step_metrics=True,
+        distributed_step_losses: dict[str, torch.Tensor] | None = None,
     ):
         phase = "train" if train else "val"
 
@@ -316,9 +326,38 @@ class OpenFold3AllAtom(ModelRunner):
 
             # Only log steps for training
             if train and log_train_step_metrics:
+                is_distributed_canonical = (
+                    self.trainer.world_size > 1
+                    and loss_name in _DISTRIBUTED_STEP_LOSS_NAMES
+                )
+                if not is_distributed_canonical:
+                    self.log(
+                        metric_log_name,
+                        indiv_loss,
+                        on_step=True,
+                        on_epoch=False,
+                        logger=True,
+                        sync_dist=False,
+                    )
+
+        if train and log_train_step_metrics and self.trainer.world_size > 1:
+            if distributed_step_losses is None:
+                raise RuntimeError("canonical distributed step losses were not reduced")
+            for loss_name, global_loss in distributed_step_losses.items():
+                metric_log_name = f"{phase}/{loss_name}"
+                local_loss = loss_breakdown.get(loss_name)
+                if local_loss is not None:
+                    self.log(
+                        f"{metric_log_name}_rank_local",
+                        local_loss,
+                        on_step=True,
+                        on_epoch=False,
+                        logger=True,
+                        sync_dist=False,
+                    )
                 self.log(
                     metric_log_name,
-                    indiv_loss,
+                    global_loss,
                     on_step=True,
                     on_epoch=False,
                     logger=True,
@@ -347,6 +386,69 @@ class OpenFold3AllAtom(ModelRunner):
                     logger=True,
                     sync_dist=False,
                 )
+
+    def _accumulate_distributed_step_losses(self, loss_breakdown: dict) -> None:
+        if self.trainer.world_size <= 1:
+            return
+        if "loss" not in loss_breakdown:
+            raise RuntimeError("distributed loss receipt is missing total loss")
+        for name in sorted(_DISTRIBUTED_STEP_LOSS_NAMES):
+            if name not in loss_breakdown:
+                continue
+            value = loss_breakdown[name].detach().float()
+            if value.numel() != 1:
+                raise RuntimeError(
+                    f"distributed step loss {name} must be scalar, got {value.shape}"
+                )
+            if name not in self._distributed_loss_sums:
+                self._distributed_loss_sums[name] = torch.zeros_like(value)
+            self._distributed_loss_sums[name].add_(value)
+            self._distributed_loss_counts[name] = (
+                self._distributed_loss_counts.get(name, 0) + 1
+            )
+
+    def _finalize_distributed_step_losses(
+        self,
+    ) -> dict[str, torch.Tensor] | None:
+        if self.trainer.world_size <= 1:
+            return None
+        if self._distributed_loss_counts.get("loss", 0) < 1:
+            raise RuntimeError("distributed loss accumulator is empty")
+        names = sorted(_DISTRIBUTED_STEP_LOSS_NAMES)
+        device = self._distributed_loss_sums["loss"].device
+        payload = torch.stack(
+            [
+                self._distributed_loss_sums.get(
+                    name, torch.zeros((), device=device, dtype=torch.float32)
+                ).reshape(())
+                for name in names
+            ]
+            + [
+                torch.tensor(
+                    float(self._distributed_loss_counts.get(name, 0)),
+                    device=device,
+                    dtype=torch.float32,
+                )
+                for name in names
+            ]
+        )
+        reduced = self.trainer.strategy.reduce(
+            payload,
+            reduce_op=dist.ReduceOp.SUM,
+        )
+        reduced_sums = reduced[: len(names)]
+        reduced_counts = reduced[len(names) :]
+        active = (reduced_counts > 0).cpu().tolist()
+        result = {}
+        for index, name in enumerate(names):
+            if active[index]:
+                result[name] = reduced_sums[index] / reduced_counts[index]
+        self._reset_distributed_loss_accumulator()
+        return result
+
+    def _reset_distributed_loss_accumulator(self) -> None:
+        self._distributed_loss_sums = {}
+        self._distributed_loss_counts = {}
 
     def _is_opt_step_ready(self, batch_idx: int) -> bool:
         """
@@ -396,6 +498,9 @@ class OpenFold3AllAtom(ModelRunner):
             )
 
         example_feat = batch["token_mask"]
+        if len(self.ema.params) <= 1:
+            self.ema.init_params(self.model)
+
         if self.ema.device != example_feat.device:
             self.ema.to(example_feat.device)
 
@@ -442,6 +547,8 @@ class OpenFold3AllAtom(ModelRunner):
                 # Compute loss
                 loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
 
+                self._accumulate_distributed_step_losses(loss_breakdown)
+
                 self.manual_backward(loss)
 
                 disabled_params = self._get_sample_disabled_param_names(
@@ -454,6 +561,9 @@ class OpenFold3AllAtom(ModelRunner):
             if self._is_opt_step_ready(batch_idx):
                 # Average and sync grads
                 self.grad_manager.sync_and_average_grads()
+                distributed_step_losses = (
+                    self._finalize_distributed_step_losses()
+                )
 
                 self.grad_manager.log_average_grad_norm()
 
@@ -481,6 +591,7 @@ class OpenFold3AllAtom(ModelRunner):
                     outputs,
                     train=True,
                     log_train_step_metrics=True,
+                    distributed_step_losses=distributed_step_losses,
                 )
 
                 # Workaround for PL step logging issues. Avoids using
@@ -514,13 +625,17 @@ class OpenFold3AllAtom(ModelRunner):
             # Clear grad accumulator on error
             # Only really necessary if trainer is not reinitialized after exception
             self.grad_manager.reset_accumulator()
+            self._reset_distributed_loss_accumulator()
 
             raise
 
         return loss
 
-    def _training_step(self, batch):
+    def _training_step(self, batch, batch_idx):
         example_feat = batch["token_mask"]
+        if len(self.ema.params) <= 1:
+            self.ema.init_params(self.model)
+
         if self.ema.device != example_feat.device:
             self.ema.to(example_feat.device)
 
@@ -539,13 +654,28 @@ class OpenFold3AllAtom(ModelRunner):
             # Compute loss
             loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
 
-            self._log(loss_breakdown, batch, outputs)
+            if self.trainer.world_size > 1:
+                self._accumulate_distributed_step_losses(loss_breakdown)
+                ready = self._is_opt_step_ready(batch_idx)
+                distributed_step_losses = (
+                    self._finalize_distributed_step_losses() if ready else None
+                )
+                self._log(
+                    loss_breakdown,
+                    batch,
+                    outputs,
+                    log_train_step_metrics=ready,
+                    distributed_step_losses=distributed_step_losses,
+                )
+            else:
+                self._log(loss_breakdown, batch, outputs)
 
         except Exception:
             logger.exception(
                 f"Train step failed with pdb id {pdb_id} with "
                 f"preferred chain or interface {preferred_chain_or_interface}"
             )
+            self._reset_distributed_loss_accumulator()
             raise
 
         return loss
@@ -554,7 +684,7 @@ class OpenFold3AllAtom(ModelRunner):
         if self.per_sample_grad_clipping:
             return self._training_step_manual_clip(batch=batch, batch_idx=batch_idx)
 
-        return self._training_step(batch=batch)
+        return self._training_step(batch=batch, batch_idx=batch_idx)
 
     def eval_step(self, batch, batch_idx):
         pdb_id = batch["pdb_id"]
@@ -585,18 +715,17 @@ class OpenFold3AllAtom(ModelRunner):
             raise
 
     def on_validation_epoch_start(self):
-        # At the start of validation, load the EMA weights
+        # At the start of validation, load initialized EMA weights if available.
 
         assert self.cached_weights is None
 
-        # model.state_dict() contains references to model weights rather
-        # than copies. Therefore, we need to clone them before calling
-        # load_state_dict().
-        self.cached_weights = tensor_tree_map(
-            lambda t: t.detach().clone(), self.model.state_dict()
-        )
-
-        self.model.load_state_dict(self.ema.state_dict()["params"])
+        if len(self.ema.params) > 1:
+            # model.state_dict() contains references to model weights rather
+            # than copies. Therefore, clone them before load_state_dict().
+            self.cached_weights = tensor_tree_map(
+                lambda t: t.detach().clone(), self.model.state_dict()
+            )
+            self.model.load_state_dict(self.ema.state_dict()["params"])
 
     def on_before_optimizer_step(self, *args, **kwargs):
         """
@@ -829,9 +958,10 @@ class OpenFold3AllAtom(ModelRunner):
         self._log_epoch_metrics(metrics=self.val_losses)
         self._log_epoch_metrics(metrics=self.val_metrics, compute_model_selection=True)
 
-        # Restore the model weights to normal
-        self.model.load_state_dict(self.cached_weights)
-        self.cached_weights = None
+        # Restore the model weights if validation swapped in initialized EMA.
+        if self.cached_weights is not None:
+            self.model.load_state_dict(self.cached_weights)
+            self.cached_weights = None
 
         # Temp fix for val dataloader worker seg fault issues
         # TODO: Figure out why this is not being cleaned up properly
@@ -877,6 +1007,7 @@ class OpenFold3AllAtom(ModelRunner):
     def on_load_checkpoint(self, checkpoint):
         ema = checkpoint["ema"]
         self.ema.load_state_dict(ema)
+        self._restore_synced_generator_state(checkpoint)
 
     def _compute_confidence_scores(self, batch: dict, outputs: dict) -> dict:
         """Compute confidence metrics. This function is called during inference.

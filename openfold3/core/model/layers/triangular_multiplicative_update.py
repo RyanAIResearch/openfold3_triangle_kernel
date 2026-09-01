@@ -55,6 +55,14 @@ _STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
 
 def _route_stable_trimul(module, z, mask):
     """Return ``(selected, output)`` without swallowing fast-path failures."""
+    from openfold3.core.utils.distributed_contract import (
+        stablefold_distributed_strict_enabled,
+    )
+
+    # The callback audits environment drift collectively at batch boundaries;
+    # this hot-path getter only selects the immutable strict fallback policy.
+    strict = stablefold_distributed_strict_enabled()
+
     from openfold3.core.kernels.cuda.stablefold_trimul_support import (
         check_stable_trimul_support,
     )
@@ -66,6 +74,13 @@ def _route_stable_trimul(module, z, mask):
         )
 
         return True, _run_supported_stable_trimul(module, z, mask)
+
+    if strict and support.code != "sequence_stock_fallback":
+        raise RuntimeError(
+            "StableFold distributed strict route rejected a TriMul fallback "
+            f"for {type(module).__qualname__} at shape {tuple(z.shape)} "
+            f"[{support.code}]: {support.reason}"
+        )
 
     key = (type(module).__qualname__, support.code)
     if key not in _STABLEFOLD_TRIMUL_FALLBACK_LOGGED:

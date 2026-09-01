@@ -159,7 +159,9 @@ run_openfold train --runner-yaml training.yaml --seed 42
 
 ### 4.2 Multi-GPU Training
 
-To train on multiple GPUs within a single node, configure your YAML:
+OpenFold3 uses one DDP process per GPU. To train on multiple GPUs within a
+single node, configure your YAML and launch the command once; Lightning starts
+the local worker processes:
 
 ```yaml
 pl_trainer_args:
@@ -172,14 +174,79 @@ For multi-node distributed training, update your config as follows:
 ```yaml
 pl_trainer_args:
   devices: 8       # GPUs per node
-  num_nodes: 32    # Total number of nodes
+  num_nodes: 2     # Total number of nodes
 ```
 
-Then launch training with:
+Setting ``num_nodes`` does not start remote workers. Use a real multi-node
+launcher with one task per GPU. For example, under Slurm:
 
 ```bash
-run_openfold train --runner_yaml training.yaml --seed 42
+srun --nodes=2 --ntasks-per-node=8 --gres=gpu:8 --gpu-bind=closest \
+  --kill-on-bad-exit=1 \
+  run_openfold train --runner-yaml training.yaml --seed 42
 ```
+
+Or use ``torchrun`` on each node with the same rendezvous address and a unique
+``NODE_RANK``:
+
+```bash
+torchrun --no-python --nnodes=2 --nproc-per-node=8 \
+  --node-rank="${NODE_RANK}" --master-addr="${MASTER_ADDR}" \
+  --master-port="${MASTER_PORT}" "$(command -v run_openfold)" \
+  train --runner-yaml training.yaml --seed 42
+```
+
+The declared ``devices * num_nodes`` must exactly match the launcher world
+size. Training ``epoch_len`` must be divisible by that world size, and the
+per-rank step count must be divisible by gradient accumulation. Multi-node
+output, checkpoint, and dataset paths must be visible at the same paths on all
+nodes.
+
+#### StableFold distributed production contract
+
+The first qualified StableFold distributed target is homogeneous NVIDIA H100
+(``sm_90``), DDP with per-sample gradient clipping, local batch size one, and
+one process per GPU. The v1 lifecycle gate is qualified against
+PyTorch Lightning 2.6.1 and rejects other Lightning versions. Every node must
+install the same clean AOT wheel and use:
+
+```bash
+export OPENFOLD3_TRIANGLE_ALLOW_JIT=0
+export OPENFOLD3_SR_BACKWARD=1
+export OPENFOLD3_SR_SHADOW=1
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+```
+
+After NCCL initialization and before DDP wraps or broadcasts the model, all
+ranks preload the selected StableFold AOT
+modules and exchange their wheel manifest, binary hashes, ABI, GPU model,
+backend flags, complete runtime source-tree digest, checkpoint content hash,
+and physical device bindings. A mismatch makes every rank fail together.
+The rank-zero receipt is written to
+``<log_dir>/distributed_contract.json`` with a SHA-256 sidecar. In strict mode,
+Attention fallbacks are errors; TriMul only permits its documented stock route
+for sequence lengths at or below 100.
+
+The operator flag ``use_deepspeed_evo_attention`` is compatible with DDP and is
+not the same as Lightning's DeepSpeed/ZeRO strategy. StableFold distributed v1
+rejects ``deepspeed_config_path`` and configurations that disable per-sample
+gradient clipping; Lightning DeepSpeedStrategy/ZeRO and automatic DDP with
+sample-dependent unused parameters require separate qualification.
+
+Distributed v1 accepts either a fresh run or an explicit immutable single-file
+checkpoint. It hashes the checkpoint on every rank before training. The
+Lightning aliases ``last``, ``hpc``, and ``registry`` and DeepSpeed checkpoint
+directories are deliberately rejected until their resolved artifacts can be
+sealed unambiguously. A distributed full-state resume also requires
+``synced_generator_state``. This preserves the recycle RNG; it is not yet a
+claim of bitwise trajectory-equivalent resume for every Python, NumPy, Torch,
+and CUDA random stream.
+
+For distributed training, canonical step metrics such as ``train/loss`` are
+the effective optimizer-step means reduced across ranks and accumulated
+microbatches. The last rank-local microbatch is logged separately with the
+``_rank_local`` suffix. Optional losses with zero active samples are omitted
+instead of being reported as zero.
 
 ## 5. Monitoring Training
 
@@ -231,6 +298,12 @@ To resume from a specific checkpoint:
 experiment_settings:
   restart_checkpoint_path: /path/to/checkpoint.ckpt
 ```
+
+StableFold distributed production v1 accepts either a fresh run or one explicit,
+immutable single-file Lightning checkpoint. It rejects the `last`, `hpc`, and
+`registry` aliases, DeepSpeed checkpoint directories, manual checkpoint loading,
+and `preemption_safe_resume`; every rank independently hashes the exact checkpoint
+bytes before the first training step.
 
 ## 7. Fine-tuning
 
