@@ -107,9 +107,10 @@ The installed full backend is compiler-free: both Triangle Attention and
 TriMul are loaded from the attested wheel, and production should keep
 `OPENFOLD3_TRIANGLE_ALLOW_JIT` unset or set to `0`.
 
-For a three-step bare-metal path covering data, compilation, backend selection,
-and multi-node launch, see
-[Bare-metal distributed quickstart](docs/source/bare_metal_distributed_quickstart.md).
+For an end-to-end bare-metal path covering clone, data, compilation, backend
+selection, single-GPU training, single-node DDP, and multi-node launch—with
+three plain-English sentences per step—see
+[Bare-metal training quickstart](docs/source/bare_metal_distributed_quickstart.md).
 
 ## 3. Enable StableFold
 

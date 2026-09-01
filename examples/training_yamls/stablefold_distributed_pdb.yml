@@ -2,11 +2,14 @@ experiment_settings:
   mode: train
   output_dir: /mnt/shared/openfold3/runs/stablefold
   restart_checkpoint_path: null
+  preemption_safe_resume: false
+  ckpt_load_settings:
+    manual_checkpoint_loading: false
   seed: 42
 
 data_module_args:
   batch_size: 1
-  num_workers: 16
+  num_workers: 4
   epoch_len: 128000
 
 logging_config:
@@ -55,7 +58,7 @@ dataset_configs:
       dataset_class: WeightedPDBDataset
       weight: 1.0
       config:
-        debug_mode: true
+        debug_mode: false
         template:
           n_templates: 4
           take_top_k: false
@@ -73,7 +76,7 @@ dataset_configs:
     val-weighted-pdb:
       dataset_class: ValidationPDBDataset
       config:
-        debug_mode: true
+        debug_mode: false
         msa:
           subsample_main: false
         template:

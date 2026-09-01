@@ -1,3 +1,4 @@
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -65,13 +66,47 @@ def test_rejects_epoch_len_that_cannot_be_sharded(base_config):
         )
 
 
-def test_distributed_example_is_schema_valid(tmp_path):
+@pytest.mark.parametrize("backend", tuple(BACKEND_FLAGS))
+@pytest.mark.parametrize(
+    ("devices_per_node", "num_nodes"),
+    ((1, 1), (8, 1), (8, 2)),
+)
+def test_training_quickstart_topologies_are_schema_valid(
+    tmp_path,
+    backend,
+    devices_per_node,
+    num_nodes,
+):
     config = yaml.safe_load(
         (
             REPOSITORY / "examples/training_yamls/stablefold_distributed_pdb.yml"
         ).read_text()
     )
-    config["experiment_settings"]["output_dir"] = str(tmp_path / "run")
+    config = configure_training_backend(
+        config,
+        backend=backend,
+        output_dir=str(tmp_path / f"{backend}-{devices_per_node}x{num_nodes}"),
+        devices_per_node=devices_per_node,
+        num_nodes=num_nodes,
+        epoch_len=128000,
+        fresh=True,
+    )
+    assert config["data_module_args"]["num_workers"] == 4
+    assert config["experiment_settings"]["preemption_safe_resume"] is False
+    assert (
+        config["experiment_settings"]["ckpt_load_settings"]["manual_checkpoint_loading"]
+        is False
+    )
+    assert (
+        config["dataset_configs"]["train"]["weighted-pdb"]["config"]["debug_mode"]
+        is False
+    )
+    assert (
+        config["dataset_configs"]["validation"]["val-weighted-pdb"]["config"][
+            "debug_mode"
+        ]
+        is False
+    )
 
     shared_paths = {
         "alignment_array_directory": tmp_path / "alignment_arrays",
@@ -89,3 +124,16 @@ def test_distributed_example_is_schema_valid(tmp_path):
         dataset_paths.update({key: str(path) for key, path in shared_paths.items()})
 
     TrainingExperimentConfig.model_validate(config)
+
+
+def test_training_quickstart_has_three_sentences_per_step():
+    quickstart = (
+        REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
+    ).read_text()
+    sections = re.split(r"(?m)^## (?=\d+\.)", quickstart)[1:]
+    assert len(sections) == 8
+    for section in sections:
+        prose = section.split("```bash", maxsplit=1)[0].splitlines()[1:]
+        sentences = [line for line in prose if line]
+        assert len(sentences) == 3
+        assert all(sentence.endswith(".") for sentence in sentences)
