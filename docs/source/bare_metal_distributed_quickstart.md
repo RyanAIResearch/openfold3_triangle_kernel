@@ -50,7 +50,7 @@ unset PYTHONPATH PYTHONHOME LD_PRELOAD
 pixi install -e openfold3-h100
 pixi run -e openfold3-h100 setup-stablefold-h100
 
-# Every host.
+# Every host: check the environment.
 pixi run -e openfold3-h100 doctor-h100
 pixi run -e openfold3-h100 verify-aot
 ```
