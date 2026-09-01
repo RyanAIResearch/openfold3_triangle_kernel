@@ -20,6 +20,7 @@
 #                     On Apple Silicon the same conda-forge pytorch always ships Metal (MPS)
 #                     support, so this environment is not CPU-only there.
 #   - openfold3-cuda12 and openfold-cuda13: environments with cuda, deepspeed and cuequivariance
+#   - openfold3-h100: pinned, non-editable StableFold H100 build and training workflow
 #   - openfold3-cuda12-pypi and openfold-cuda13-pypi: environments with python and cuda from conda,
 #                                                     everything else from pypi
 #                                                     keeping the environments as sane and consistent as possible
@@ -126,6 +127,16 @@ openfold3-cuda12 = { no-default-feature = true, features = [
     "cuequivariance-cuda12",
     "openfold3-editable",
     "tests"
+] }
+openfold3-h100 = { no-default-feature = true, features = [
+    "python",
+    "openfold3-base",
+    "cuda12",
+    "pytorch-conda-cuda",
+    "deepspeed",
+    "deepspeed-build",
+    "cuequivariance-cuda12",
+    "stablefold-h100",
 ] }
 openfold3-cuda13 = { no-default-feature = true, features = [
     "python",
@@ -414,6 +425,77 @@ cuequivariance-ops-torch-cu12 = ">=0.8"
 cuequivariance = ">=0.8"
 cuequivariance-torch = ">=0.8"
 cuequivariance-ops-torch-cu13 = ">=0.8"
+
+
+# --- StableFold H100 production-candidate workflow
+
+[feature.stablefold-h100]
+platforms = ["linux-64-cuda12"]
+
+[feature.stablefold-h100.dependencies]
+python = "3.14.*"
+pytorch-gpu = "==2.10.0"
+pytorch-lightning = "==2.6.1"
+cuda-version = "12.9.*"
+setuptools = "*"
+setuptools-scm = ">=8"
+wheel = "*"
+
+[feature.stablefold-h100.activation]
+env.PYTHONNOUSERSITE = "1"
+env.PYTHONDONTWRITEBYTECODE = "1"
+env.OPENFOLD3_TRIANGLE_ALLOW_JIT = "0"
+env.OPENFOLD3_SR_BACKWARD = "1"
+env.OPENFOLD3_SR_SHADOW = "1"
+
+[feature.stablefold-h100.tasks]
+doctor-h100.cmd = ["python", "-m", "tools.production_training", "doctor-h100"]
+prepare-training-data.cmd = [
+    "python",
+    "-m",
+    "tools.production_training",
+    "prepare-training-data",
+]
+build-install-aot.cmd = [
+    "python",
+    "-m",
+    "tools.manage_attested_sm90_wheel",
+    "build-install",
+    "--copy-to",
+    "/mnt/shared/openfold3/artifacts",
+]
+install-aot.cmd = [
+    "python",
+    "-m",
+    "tools.manage_attested_sm90_wheel",
+    "install",
+    "--artifact-dir",
+    "/mnt/shared/openfold3/artifacts",
+]
+verify-aot.cmd = [
+    "python",
+    "-m",
+    "tools.manage_attested_sm90_wheel",
+    "verify",
+    "--artifact-dir",
+    "/mnt/shared/openfold3/artifacts",
+]
+select-training-backend.cmd = ["python", "-m", "tools.select_training_backend"]
+train-single-gpu.cmd = [
+    "bash",
+    "tools/run_official_training.sh",
+    "run_openfold",
+]
+train-single-node.cmd = [
+    "bash",
+    "tools/run_official_training.sh",
+    "run_openfold",
+]
+train-multinode.cmd = [
+    "bash",
+    "tools/run_official_training.sh",
+    "torchrun",
+]
 
 
 # --- Openfold3 style MSA generation

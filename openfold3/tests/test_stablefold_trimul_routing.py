@@ -22,6 +22,9 @@ from openfold3.core.model.layers.triangular_multiplicative_update import (
     TriangleMultiplicationIncoming,
     TriangleMultiplicationOutgoing,
 )
+from openfold3.core.utils.distributed_contract import (
+    _set_stablefold_distributed_strict,
+)
 
 
 def _nondegenerate(module):
@@ -199,6 +202,42 @@ def test_fallback_warning_is_logged_once(caplog):
     ]
     assert len(records) == 1
     assert "[channels]" in records[0].message
+
+
+def test_strict_ddp_route_allows_short_n_but_rejects_unexpected_fallback():
+    module = TriangleMultiplicationOutgoing(8, 8)
+    z = torch.randn((1, 3, 3, 8))
+    environment = {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1",
+        "OPENFOLD3_TRIANGLE_ALLOW_JIT": "0",
+    }
+    _set_stablefold_distributed_strict(True, environment)
+    try:
+        short_n = SupportResult(
+            False,
+            "sequence_stock_fallback",
+            "declared fixed stock route",
+        )
+        with patch(
+            "openfold3.core.kernels.cuda.stablefold_trimul_support."
+            "check_stable_trimul_support",
+            return_value=short_n,
+        ):
+            assert tmu._route_stable_trimul(module, z, None) == (False, None)
+
+        unexpected = SupportResult(False, "channels", "synthetic rejection")
+        with (
+            patch(
+                "openfold3.core.kernels.cuda.stablefold_trimul_support."
+                "check_stable_trimul_support",
+                return_value=unexpected,
+            ),
+            pytest.raises(RuntimeError, match="strict route rejected"),
+        ):
+            tmu._route_stable_trimul(module, z, None)
+    finally:
+        _set_stablefold_distributed_strict(False)
 
 
 _EXPECTED_RELEASE_FIELDS = frozenset(

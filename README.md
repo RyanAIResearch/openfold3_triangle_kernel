@@ -15,11 +15,17 @@ backward without changing the public BF16 output.
 
 > **Status: internal preview / production candidate, not GA.** Use a feature
 > flag and retain the stock or cuEquivariance route as a rollback. Single-H100
-> BF16 training with local batch size 1 is validated; the fail-closed DDP and
-> multi-node implementation is available, but real 2-GPU and 2-node hardware
-> qualification is still pending. H200, FSDP, `torch.compile`, Lightning
+> BF16 training with local batch size 1 is validated; a kernel-only DDP
+> preflight is available, but real 2-GPU and 2-node hardware qualification is
+> still pending. DDP, multi-node launch, EMA, gradients, checkpoints, losses,
+> and logging remain the pinned AQLab implementation. H200, FSDP,
+> `torch.compile`, Lightning
 > DeepSpeedStrategy/ZeRO, and local batch sizes greater than 1 are not part of
 > this release claim.
+
+The wheel checksum and attestation are reproducibility and integrity records,
+not an external signature or Sigstore provenance chain; this preview assumes
+the GitHub repository, build host, and shared artifact storage are trusted.
 
 ## Validated result
 
@@ -44,82 +50,72 @@ The prebuilt Triangle Attention extensions contain Hopper-specific SASS and no
 PTX fallback. An ABI or device mismatch is an error, not a reason to load the
 binary anyway.
 
-## 1. Clone the canonical source
+## Pixi production workflow
 
-This is a private repository. Ask the maintainer to grant access to your GitHub
-account and authenticate with GitHub before cloning. The repository intentionally
-has one maintained branch. Clone it into a fresh environment rather than
-installing it over a locally modified OpenFold3 tree:
+Clone the maintained `main` branch into a clean checkout:
 
 ```bash
-git clone https://github.com/RyanAIResearch/openfold3_triangle_kernel.git
-cd openfold3_triangle_kernel
+mkdir -p /mnt/shared/openfold3
+git clone --branch main --single-branch \
+  https://github.com/RyanAIResearch/openfold3_triangle_kernel.git \
+  /mnt/shared/openfold3/src
+cd /mnt/shared/openfold3/src
 git rev-parse HEAD
+test -z "$(git status --porcelain=v1)"
 ```
 
-For a reproducible run, record the printed commit and do not pull while a
-campaign is active.
-
-## 2. Install
-
-### Option A: install an attested internal H100 wheel
-
-Binary artifacts are not stored in this Git repository. If the maintainer sent
-you an internal release bundle, it must contain:
-
-```text
-openfold3-*.whl
-openfold3-*.whl.sha256
-openfold3-*.whl.attestation.json
-aot_clean_install_smoke.json
-```
-
-Verify and install it in an environment that already contains the complete
-OpenFold3 dependency set and the exact Python/Torch/CUDA ABI listed above:
+Create the locked, non-editable H100 environment and let the checked-in Pixi
+tasks prepare the published PDB portion and build all five AOT extensions;
+provision the other datasets named by AQLab's official recipe before training:
 
 ```bash
-sha256sum --check openfold3-*.whl.sha256
-python -m pip install --no-deps --force-reinstall openfold3-*.whl
+curl -fsSL https://pixi.sh/install.sh | sh
+export PATH="$HOME/.pixi/bin:$PATH"
+pixi install --locked -e openfold3-h100
+pixi run --locked -e openfold3-h100 prepare-training-data
+pixi run --locked -e openfold3-h100 doctor-h100
+pixi run --locked -e openfold3-h100 build-install-aot
+pixi run --as-is -e openfold3-h100 verify-aot
 ```
 
-The wheel owns five AOT extensions: Triangle Attention forward, delta, `dK/dV`,
-and `dQ/dBias`, plus Triangle Multiplicative Update. Production runtime does not
-invoke NVCC or silently fall back to JIT. If you received only the GitHub link
-and no binary bundle, use the source-build route below.
-
-### Option B: build the H100 wheel from this repository
-
-Only build from a clean committed checkout in the exact Python/Torch/CUDA
-environment above:
+Copy and explicitly configure AQLab's official runner YAML, choose one backend,
+and start with one H100:
 
 ```bash
-export CUDA_HOME=/path/to/cuda-12.9
-export CUDACXX="$CUDA_HOME/bin/nvcc"
-tools/build_sm90_wheel.sh
-python -m pip install --no-deps --force-reinstall dist/openfold3-*.whl
+export BACKEND=stablefold  # aqlab | cueq | stablefold | deepspeed-evo
+export OF3_RUN_CWD=/mnt/shared/openfold3/run
+mkdir -p "$OF3_RUN_CWD"
+cp examples/training_yamls/initial_training.yml "$OF3_RUN_CWD/base.yml"
+${EDITOR:-vi} "$OF3_RUN_CWD/base.yml"
+pixi run --as-is -e openfold3-h100 select-training-backend \
+  "$OF3_RUN_CWD/base.yml" --backend "$BACKEND" \
+  --output "$OF3_RUN_CWD/train.${BACKEND}.yml"
+pixi run --as-is -e openfold3-h100 train-single-gpu \
+  train --runner-yaml "$OF3_RUN_CWD/train.${BACKEND}.yml" --seed 42
 ```
 
-The builder clones the exact commit into a temporary directory, produces all
-five `sm_90a` extensions, attests their symbols and SASS, and runs a
-compiler-free Attention and TriMul forward/backward smoke test.
-
-The installed full backend is compiler-free: both Triangle Attention and
-TriMul are loaded from the attested wheel, and production should keep
-`OPENFOLD3_TRIANGLE_ALLOW_JIT` unset or set to `0`.
+The production Pixi environment deliberately contains no editable OpenFold3
+dependency. The build task emits and installs one attested wheel, while every
+training task checks that the installed package, Git commit, ABI, embedded
+manifest, and five extension hashes still match before launching outside the
+source checkout. The task then directly executes AQLab `run_openfold` or
+standard `torchrun`; it does not replace any training, strategy, checkpoint,
+logging, or loss behavior. StableFold runtime is compiler-free and keeps JIT
+disabled, while the selector changes only the training kernel-route flags.
 
 For an end-to-end bare-metal path covering clone, data, compilation, backend
 selection, single-GPU training, single-node DDP, and multi-node launch—with
 three plain-English sentences per step—see
 [Bare-metal training quickstart](docs/source/bare_metal_distributed_quickstart.md).
 
-## 3. Enable StableFold
+## Enable StableFold manually
 
 Set the SR-R backward contract before starting Python:
 
 ```bash
 export OPENFOLD3_SR_BACKWARD=1
 export OPENFOLD3_SR_SHADOW=1
-unset OPENFOLD3_TRIANGLE_ALLOW_JIT
+export OPENFOLD3_TRIANGLE_ALLOW_JIT=0
 ```
 
 `OPENFOLD3_SR_SHADOW=1` stores a BF16 rounding residual in the forward and uses

@@ -1,7 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU multi-process regressions for the distributed production contract."""
+"""CPU multi-process tests for the StableFold kernel DDP preflight."""
 
 from __future__ import annotations
 
@@ -17,32 +17,8 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from pytorch_lightning.strategies import DDPStrategy
-from torch.nn.parallel import DistributedDataParallel
 
 import openfold3.core.utils.distributed_contract as contract
-import openfold3.core.utils.grad_manager as grad_manager_module
-from openfold3.core.utils.exponential_moving_average import ExponentialMovingAverage
-from openfold3.core.utils.grad_manager import PerSampleGradManager
-from openfold3.projects.of3_all_atom.runner import OpenFold3AllAtom
-
-_CONTRACT_SHA256 = "c" * 64
-
-
-class _ReduceStrategy:
-    @staticmethod
-    def reduce(tensor: torch.Tensor, reduce_op: dist.ReduceOp) -> torch.Tensor:
-        dist.all_reduce(tensor, op=reduce_op)
-        return tensor
-
-
-class _ToyModel(torch.nn.Module):
-    def __init__(self, rank: int) -> None:
-        super().__init__()
-        self.all_samples = torch.nn.Parameter(torch.tensor([float(rank + 1)]))
-        self.sparse = torch.nn.Parameter(torch.tensor([float(10 + rank)]))
-        self.never = torch.nn.Parameter(torch.tensor([float(20 + rank)]))
-        self.oversized = torch.nn.Parameter(torch.arange(9, dtype=torch.float32))
-        self.register_buffer("version_tensor", torch.tensor([1, 0, 0]))
 
 
 def _init_gloo(rank: int, world_size: int, rendezvous: str) -> None:
@@ -55,126 +31,14 @@ def _init_gloo(rank: int, world_size: int, rendezvous: str) -> None:
     )
 
 
-def _ema_and_grad_worker(rank: int, world_size: int, rendezvous: str) -> None:
-    _init_gloo(rank, world_size, rendezvous)
-    try:
-        # EMA is deliberately constructed before DDP, matching OpenFold3.
-        model = _ToyModel(rank)
-        ema = ExponentialMovingAverage(model, decay=0.99)
-        assert set(ema.params) == {"version_tensor"}
-
-        ddp = DistributedDataParallel(model)
-        ema.init_params(ddp.module)
-        weight = ddp.module.all_samples.detach().clone()
-        gathered_weights = [torch.empty_like(weight) for _ in range(world_size)]
-        dist.all_gather(gathered_weights, weight)
-        assert all(
-            torch.equal(value, gathered_weights[0]) for value in gathered_weights
-        )
-        assert torch.equal(ema.params["all_samples"], gathered_weights[0])
-
-        manager = PerSampleGradManager(
-            gradient_clip_val=None,
-            accumulate_grad_batches=1,
-            log_grad_norm=False,
-        )
-        trainer = SimpleNamespace(
-            strategy=_ReduceStrategy(),
-            global_rank=rank,
-            global_step=0,
-            world_size=world_size,
-        )
-        manager.setup(ddp.module, trainer, logger=None)
-        manager.accum_count = 1
-        # Force a four-float bucket so ``oversized`` exercises sliced reduction.
-        grad_manager_module._GRAD_REDUCE_BUCKET_BYTES = 4 * 4
-
-        # all_samples is active on both ranks; sparse only on rank 0; never is
-        # inactive globally. This exercises per-parameter active counts.
-        manager.grad_accumulator["all_samples"].fill_(1.0 if rank == 0 else 3.0)
-        manager.parameter_participation_counts["all_samples"] = 1
-        manager.grad_accumulator["oversized"].fill_(
-            2.0 if rank == 0 else 4.0
-        )
-        manager.parameter_participation_counts["oversized"] = 1
-        if rank == 0:
-            manager.grad_accumulator["sparse"].fill_(10.0)
-            manager.parameter_participation_counts["sparse"] = 1
-        manager.sync_and_average_grads()
-
-        assert torch.equal(ddp.module.all_samples.grad, torch.tensor([2.0]))
-        assert torch.equal(ddp.module.sparse.grad, torch.tensor([10.0]))
-        assert torch.equal(ddp.module.never.grad, torch.tensor([0.0]))
-        assert torch.equal(ddp.module.oversized.grad, torch.full((9,), 3.0))
-    finally:
-        dist.destroy_process_group()
-
-
-class _LossHarness:
-    _accumulate_distributed_step_losses = (
-        OpenFold3AllAtom._accumulate_distributed_step_losses
-    )
-    _finalize_distributed_step_losses = (
-        OpenFold3AllAtom._finalize_distributed_step_losses
-    )
-    _reset_distributed_loss_accumulator = (
-        OpenFold3AllAtom._reset_distributed_loss_accumulator
-    )
-
-    def __init__(self, rank: int, world_size: int) -> None:
-        self.trainer = SimpleNamespace(
-            global_rank=rank,
-            world_size=world_size,
-            strategy=_ReduceStrategy(),
-        )
-        self._reset_distributed_loss_accumulator()
-
-
-def _loss_worker(rank: int, world_size: int, rendezvous: str) -> None:
-    _init_gloo(rank, world_size, rendezvous)
-    try:
-        harness = _LossHarness(rank, world_size)
-        microbatches = (
-            [
-                {"loss": 1.0, "diffusion_loss": 2.0, "distogram_loss": 3.0},
-                {"loss": 3.0, "diffusion_loss": 4.0},
-            ]
-            if rank == 0
-            else [
-                {"loss": 9.0, "distogram_loss": 11.0}
-            ]
-        )
-        for values in microbatches:
-            harness._accumulate_distributed_step_losses(
-                {name: torch.tensor(value) for name, value in values.items()}
-            )
-        result = harness._finalize_distributed_step_losses()
-        assert result is not None
-        expected = {
-            "loss": 13.0 / 3.0,
-            "diffusion_loss": 6.0 / 2.0,
-            "distogram_loss": 14.0 / 2.0,
-        }
-        for name, value in expected.items():
-            assert torch.allclose(result[name], torch.tensor(value))
-        assert harness._distributed_loss_sums == {}
-        assert harness._distributed_loss_counts == {}
-
-        packed = torch.stack([result[name] for name in sorted(result)])
-        gathered = [torch.empty_like(packed) for _ in range(world_size)]
-        dist.all_gather(gathered, packed)
-        assert all(torch.equal(item, gathered[0]) for item in gathered)
-    finally:
-        dist.destroy_process_group()
-
-
-def _rank_record(rank: int, *, fail: bool = False) -> dict:
-    if fail:
+def _kernel_record(rank: int, failure_mode: str | None) -> dict:
+    if failure_mode == "rank1_aot_load" and rank == 1:
         return {
             "ok": False,
             "global_rank": rank,
-            "error": "AOTExtensionError: injected rank failure",
+            "error": "AOTExtensionError: injected rank-local load failure",
         }
+    aot_digest = "f" * 64 if failure_mode == "aot_mismatch" and rank == 1 else "a" * 64
     return {
         "ok": True,
         "global_rank": rank,
@@ -182,9 +46,14 @@ def _rank_record(rank: int, *, fail: bool = False) -> dict:
         "node_rank": 0,
         "hostname": "node-a",
         "cuda_visible_devices": "0,1",
-        "declared_world_size": 2,
-        "declared_num_nodes": 1,
-        "declared_devices_per_node": 2,
+        "expected_world_size": 2,
+        "expected_num_nodes": 1,
+        "expected_devices_per_node": 2,
+        "declared_aot_modules": [
+            "stablefold_trimul"
+            if failure_mode == "declared_mismatch" and rank == 1
+            else "stablefold_forward"
+        ],
         "trainer_world_size": 2,
         "process_group_rank": rank,
         "process_group_world_size": 2,
@@ -202,20 +71,24 @@ def _rank_record(rank: int, *, fail: bool = False) -> dict:
             "OPENFOLD3_SR_BACKWARD": "1",
             "OPENFOLD3_SR_SHADOW": "1",
             "OPENFOLD3_TRIANGLE_ALLOW_JIT": "0",
-            "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
         },
         "runtime_identity": {
             "python": "3.14.4",
             "torch": "2.10.0",
             "torch_cuda": "12.9",
             "lightning": "2.6.1",
-            "nccl": [2, 30, 4],
-            "source_sha256": {"distributed_contract.py": "d" * 64},
+            "nccl": [2, 28, 9],
+            "installed_distribution": {
+                "name": "openfold3",
+                "version": "3.0.0",
+                "installed_package_tree_sha256": "b" * 64,
+            },
         },
-        "training_contract_sha256": _CONTRACT_SHA256,
-        "checkpoint_identity": {"kind": "fresh", "sha256": None},
         "required_aot_modules": ["stablefold_forward"],
-        "aot_identity": {"manifest_sha256": "a" * 64},
+        "aot_identity": {
+            "manifest_sha256": aot_digest,
+            "modules": {"stablefold_forward": {"sha256": aot_digest}},
+        },
     }
 
 
@@ -227,44 +100,56 @@ def _callback_worker(
     failure_mode: str | None,
 ) -> None:
     _init_gloo(rank, world_size, rendezvous)
-    original_local_record = contract._local_rank_record
+    original_local_record = contract._local_kernel_record
     original_get_backend = contract.dist.get_backend
+    original_receipt_readback = contract._receipt_readback_status
     environment_names = (
         "OPENFOLD3_SR_BACKWARD",
         "OPENFOLD3_SR_SHADOW",
         "OPENFOLD3_TRIANGLE_ALLOW_JIT",
-        "TORCH_NCCL_ASYNC_ERROR_HANDLING",
     )
-    previous_environment = {
-        name: os.environ.get(name) for name in environment_names
-    }
+    previous_environment = {name: os.environ.get(name) for name in environment_names}
     try:
         os.environ.update(
             {
                 "OPENFOLD3_SR_BACKWARD": "1",
                 "OPENFOLD3_SR_SHADOW": "1",
                 "OPENFOLD3_TRIANGLE_ALLOW_JIT": "0",
-                "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
             }
         )
-        contract._local_rank_record = lambda *args, **kwargs: _rank_record(
-            rank,
-            fail=failure_mode == "rank1_aot" and rank == 1,
+        contract._local_kernel_record = lambda *args, **kwargs: _kernel_record(
+            rank, failure_mode
         )
-        # The production callback requires NCCL. Keep CPU/Gloo collectives while
-        # replacing only the identity query exercised by the gate.
-        contract.dist.get_backend = lambda: "nccl"
-        callback = contract.DistributedContractCallback(
+        # Keep CPU/Gloo collectives but present the qualified NCCL backend to
+        # the kernel identity gate.
+        contract.dist.get_backend = lambda *args, **kwargs: "nccl"
+        if (
+            failure_mode
+            in (
+                "rank1_receipt_readback",
+                "rank1_final_receipt_readback",
+            )
+            and rank == 1
+        ):
+            readback_calls = 0
+
+            def injected_readback(*args, **kwargs):
+                nonlocal readback_calls
+                readback_calls += 1
+                fail_on_call = 1 if failure_mode == "rank1_receipt_readback" else 2
+                if readback_calls == fail_on_call:
+                    return {
+                        "ok": False,
+                        "error": "injected rank-local receipt readback failure",
+                    }
+                return original_receipt_readback(*args, **kwargs)
+
+            contract._receipt_readback_status = injected_readback
+        callback = contract.StableFoldKernelDDPCallback(
             expected_world_size=world_size,
             expected_num_nodes=1,
             expected_devices_per_node=world_size,
-            expected_aot_modules=(
-                ("stablefold_trimul",)
-                if failure_mode == "module_scope"
-                else ("stablefold_forward",)
-            ),
-            training_contract_sha256=_CONTRACT_SHA256,
-            checkpoint_path=None,
+            expected_aot_modules=("stablefold_forward",),
             receipt_path=Path(receipt_path),
         )
         trainer = SimpleNamespace(
@@ -275,31 +160,31 @@ def _callback_worker(
             strategy=DDPStrategy(),
         )
 
-        caught_error = None
+        error = None
         try:
-            callback._run_preflight(trainer, SimpleNamespace())
-        except contract.DistributedContractError as error:
-            caught_error = str(error)
-        caught = torch.tensor(int(caught_error is not None))
-        dist.all_reduce(caught, op=dist.ReduceOp.SUM)
+            callback.setup(trainer, SimpleNamespace(), "fit")
+            contract.dist.get_backend = original_get_backend
+            callback.on_fit_start(trainer, SimpleNamespace())
+        except contract.DistributedContractError as caught:
+            error = str(caught)
+        finally:
+            # Restore the real Gloo identity before the assertion collective.
+            contract.dist.get_backend = original_get_backend
 
-        if failure_mode is not None:
-            assert caught.item() == world_size
-            assert not contract.stablefold_distributed_strict_enabled()
-        else:
-            assert caught.item() == 0, caught_error
+        caught_count = torch.tensor(int(error is not None))
+        dist.all_reduce(caught_count, op=dist.ReduceOp.SUM)
+        if failure_mode is None:
+            assert caught_count.item() == 0, error
             assert contract.stablefold_distributed_strict_enabled()
             callback.on_fit_end(trainer, SimpleNamespace())
             assert not contract.stablefold_distributed_strict_enabled()
-            assert not callback._validated
-            callback._run_preflight(trainer, SimpleNamespace())
-            assert contract.stablefold_distributed_strict_enabled()
-            callback.teardown(trainer, SimpleNamespace(), "fit")
+        else:
+            assert caught_count.item() == world_size
             assert not contract.stablefold_distributed_strict_enabled()
-            assert not callback._validated
     finally:
-        contract._local_rank_record = original_local_record
+        contract._local_kernel_record = original_local_record
         contract.dist.get_backend = original_get_backend
+        contract._receipt_readback_status = original_receipt_readback
         contract._set_stablefold_distributed_strict(False)
         for name, value in previous_environment.items():
             if value is None:
@@ -313,40 +198,8 @@ def _callback_worker(
     not dist.is_available() or not dist.is_gloo_available(),
     reason="requires torch.distributed Gloo",
 )
-def test_two_process_gloo_ddp_ema_and_active_count_reduction(
-    tmp_path: Path,
-) -> None:
-    mp.spawn(
-        _ema_and_grad_worker,
-        args=(2, str(tmp_path / "ema-grad-rendezvous")),
-        nprocs=2,
-        join=True,
-    )
-
-
-@pytest.mark.skipif(
-    not dist.is_available() or not dist.is_gloo_available(),
-    reason="requires torch.distributed Gloo",
-)
-def test_two_process_gloo_loss_accumulator_is_microbatch_weighted(
-    tmp_path: Path,
-) -> None:
-    mp.spawn(
-        _loss_worker,
-        args=(2, str(tmp_path / "loss-rendezvous")),
-        nprocs=2,
-        join=True,
-    )
-
-
-@pytest.mark.skipif(
-    not dist.is_available() or not dist.is_gloo_available(),
-    reason="requires torch.distributed Gloo",
-)
-def test_callback_seals_shared_receipt_and_resets_strict_mode(
-    tmp_path: Path,
-) -> None:
-    receipt = tmp_path / "receipt.json"
+def test_two_process_kernel_preflight_seals_receipt(tmp_path: Path) -> None:
+    receipt = tmp_path / "stablefold_kernel_ddp.json"
     mp.spawn(
         _callback_worker,
         args=(2, str(tmp_path / "success-rendezvous"), str(receipt), None),
@@ -356,12 +209,11 @@ def test_callback_seals_shared_receipt_and_resets_strict_mode(
 
     payload = json.loads(receipt.read_text())
     assert payload["status"] == "PASS"
-    assert payload["backend"] == "nccl"
     assert payload["expected_world_size"] == 2
     assert len(payload["ranks"]) == 2
     digest = hashlib.sha256(receipt.read_bytes()).hexdigest()
-    assert receipt.with_name("receipt.json.sha256").read_text() == (
-        f"{digest}  receipt.json\n"
+    assert receipt.with_name(receipt.name + ".sha256").read_text() == (
+        f"{digest}  {receipt.name}\n"
     )
 
 
@@ -370,18 +222,19 @@ def test_callback_seals_shared_receipt_and_resets_strict_mode(
     reason="requires torch.distributed Gloo",
 )
 @pytest.mark.parametrize(
-    "failure_mode", ["receipt", "rank1_aot", "module_scope"]
+    "failure_mode",
+    [
+        "rank1_aot_load",
+        "aot_mismatch",
+        "declared_mismatch",
+        "rank1_receipt_readback",
+        "rank1_final_receipt_readback",
+    ],
 )
-def test_preflight_failure_reaches_all_ranks_without_hang(
-    tmp_path: Path,
-    failure_mode: str,
+def test_two_process_kernel_failure_reaches_every_rank_without_hang(
+    tmp_path: Path, failure_mode: str
 ) -> None:
-    if failure_mode == "receipt":
-        blocker = tmp_path / "not-a-directory"
-        blocker.write_text("block receipt directory creation")
-        receipt = blocker / "receipt.json"
-    else:
-        receipt = tmp_path / "rank-failure-receipt.json"
+    receipt = tmp_path / "stablefold_kernel_ddp.json"
     mp.spawn(
         _callback_worker,
         args=(
@@ -389,6 +242,34 @@ def test_preflight_failure_reaches_all_ranks_without_hang(
             str(tmp_path / f"{failure_mode}-rendezvous"),
             str(receipt),
             failure_mode,
+        ),
+        nprocs=2,
+        join=True,
+    )
+    if failure_mode == "rank1_receipt_readback":
+        assert json.loads(receipt.read_text())["status"] == (
+            "PENDING_ALL_RANK_READBACK"
+        )
+    elif failure_mode == "rank1_final_receipt_readback":
+        assert json.loads(receipt.read_text())["status"] == "FAIL_FINAL_READBACK"
+
+
+@pytest.mark.skipif(
+    not dist.is_available() or not dist.is_gloo_available(),
+    reason="requires torch.distributed Gloo",
+)
+def test_two_process_receipt_failure_reaches_every_rank_without_hang(
+    tmp_path: Path,
+) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("block receipt directory creation")
+    mp.spawn(
+        _callback_worker,
+        args=(
+            2,
+            str(tmp_path / "receipt-failure-rendezvous"),
+            str(blocker / "stablefold_kernel_ddp.json"),
+            "receipt_failure",
         ),
         nprocs=2,
         join=True,

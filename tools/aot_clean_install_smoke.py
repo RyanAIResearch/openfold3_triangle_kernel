@@ -68,12 +68,8 @@ def main() -> None:
 
     if stable._ext is not None:
         raise RuntimeError("custom-op registration eagerly loaded the TriMul facade")
-    forward_schema = str(
-        torch.ops.openfold3_stablefold._trimul_fwd_v1.default._schema
-    )
-    backward_schema = str(
-        torch.ops.openfold3_stablefold._trimul_bwd_v1.default._schema
-    )
+    forward_schema = str(torch.ops.openfold3_stablefold._trimul_fwd_v1.default._schema)
+    backward_schema = str(torch.ops.openfold3_stablefold._trimul_bwd_v1.default._schema)
     if forward_schema != FORWARD_SCHEMA or backward_schema != BACKWARD_SCHEMA:
         raise RuntimeError(
             "versioned StableFold TriMul schemas differ from the release contract"
@@ -137,9 +133,7 @@ def main() -> None:
     fake_weights = tuple(
         torch.empty((channels, channels), device="meta") for _ in range(6)
     )
-    fake_norms = tuple(
-        torch.empty((channels,), device="meta") for _ in range(4)
-    )
+    fake_norms = tuple(torch.empty((channels,), device="meta") for _ in range(4))
     fake_outputs = stable._trimul_fwd_v1(
         fake_z, fake_mask, *fake_weights, *fake_norms, True, True
     )
@@ -208,9 +202,7 @@ def main() -> None:
             device=device,
             dtype=torch.bfloat16,
         )
-        sample_mask = torch.ones(
-            1, 17, 17, device=device, dtype=torch.float32
-        )
+        sample_mask = torch.ones(1, 17, 17, device=device, dtype=torch.float32)
         sequence_dim = torch.export.Dim("sequence", min=1, max=256)
         exported = torch.export.export(
             module,
@@ -223,8 +215,7 @@ def main() -> None:
         custom_targets = [
             str(node.target)
             for node in exported.graph.nodes
-            if node.op == "call_function"
-            and "openfold3_stablefold" in str(node.target)
+            if node.op == "call_function" and "openfold3_stablefold" in str(node.target)
         ]
         expected_target = "openfold3_stablefold._trimul_fwd_v1.default"
         if custom_targets != [expected_target]:
@@ -248,9 +239,7 @@ def main() -> None:
                 device=device,
                 dtype=torch.bfloat16,
             )
-            dynamic_mask = torch.ones(
-                1, 33, 33, device=device, dtype=torch.float32
-            )
+            dynamic_mask = torch.ones(1, 33, 33, device=device, dtype=torch.float32)
             with torch.no_grad():
                 expected = module(dynamic_z, dynamic_mask)
                 actual = loaded(dynamic_z, dynamic_mask)
@@ -299,8 +288,7 @@ def main() -> None:
 
         q, k, v = projection_view(), projection_view(), projection_view()
         q_contiguous, k_contiguous, v_contiguous = (
-            tensor.contiguous().detach().requires_grad_(True)
-            for tensor in (q, k, v)
+            tensor.contiguous().detach().requires_grad_(True) for tensor in (q, k, v)
         )
         mask = torch.zeros(
             prefix,
@@ -360,7 +348,8 @@ def main() -> None:
             "dBias": gradients_contiguous[3],
         }
         mismatched = [
-            name for name, value in named.items()
+            name
+            for name, value in named.items()
             if not torch.equal(value, reference[name])
         ]
         if mismatched:
@@ -398,9 +387,7 @@ def main() -> None:
             device=device,
             dtype=torch.bfloat16,
         )
-        mask = torch.ones(
-            1, sequence, sequence, device=device, dtype=torch.float32
-        )
+        mask = torch.ones(1, sequence, sequence, device=device, dtype=torch.float32)
         d_output = torch.randn_like(z_value)
 
         def execute(runner) -> dict[str, torch.Tensor]:
@@ -440,7 +427,8 @@ def main() -> None:
                 f"trimul {direction}: AOT full F+B produced a non-finite result"
             )
         mismatched = [
-            name for name, value in eager.items()
+            name
+            for name, value in eager.items()
             if not torch.equal(value, compiled[name])
         ]
         if mismatched:
@@ -452,12 +440,8 @@ def main() -> None:
         assert_no_jit_cache("TriMul eager and aot_eager")
         return {
             "sequence": sequence,
-            "eager": {
-                name: raw_sha256(value) for name, value in eager.items()
-            },
-            "aot_eager": {
-                name: raw_sha256(value) for name, value in compiled.items()
-            },
+            "eager": {name: raw_sha256(value) for name, value in eager.items()},
+            "aot_eager": {name: raw_sha256(value) for name, value in compiled.items()},
         }
 
     def run_short_sequence_stock() -> dict[str, object]:
@@ -521,9 +505,7 @@ def main() -> None:
 
         stock = execute(False)
         support = check_stable_trimul_support(module, z_value, mask)
-        original_fallback_logged = set(
-            model_module._STABLEFOLD_TRIMUL_FALLBACK_LOGGED
-        )
+        original_fallback_logged = set(model_module._STABLEFOLD_TRIMUL_FALLBACK_LOGGED)
         if support or support.code != "sequence_stock_fallback":
             raise RuntimeError(
                 "N=17 must be metadata-unsupported by the StableFold AOT route"
@@ -584,6 +566,22 @@ def main() -> None:
     }
     short_sequence_stock_receipt = run_short_sequence_stock()
 
+    from openfold3.core.kernels.cuda._aot_runtime import distributed_aot_identity
+    from openfold3.core.utils.distributed_contract import (
+        installed_distribution_identity,
+    )
+
+    aot_identity = distributed_aot_identity(
+        (
+            "stablefold_forward",
+            "stablefold_delta",
+            "stablefold_dkdv",
+            "stablefold_dq_dbias",
+            "stablefold_trimul",
+        )
+    )
+    distribution_identity = installed_distribution_identity()
+
     assert_no_jit_cache("final")
     print(
         json.dumps(
@@ -594,6 +592,8 @@ def main() -> None:
                 "torch": torch.__version__,
                 "torch_cuda": torch.version.cuda,
                 "binaries": [str(path) for path in binary_paths],
+                "aot_identity": aot_identity,
+                "installed_distribution": distribution_identity,
                 "arms": arm_receipts,
                 "trimul": trimul_receipts,
                 "trimul_short_sequence_stock": short_sequence_stock_receipt,

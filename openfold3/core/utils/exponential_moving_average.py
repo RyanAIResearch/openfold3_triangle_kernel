@@ -52,27 +52,12 @@ class ExponentialMovingAverage:
         """
         super().__init__()
 
-        # DDP broadcasts model parameters after module construction.  Delay the
-        # full EMA snapshot until the first training step so every rank starts
-        # from those synchronized parameters.  The version tensor is safe to
-        # retain for checkpoint compatibility and sanity validation.
-        self.params = {}
-        model_params = model.state_dict()
-        if "version_tensor" in model_params:
-            self.params["version_tensor"] = (
-                model_params["version_tensor"].detach().clone()
-            )
-        self.decay = decay
-        self.submodules_to_update = submodules_to_update
-        self.device = next(model.parameters()).device
-
-    def init_params(self, model: torch.nn.Module):
-        """Initialize EMA after DDP has synchronized the model parameters."""
-
         def clone_param(t):
-            return t.detach().clone()
+            return t.clone().detach()
 
         self.params = tensor_tree_map(clone_param, model.state_dict())
+        self.decay = decay
+        self.submodules_to_update = submodules_to_update
         self.device = next(model.parameters()).device
 
     def to(self, device):

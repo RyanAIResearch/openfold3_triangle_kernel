@@ -7,6 +7,9 @@ import torch
 
 from openfold3.core.model.primitives import attention as attention_module
 from openfold3.core.model.primitives.attention import Attention
+from openfold3.core.utils.distributed_contract import (
+    _set_stablefold_distributed_strict,
+)
 
 
 class AttentionStableRoutingTest(unittest.TestCase):
@@ -44,6 +47,37 @@ class AttentionStableRoutingTest(unittest.TestCase):
         prep.assert_called_once_with(q_x, q_x, apply_scale=True)
         stock.assert_called_once()
         self.assertEqual(tuple(output.shape), tuple(q_x.shape))
+
+    def test_unsupported_model_site_is_fatal_in_distributed_strict_mode(self):
+        module = Attention(
+            c_q=128,
+            c_k=128,
+            c_v=128,
+            c_hidden=32,
+            no_heads=4,
+            gating=False,
+        ).to(dtype=torch.bfloat16)
+        q_x = torch.zeros((1, 2, 2, 128), dtype=torch.bfloat16)
+        mask = torch.zeros((1, 2, 1, 1, 2), dtype=torch.bfloat16)
+        bias = torch.zeros((1, 1, 4, 2, 2), dtype=torch.bfloat16)
+        _set_stablefold_distributed_strict(
+            True,
+            {
+                "OPENFOLD3_SR_BACKWARD": "1",
+                "OPENFOLD3_SR_SHADOW": "1",
+                "OPENFOLD3_TRIANGLE_ALLOW_JIT": "0",
+            },
+        )
+        try:
+            with self.assertRaisesRegex(RuntimeError, "strict route rejected"):
+                module(
+                    q_x,
+                    q_x,
+                    biases=[mask, bias],
+                    use_stable_triangle_attention=True,
+                )
+        finally:
+            _set_stablefold_distributed_strict(False)
 
 
 if __name__ == "__main__":

@@ -27,12 +27,13 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 - DDP 首步前的全 rank AOT/ABI/SO 哈希、GPU、环境和设备绑定一致性预检；
 - distributed strict route：Attention 不允许隐式回退，TriMul 只允许
   `N<=100` 的声明式 stock 路由；
-- rank-zero `distributed_contract.json` 与 SHA-256 sidecar。
+- rank-zero `stablefold_kernel_ddp.json` 与 SHA-256 sidecar；该预检不修改
+  AQLab 的 DDP strategy、梯度归约、EMA、loss、checkpoint 或 logger。
 
 正式放行仍缺少：
 
 1. 完整 Compute Sanitizer release suite；
-2. 2-GPU 与多节点 DDP 正确性、恢复等价性和扩展效率证据；
+2. 2-GPU 与多节点 DDP kernel 正确性和扩展效率证据；
 3. 长期训练轨迹、validation quality 与 time-to-quality。
 
 原计划的 1000-step training soak 未在本发布周期内执行。这不构成失败证据，

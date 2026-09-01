@@ -196,58 +196,38 @@ torchrun --no-python --nnodes=2 --nproc-per-node=8 \
   train --runner-yaml training.yaml --seed 42
 ```
 
-The declared ``devices * num_nodes`` must exactly match the launcher world
-size. Training ``epoch_len`` must be divisible by that world size, and the
-per-rank step count must be divisible by gradient accumulation. Multi-node
-output, checkpoint, and dataset paths must be visible at the same paths on all
-nodes.
+The declared ``devices * num_nodes`` must match the launcher world size, and
+multi-node output, checkpoint, and dataset paths must be visible at the same
+paths on all nodes. Apart from launching one process per GPU, OpenFold3 keeps
+the same AQLab training, optimizer, EMA, checkpoint, logging, and data-sampling
+semantics used by the single-node configuration.
 
-#### StableFold distributed production contract
+#### StableFold kernel preflight for DDP
 
-The enforced StableFold distributed candidate target is homogeneous NVIDIA H100
-(``sm_90``), DDP with per-sample gradient clipping, local batch size one, and
-one process per GPU. The v1 lifecycle gate is qualified against
-PyTorch Lightning 2.6.1 and rejects other Lightning versions; real 2-GPU and
-2-node hardware qualification is still pending. Every node must
-install the same clean AOT wheel and use:
+StableFold adds a kernel-only preflight to AQLab's ordinary DDP path; it does
+not replace the DDP strategy or alter gradients, EMA, losses, checkpoints, or
+logging. The production-candidate target is one process per full NVIDIA H100
+GPU, with the same clean AOT wheel installed on every node and these execution
+flags set identically:
 
 ```bash
 export OPENFOLD3_TRIANGLE_ALLOW_JIT=0
 export OPENFOLD3_SR_BACKWARD=1
 export OPENFOLD3_SR_SHADOW=1
-export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 ```
 
-After NCCL initialization and before DDP wraps or broadcasts the model, all
-ranks preload the selected StableFold AOT
-modules and exchange their wheel manifest, binary hashes, ABI, GPU model,
-backend flags, complete runtime source-tree digest, checkpoint content hash,
-and physical device bindings. A mismatch makes every rank fail together.
-The rank-zero receipt is written to
-``<log_dir>/distributed_contract.json`` with a SHA-256 sidecar. In strict mode,
-Attention fallbacks are errors; TriMul only permits its documented stock route
-for sequence lengths at or below 100.
+Before the first model forward, every rank preloads the selected StableFold AOT
+modules and exchanges its package identity, binary hashes, ABI, GPU identity,
+and StableFold execution flags. A mismatch fails the kernel preflight on every
+rank, and rank zero writes ``<log_dir>/stablefold_kernel_ddp.json`` plus a
+SHA-256 sidecar. Once armed, an unexpected Attention fallback is an error and
+TriMul permits only its documented stock route for sequence lengths at or below
+100.
 
-The operator flag ``use_deepspeed_evo_attention`` is compatible with DDP and is
-not the same as Lightning's DeepSpeed/ZeRO strategy. StableFold distributed v1
-rejects ``deepspeed_config_path`` and configurations that disable per-sample
-gradient clipping; Lightning DeepSpeedStrategy/ZeRO and automatic DDP with
-sample-dependent unused parameters require separate qualification.
-
-Distributed v1 accepts either a fresh run or an explicit immutable single-file
-checkpoint. It hashes the checkpoint on every rank before training. The
-Lightning aliases ``last``, ``hpc``, and ``registry`` and DeepSpeed checkpoint
-directories are deliberately rejected until their resolved artifacts can be
-sealed unambiguously. A distributed full-state resume also requires
-``synced_generator_state``. This preserves the recycle RNG; it is not yet a
-claim of bitwise trajectory-equivalent resume for every Python, NumPy, Torch,
-and CUDA random stream.
-
-For distributed training, canonical step metrics such as ``train/loss`` are
-the effective optimizer-step means reduced across ranks and accumulated
-microbatches. The last rank-local microbatch is logged separately with the
-``_rank_local`` suffix. Optional losses with zero active samples are omitted
-instead of being reported as zero.
+The operator flag ``use_deepspeed_evo_attention`` is not the same as
+Lightning's DeepSpeed/ZeRO strategy. StableFold's kernel preflight is currently
+qualified only with AQLab's standard DDP strategy; all other backends retain the
+strategy behavior selected by the unmodified AQLab runner.
 
 For a concise source-to-launch example and an explicit selector for native
 AQLab/OpenFold3 stock PyTorch, cuEquivariance, StableFold, and DeepSpeed Evo
@@ -304,12 +284,6 @@ To resume from a specific checkpoint:
 experiment_settings:
   restart_checkpoint_path: /path/to/checkpoint.ckpt
 ```
-
-StableFold distributed production v1 accepts either a fresh run or one explicit,
-immutable single-file Lightning checkpoint. It rejects the `last`, `hpc`, and
-`registry` aliases, DeepSpeed checkpoint directories, manual checkpoint loading,
-and `preemption_safe_resume`; every rank independently hashes the exact checkpoint
-bytes before the first training step.
 
 ## 7. Fine-tuning
 

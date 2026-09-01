@@ -50,10 +50,11 @@ Available pixi environments:
 | ------------------ | -------------------------------------------------- | -------------------------------------------------------------------- |
 | `openfold3-base`   | `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64` | Environment without CUDA or ROCm. CPU-only on Linux; on Apple Silicon the same pytorch build also provides MPS acceleration. |
 | `openfold3-cuda12` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 12.                                |
+| `openfold3-h100`   | `linux-64`                                         | Pinned, non-editable H100 environment for the StableFold production-candidate workflow. |
 | `openfold3-cuda13` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 13.                                |
 | `openfold3-rocm7`  | `linux-64`                                         | AMD GPU environment using ROCm 7.                                    |
 
-Choose the environment that matches your system. For example, use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12` or `openfold3-cuda13` for NVIDIA GPU systems, and `openfold3-rocm7` for AMD ROCm systems.
+Choose the environment that matches your system. For example, use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12` or `openfold3-cuda13` for general NVIDIA GPU development, `openfold3-h100` for attested StableFold H100 build checks and direct AQLab training-launch passthroughs, and `openfold3-rocm7` for AMD ROCm systems. The complete H100 workflow is documented in the {doc}`Pixi-first bare-metal training quickstart <bare_metal_distributed_quickstart>`.
 
 For more information, including rationale, tips and tricks, see [Modern Conda Environments with Pixi](./modern-conda-environments-with-pixi.md).
 

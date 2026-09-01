@@ -59,8 +59,8 @@ def _route_stable_trimul(module, z, mask):
         stablefold_distributed_strict_enabled,
     )
 
-    # The callback audits environment drift collectively at batch boundaries;
-    # this hot-path getter only selects the immutable strict fallback policy.
+    # The callback freezes this policy before the first forward and audits the
+    # source environment at epoch boundaries; this hot-path getter is read-only.
     strict = stablefold_distributed_strict_enabled()
 
     from openfold3.core.kernels.cuda.stablefold_trimul_support import (
