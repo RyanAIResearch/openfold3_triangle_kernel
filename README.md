@@ -13,30 +13,6 @@ gradients. A fixed-order `dBias` reduction replaces floating-point atomics, and
 an optional forward rounding residual improves the row-scalar used by the
 backward without changing the public BF16 output.
 
-> **Status: internal preview / production candidate, not GA.** Use a feature
-> flag and retain the stock or cuEquivariance route as a rollback. Single-H100
-> BF16 training with local batch size 1 is validated; a kernel-only DDP
-> preflight is available, but real 2-GPU and 2-node hardware qualification is
-> still pending. DDP, multi-node launch, EMA, gradients, checkpoints, losses,
-> and logging remain the pinned AQLab implementation. H200, FSDP,
-> `torch.compile`, Lightning
-> DeepSpeedStrategy/ZeRO, and local batch sizes greater than 1 are not part of
-> this release claim.
-
-The wheel checksum and attestation are reproducibility and integrity records,
-not an external signature or Sigstore provenance chain; this preview assumes
-the Git repository and the qualified build host are trusted.
-
-## Validated result
-
-On one H100 at crop 768, the full StableFold configuration (StableFold Triangle
-Attention plus StableFold Triangle Multiplicative Update) reduced synchronized
-training-step time by **6.26%** and step energy by **7.76%** relative to the full
-cuEquivariance configuration over a 1,200-update continuation from the same
-optimizer-bearing checkpoint. Validation and checkpoint I/O were excluded from
-the timing. This is a measured OpenFold3/H100 result, not a guarantee for other
-models, hardware, software ABIs, or shapes.
-
 ## Requirements
 
 - Linux x86-64
