@@ -4,11 +4,12 @@ This workflow preserves AQLab OpenFold3 data, training entry points, Lightning D
 All five StableFold `sm_90a` AOT extensions are shipped in a qualified wheel inside this repository, so users do not need a system CUDA Toolkit, user-invoked NVCC, CMake, or runtime JIT.
 Complete steps 1–4, choose exactly one launch topology from steps 5–7, and use the same Git revision, Pixi lock, runner YAML, and shared paths on every node.
 
-| Topology | YAML `devices` | YAML `num_nodes` | Launch method |
-| --- | ---: | ---: | --- |
-| One GPU | 1 | 1 | Invoke `run_openfold` once |
-| Multiple GPUs on one host | Visible GPUs per host | 1 | Invoke `run_openfold` once; Lightning spawns local DDP |
-| Multiple hosts | GPUs per host | Host count | Invoke standard `torchrun` once on each host |
+| Topology | Environment installation | YAML `devices` | YAML `num_nodes` | Launch method |
+| --- | --- | ---: | ---: | --- |
+| One GPU | Install once on that host | 1 | 1 | Invoke `run_openfold` once |
+| Multiple GPUs on one host | Install once on that host | Visible GPUs per host | 1 | Invoke `run_openfold` once; Lightning spawns local DDP |
+| Multiple hosts with a shared prefix | Install once on node 0 | GPUs per host | Host count | Invoke standard `torchrun` once on each host |
+| Multiple hosts with node-local prefixes | Install independently on every host | GPUs per host | Host count | Invoke standard `torchrun` once on each host |
 
 ## 1. Bootstrap every H100 host
 
@@ -46,8 +47,9 @@ export OF3_SRC=/mnt/shared/openfold3/src
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-# Node 0 only when /mnt/shared/openfold3/src is the same shared filesystem on every host.
-# Pixi does not synchronize node-local prefixes; for local storage, run both commands on every host.
+# One host, including a multi-GPU host: run both commands once on that host.
+# Multiple hosts with one shared /mnt/shared/openfold3/src prefix: run them once on node 0.
+# Multiple hosts with node-local prefixes: run them independently on every host.
 pixi install -e openfold3-h100
 pixi run -e openfold3-h100 setup-stablefold-h100
 

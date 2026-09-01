@@ -67,6 +67,11 @@ test -z "$(git status --porcelain=v1)"
 Create the locked, non-editable H100 environment and install the qualified
 wheel already stored in the repository; no kernel build command is required:
 
+Run the two installation commands once for either one GPU or multiple GPUs on
+one host. For multiple hosts, run them once on node 0 only when the checkout
+and `.pixi` prefix are on the same shared filesystem; with node-local storage,
+run them independently on every host because Pixi does not synchronize nodes.
+
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
