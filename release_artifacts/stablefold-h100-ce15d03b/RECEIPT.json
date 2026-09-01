@@ -1,0 +1,55 @@
+{
+  "abi": {
+    "python_soabi": "cpython-314-x86_64-linux-gnu",
+    "python_version": "3.14.7",
+    "torch_cuda_version": "12.9",
+    "torch_cxx11_abi": true,
+    "torch_version": "2.10.0"
+  },
+  "aot_manifest_sha256": "725ccc5011846ee6cac3f8383ebd2a89a539e143c0cca7e34d6379f1b86505b1",
+  "extension_sha256": {
+    "stablefold_delta": "682abb58e8b1edac729a4a2141c07fd1781979ad22ed3c4a7655c6676ffc8228",
+    "stablefold_dkdv": "f9cc6592aea36fd39a93a03d879ec7600e59b48760de890a3eaea8ab70a528cb",
+    "stablefold_dq_dbias": "c2c58986c4134f0c2792d168727e01df30f74dc2a04089ed2e1dec05af393f2a",
+    "stablefold_forward": "3c371aef98b53aafcc05f4cb3b9966e9ab0ff6ea794cd6e6e9ec056543705f84",
+    "stablefold_trimul": "b3899ad7e70e7e728657f63887be95ea29c3fbc8c7908c87a7d1f052d2368a05"
+  },
+  "git_commit": "ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca",
+  "installed_package_tree_sha256": "787414bc0571b9524720fa33ea4fac758cdcd9839d3564961d45441787a5893c",
+  "pinned_aqlab_base": "c615a7f8d0e7bb04095a35ec6dc7b30192ac19d3",
+  "qualification_boundaries": {
+    "real_2node_h100": "PENDING_HARDWARE",
+    "real_2plus_gpu_nccl": "PENDING_HARDWARE"
+  },
+  "schema_version": 1,
+  "sealed_utc": "2026-09-01T18:16:52+00:00",
+  "source_bundle": {
+    "name": "source_ce15d03b.bundle",
+    "sha256": "5b2ad1266f0025a542cb7e2b7b2a121d9ea08ced5b1e18adad1629b0eb4da10b"
+  },
+  "status": "PASS_SINGLE_H100_PRODUCTION_CANDIDATE",
+  "target": {
+    "cuda_arch": "sm_90a",
+    "ptx_embedded": false,
+    "torch_cuda_arch_list": "9.0a"
+  },
+  "tests": {
+    "clean_install_aot_smoke": "PASS",
+    "docs_sphinx_w": "PASS",
+    "installed_diffusion_scope": "3 passed",
+    "installed_single_h100_training_smoke": "PASS",
+    "local": "70 passed, 18 H100-only or minimal-environment skipped",
+    "ruff": "PASS"
+  },
+  "training_scope": "AQLab diffusion, EMA, grad, loss, checkpoint, logger, and DDP unchanged; StableFold non-diffusion triangle Attention and TMU plus kernel preflight only",
+  "training_smoke": {
+    "config_sha256": "2aba92c3d7fd41264d8d064716e92e2dca18c43559f5bffc3c41c18393bc0c8f",
+    "device": "NVIDIA H100 80GB HBM3",
+    "log_sha256": "e60196e158393bdaca3814e13713d7c7238b2c77dfe417c8e9fd05212b59f0d7",
+    "steps": 1
+  },
+  "wheel": {
+    "name": "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl",
+    "sha256": "e3e6b80e08aa16e0580b2809a54523458ac6503ce185ea276e05179ae8a27d19"
+  }
+}

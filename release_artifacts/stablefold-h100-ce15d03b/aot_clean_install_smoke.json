@@ -11,7 +11,7 @@
       "stablefold_delta": {
         "filename": "_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
-        "sha256": "cc0e1bef5e9bec155149037d9a95e649b1cade01cbafec75723b6ea98a16a415",
+        "sha256": "682abb58e8b1edac729a4a2141c07fd1781979ad22ed3c4a7655c6676ffc8228",
         "symbols": [
           "stablefold_triangle_delta_out",
           "stablefold_triangle_delta_shadow_out"
@@ -20,7 +20,7 @@
       "stablefold_dkdv": {
         "filename": "_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
-        "sha256": "c4d4425d8775ce70484fd26940732cd590cac6506a49534677633259cd70617a",
+        "sha256": "f9cc6592aea36fd39a93a03d879ec7600e59b48760de890a3eaea8ab70a528cb",
         "symbols": [
           "stablefold_triangle_dkdv_out",
           "stablefold_triangle_dkdv_delta_true_out"
@@ -29,7 +29,7 @@
       "stablefold_dq_dbias": {
         "filename": "_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
-        "sha256": "11d43db60e0313aff41a0135de417513552b4edc8e7b2039228d7dd15cf5b730",
+        "sha256": "c2c58986c4134f0c2792d168727e01df30f74dc2a04089ed2e1dec05af393f2a",
         "symbols": [
           "stablefold_triangle_dq_dbias_out",
           "stablefold_reduce_broadcast_dbias_out",
@@ -39,7 +39,7 @@
       "stablefold_forward": {
         "filename": "_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
-        "sha256": "f5c1c3f658782e43a4cf12900bd0ce4875cf78bb4cc08b4bf46c63c1564c456b",
+        "sha256": "3c371aef98b53aafcc05f4cb3b9966e9ab0ff6ea794cd6e6e9ec056543705f84",
         "symbols": [
           "stablefold_triangle_forward_out",
           "stablefold_pack_qkv",
@@ -49,7 +49,7 @@
       "stablefold_trimul": {
         "filename": "_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
-        "sha256": "b5838ca8bf007205c6a84fe4099734e0b0c66cf8e2c0e31a2a345819232cd57b",
+        "sha256": "b3899ad7e70e7e728657f63887be95ea29c3fbc8c7908c87a7d1f052d2368a05",
         "symbols": [
           "trimul_in_fwd",
           "trimul_out_fwd",
@@ -63,10 +63,10 @@
       }
     },
     "git": {
-      "commit": "df1957e623d1283ba2a572cb730a6b130fbf1b0c",
+      "commit": "ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca",
       "dirty": false
     },
-    "manifest_sha256": "22d0e3c9601474ac360ba1e0d691105addb9e3fe67f9e3f6a5a9590fdea88c68",
+    "manifest_sha256": "725ccc5011846ee6cac3f8383ebd2a89a539e143c0cca7e34d6379f1b86505b1",
     "packaged_source_sha256": {
       "openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md": "029c3eb0db9190718d101e778207f6b1ba896c9d5252b254ff7c0b845de24cf9",
       "openfold3/core/kernels/cuda/_aot_runtime.py": "70983c8bb66d9ff26701365eee5ea4999732ef194d9bc40d1a676a9a04c7a473",
@@ -108,11 +108,11 @@
     }
   },
   "binaries": [
-    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
-    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
-    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
-    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
-    "/tmp/openfold3-aot-sm90a-build.vwP6PN/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so"
+    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so"
   ],
   "compute_capability": [
     9,
@@ -120,11 +120,11 @@
   ],
   "device": "NVIDIA H100 80GB HBM3",
   "installed_distribution": {
-    "installed_package_tree_sha256": "ccf462557ed444358b68e01cd35a647e3f6e7b5c33d59127a48124a3b85cc6e9",
+    "installed_package_tree_sha256": "787414bc0571b9524720fa33ea4fac758cdcd9839d3564961d45441787a5893c",
     "name": "openfold3",
     "runtime_from_verified_distribution": true,
-    "verified_package_files": 458,
-    "version": "0.4.3.dev5503+gdf1957e62"
+    "verified_package_files": 459,
+    "version": "0.4.3.dev5512+gce15d03b0"
   },
   "torch": "2.10.0",
   "torch_cuda": "12.9",

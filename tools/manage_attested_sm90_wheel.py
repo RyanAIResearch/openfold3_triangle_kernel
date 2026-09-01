@@ -20,26 +20,26 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_DIR = ROOT / "dist"
-PREBUILT_COMMIT = "df1957e623d1283ba2a572cb730a6b130fbf1b0c"
-PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "stablefold-h100-df1957e6"
+PREBUILT_COMMIT = "ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca"
+PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "stablefold-h100-ce15d03b"
 PREBUILT_FILE_SHA256 = {
     "RECEIPT.json": (
-        "40a1bf6ed96cbfccca99abdd84620c6912495cd3932071136d72c8c3c18e2b94"
+        "e85451dbffe40dd9f23b81f064982cc3d6bab8d8068f64b8804a13ae0b7629e1"
     ),
-    "SHA256SUMS": ("30c5a53897367506d3195e5d3e6bbb57de6a960573781ee209613834515c63e5"),
+    "SHA256SUMS": ("71618162eb488451a01c1aaa8dd58bc4b63b411f354be4d0ff278697fe0ddcad"),
     "aot_clean_install_smoke.json": (
-        "ec108f2c6fa944b88a99e0db3463f969baf4daac2253d0d7e6e6f96642d4cc2c"
+        "2ead03061b1b0a99df50d5ee4e5a7333395b841406b826d7681ae7f546e3bd20"
     ),
     (
-        "openfold3-0.4.3.dev5503+gdf1957e62-cp314-cp314-linux_x86_64.whl"
-    ): "85fc7b4843727cd13b7b88d9a5d3e6a7a86f309ce290bb22ee2f102963377ac5",
+        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl"
+    ): "e3e6b80e08aa16e0580b2809a54523458ac6503ce185ea276e05179ae8a27d19",
     (
-        "openfold3-0.4.3.dev5503+gdf1957e62-cp314-cp314-"
+        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-"
         "linux_x86_64.whl.attestation.json"
-    ): "44f1fe9dd3f2c73e23acc7f93cf4fc44d385d1bf57a18f2cbeb2b597d6d19644",
+    ): "e5c7d468d1887f1bca56e7e59af204ef5e0c0ef2f96cb27e017830dd6570be0f",
     (
-        "openfold3-0.4.3.dev5503+gdf1957e62-cp314-cp314-linux_x86_64.whl.sha256"
-    ): "03671dd51c5de12414a12b65817042871ec5d35fb2b2c1d7e6005d6e832d7f9f",
+        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl.sha256"
+    ): "ba20026faa198d54b9c1a9f1958661685bad6a18e3afd592dc7f1a836eb5da95",
 }
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 MODULE_KEYS = (

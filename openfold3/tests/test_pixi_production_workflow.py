@@ -1,5 +1,7 @@
+import ast
 import hashlib
 import tomllib
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -139,6 +141,65 @@ def test_prebuilt_bundle_is_checked_in_and_pinned_by_digest():
     assert (
         bundle.wheel_sha256 == artifact_manager.PREBUILT_FILE_SHA256[bundle.wheel.name]
     )
+
+
+def test_prebuilt_wheel_keeps_diffusion_on_the_aqlab_path():
+    bundle = artifact_manager.prebuilt_bundle()
+    member = "openfold3/projects/of3_all_atom/model.py"
+    with zipfile.ZipFile(bundle.wheel) as archive:
+        module = ast.parse(archive.read(member), filename=member)
+
+    model = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "OpenFold3"
+    )
+
+    def method(name: str) -> ast.FunctionDef:
+        return next(
+            node
+            for node in model.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+
+    def self_calls(function: ast.FunctionDef, attribute: str) -> list[ast.Call]:
+        return [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+            and node.func.attr == attribute
+        ]
+
+    def keywords(call: ast.Call) -> dict[str, ast.expr]:
+        return {
+            keyword.arg: keyword.value
+            for keyword in call.keywords
+            if keyword.arg is not None
+        }
+
+    rollout_calls = self_calls(method("_rollout"), "sample_diffusion")
+    assert len(rollout_calls) == 1
+    rollout_keywords = keywords(rollout_calls[0])
+    stablefold = rollout_keywords["use_stable_triangle_attention"]
+    assert isinstance(stablefold, ast.Constant) and stablefold.value is False
+    assert "use_high_precision_attention" not in rollout_keywords
+
+    training_calls = self_calls(method("_train_diffusion"), "diffusion_module")
+    assert len(training_calls) == 1
+    training_keywords = keywords(training_calls[0])
+    for backend in (
+        "use_deepspeed_evo_attention",
+        "use_triton_triangle_kernels",
+        "use_cueq_triangle_kernels",
+        "use_stable_triangle_attention",
+        "use_lma",
+    ):
+        assert backend not in training_keywords
+    high_precision = training_keywords["use_high_precision_attention"]
+    assert isinstance(high_precision, ast.Constant) and high_precision.value is True
 
 
 def test_prebuilt_is_the_only_path_allowed_to_decouple_checkout_docs():

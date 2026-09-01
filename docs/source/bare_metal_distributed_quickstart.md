@@ -39,7 +39,7 @@ nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv
 
 The non-editable `openfold3-cuda12` environment pins Python 3.14, PyTorch 2.10, CUDA runtime 12.9, and Lightning 2.6.1.
 `setup-stablefold-h100` validates and installs the wheel stored in the checkout without compiling StableFold source or downloading a kernel binary; dependencies may still probe the Pixi-provided compiler ABI and CUDA version.
-Install once into the shared prefix on node 0, then run the read-only doctor and AOT verifier on every host; success reports artifact commit `df1957e623d1283ba2a572cb730a6b130fbf1b0c`, wheel SHA-256 `85fc7b48…377ac5`, and H100 capability `[9, 0]`.
+Install once into the shared prefix on node 0, then run the read-only doctor and AOT verifier on every host; success reports artifact commit `ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca`, wheel SHA-256 `e3e6b80e…a27d19`, and H100 capability `[9, 0]`.
 
 ```bash
 export PATH="$HOME/.pixi/bin:$PATH"
@@ -60,7 +60,7 @@ pixi run -e openfold3-cuda12 verify-aot
 
 ## 3. Run a one-step StableFold smoke test
 
-Use AQLab's subset tools to run one BF16 training step that jointly checks data loading, CUDA, StableFold routing, backward, and the official `run_openfold train` entry point.
+Use AQLab's subset tools to run one BF16 training step that jointly checks data loading, CUDA, non-Diffusion StableFold routing, backward, and the official `run_openfold train` entry point.
 The commands write all generated data, configuration, and output outside the checkout and use an empty validation cache so the downloader verifies exactly the artifacts consumed by this validation-disabled smoke.
 This canary deliberately disables validation and checkpoint output for speed, so use AQLab's full training test when checkpoint and validation coverage is required.
 
@@ -146,7 +146,7 @@ pixi run -e openfold3-cuda12 train-single-gpu \
 ## 4. Prepare a 4,096-example canary and select a backend
 
 For a longer public-data canary, use AQLab's subset tools to sample a deterministic 4,096-entry candidate pool and rerun the downloader after any network interruption because existing files are skipped.
-Set `BACKEND` to `aqlab` for stock PyTorch, `cueq` for cuEquivariance, `stablefold` for StableFold Attention plus TriMul, or `deepspeed-evo` for the DeepSpeed Evo attention operator rather than ZeRO; the selector changes only six mutually exclusive training operator flags and leaves optimizer, EMA, loss, checkpoint, and DDP behavior untouched.
+Set `BACKEND` to `aqlab` for stock PyTorch, `cueq` for cuEquivariance, `stablefold` for non-Diffusion StableFold Attention plus TriMul, or `deepspeed-evo` for the DeepSpeed Evo attention operator rather than ZeRO; Diffusion always stays on AQLab's original path, and the selector changes only six mutually exclusive training operator flags while leaving optimizer, EMA, loss, checkpoint, and DDP behavior untouched.
 The example below creates a crop-384, local-batch-one, BF16, 400-step PDB canary with validation disabled; production training must instead provision every dataset referenced by AQLab's official `initial_training.yml`.
 
 ```bash

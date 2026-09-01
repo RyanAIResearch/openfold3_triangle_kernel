@@ -1,0 +1,29 @@
+{
+  "abi": {
+    "python_soabi": "cpython-314-x86_64-linux-gnu",
+    "python_version": "3.14.7",
+    "torch_cuda_version": "12.9",
+    "torch_cxx11_abi": true,
+    "torch_version": "2.10.0"
+  },
+  "embedded_manifest_sha256": "725ccc5011846ee6cac3f8383ebd2a89a539e143c0cca7e34d6379f1b86505b1",
+  "extension_sha256": {
+    "stablefold_delta": "682abb58e8b1edac729a4a2141c07fd1781979ad22ed3c4a7655c6676ffc8228",
+    "stablefold_dkdv": "f9cc6592aea36fd39a93a03d879ec7600e59b48760de890a3eaea8ab70a528cb",
+    "stablefold_dq_dbias": "c2c58986c4134f0c2792d168727e01df30f74dc2a04089ed2e1dec05af393f2a",
+    "stablefold_forward": "3c371aef98b53aafcc05f4cb3b9966e9ab0ff6ea794cd6e6e9ec056543705f84",
+    "stablefold_trimul": "b3899ad7e70e7e728657f63887be95ea29c3fbc8c7908c87a7d1f052d2368a05"
+  },
+  "git": {
+    "commit": "ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca",
+    "dirty": false
+  },
+  "schema_version": 1,
+  "target": {
+    "cuda_arch": "sm_90a",
+    "ptx_embedded": false,
+    "torch_cuda_arch_list": "9.0a"
+  },
+  "wheel": "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl",
+  "wheel_sha256": "e3e6b80e08aa16e0580b2809a54523458ac6503ce185ea276e05179ae8a27d19"
+}
