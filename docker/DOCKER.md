@@ -61,11 +61,11 @@ docker run \
 |----------|---------|-------------|
 | `BASE_IMAGE` | `ubuntu:22.04` | Base Docker image |
 | `PIXI_VERSION` | `v0.76.0` | Pixi version to install |
-| `PIXI_ENV` | `openfold3-cuda12` | Pixi environment name (`openfold3-cuda12` or `openfold3-cuda13`) |
+| `PIXI_ENV` | `openfold3-cuda12-dev` | Pixi development environment name (`openfold3-cuda12-dev` or `openfold3-cuda13`) |
 
 ### cuEquivariance
 
-The `openfold3-cuda12` and `openfold3-cuda13` pixi environments include cuEquivariance by default. No additional build argument is needed (unlike the conda path which requires `INSTALL_CUEQ=true`). See the [cuEquivariance.yml example](../examples/example_runner_yamls/cuequivariance.yml) and the [kernels documentation](https://openfold-3.readthedocs.io/en/latest/kernels.html) for usage details.
+The `openfold3-cuda12-dev` and `openfold3-cuda13` pixi environments include cuEquivariance by default. No additional build argument is needed (unlike the conda path which requires `INSTALL_CUEQ=true`). See the [cuEquivariance.yml example](../examples/example_runner_yamls/cuequivariance.yml) and the [kernels documentation](https://openfold-3.readthedocs.io/en/latest/kernels.html) for usage details.
 
 ### Differences from conda-based builds
 

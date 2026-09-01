@@ -19,10 +19,17 @@ def _manifest() -> dict:
 
 def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     manifest = _manifest()
-    features = manifest["environments"]["openfold3-h100"]["features"]
+    environments = manifest["environments"]
+    assert "openfold3-h100" not in environments
+    features = environments["openfold3-cuda12"]["features"]
     assert "stablefold-h100" in features
     assert "openfold3-editable" not in features
     assert "openfold3-editable-full" not in features
+    assert "tests" not in features
+    development_features = environments["openfold3-cuda12-dev"]["features"]
+    assert "stablefold-h100" not in development_features
+    assert "openfold3-editable" in development_features
+    assert "tests" in development_features
     production = manifest["feature"]["stablefold-h100"]
     assert production["platforms"] == ["linux-64-cuda12"]
     assert production["dependencies"]["python"] == "3.14.*"
@@ -31,11 +38,19 @@ def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     assert production["dependencies"]["cuda-version"] == "12.9.*"
 
     lock = yaml.safe_load((REPOSITORY / "pixi.lock").read_text())
-    locked = lock["environments"]["openfold3-h100"]
+    locked_environments = lock["environments"]
+    assert "openfold3-h100" not in locked_environments
+    locked = locked_environments["openfold3-cuda12"]
     for packages in locked["packages"].values():
         for package in packages:
             if "pypi" in package:
                 assert package["pypi"].startswith(("https://", "http://"))
+    development_locked = locked_environments["openfold3-cuda12-dev"]
+    assert any(
+        package.get("pypi") == "./"
+        for packages in development_locked["packages"].values()
+        for package in packages
+    )
 
 
 def test_h100_pixi_tasks_keep_training_in_official_launchers():
@@ -72,7 +87,20 @@ def test_h100_user_docs_use_normal_pixi_commands():
         text = (REPOSITORY / relative).read_text()
         assert "--as-is" not in text
         assert "--locked" not in text
-        assert "pixi run -e openfold3-h100" in text
+        assert "openfold3-h100" not in text
+        assert "pixi run -e openfold3-cuda12" in text
+
+
+def test_development_consumers_do_not_select_the_h100_runtime():
+    for relative in (
+        ".github/workflows/ci-test.yml",
+        ".github/workflows/integration-test.yml",
+        "docker/Dockerfile.pixi",
+        "docker/DOCKER.md",
+        "docs/source/training.md",
+    ):
+        text = (REPOSITORY / relative).read_text()
+        assert "openfold3-cuda12-dev" in text
 
 
 def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():

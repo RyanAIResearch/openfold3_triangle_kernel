@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       pixi_env:
-        description: 'Pixi environment name (e.g., openfold3-cuda12, openfold3-cuda13)'
+        description: 'Pixi development environment name (e.g., openfold3-cuda12-dev, openfold3-cuda13)'
         required: true
         type: string
       base_image:

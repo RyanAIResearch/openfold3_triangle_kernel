@@ -53,7 +53,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - pixi_env: "openfold3-cuda12"
+          - pixi_env: "openfold3-cuda12-dev"
           - pixi_env: "openfold3-cuda13"
     concurrency:
       group: ${{ github.workflow }}-pixi-${{ github.head_ref || github.ref }}-${{ matrix.pixi_env }}

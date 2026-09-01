@@ -75,10 +75,10 @@ run them independently on every host because Pixi does not synchronize nodes.
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
-pixi install -e openfold3-h100
-pixi run -e openfold3-h100 setup-stablefold-h100
-pixi run -e openfold3-h100 doctor-h100
-pixi run -e openfold3-h100 verify-aot
+pixi install -e openfold3-cuda12
+pixi run -e openfold3-cuda12 setup-stablefold-h100
+pixi run -e openfold3-cuda12 doctor-h100
+pixi run -e openfold3-cuda12 verify-aot
 ```
 
 The production Pixi environment deliberately contains no editable OpenFold3

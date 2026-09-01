@@ -37,7 +37,7 @@ nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv
 
 ## 2. Install Pixi and the prebuilt StableFold wheel
 
-The non-editable `openfold3-h100` environment pins Python 3.14, PyTorch 2.10, CUDA runtime 12.9, and Lightning 2.6.1.
+The non-editable `openfold3-cuda12` environment pins Python 3.14, PyTorch 2.10, CUDA runtime 12.9, and Lightning 2.6.1.
 `setup-stablefold-h100` validates and installs the wheel stored in the checkout without compiling StableFold source or downloading a kernel binary; dependencies may still probe the Pixi-provided compiler ABI and CUDA version.
 Install once into the shared prefix on node 0, then run the read-only doctor and AOT verifier on every host; success reports artifact commit `df1957e623d1283ba2a572cb730a6b130fbf1b0c`, wheel SHA-256 `85fc7b48…377ac5`, and H100 capability `[9, 0]`.
 
@@ -50,12 +50,12 @@ unset PYTHONPATH PYTHONHOME LD_PRELOAD
 # One host, including a multi-GPU host: run both commands once on that host.
 # Multiple hosts with one shared /mnt/shared/openfold3/src prefix: run them once on node 0.
 # Multiple hosts with node-local prefixes: run them independently on every host.
-pixi install -e openfold3-h100
-pixi run -e openfold3-h100 setup-stablefold-h100
+pixi install -e openfold3-cuda12
+pixi run -e openfold3-cuda12 setup-stablefold-h100
 
 # Every host: check the environment.
-pixi run -e openfold3-h100 doctor-h100
-pixi run -e openfold3-h100 verify-aot
+pixi run -e openfold3-cuda12 doctor-h100
+pixi run -e openfold3-cuda12 verify-aot
 ```
 
 ## 3. Run a one-step StableFold smoke test
@@ -73,11 +73,11 @@ mkdir -p "$SUBSET_ROOT" "$OF3_WORK/configs" "$OF3_WORK/outputs/smoke"
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-h100 generate-pdb-subset -- \
+pixi run -e openfold3-cuda12 generate-pdb-subset -- \
   --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --runner-yaml "$SUBSET_ROOT/train_pdb_subset.yaml"
-pixi run -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-cuda12 python - <<'PY'
 import json
 import os
 from pathlib import Path
@@ -91,18 +91,18 @@ path.write_text(json.dumps({
 }))
 print(path)
 PY
-pixi run -e openfold3-h100 download-pdb-subset -- \
+pixi run -e openfold3-cuda12 download-pdb-subset -- \
   --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --val-size 0
-pixi run -e openfold3-h100 download-pdb-subset -- \
+pixi run -e openfold3-cuda12 download-pdb-subset -- \
   --verify --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --val-size 0
 
 export SMOKE_BASE="$OF3_WORK/configs/smoke.base.yml"
 export SMOKE_YAML="$OF3_WORK/configs/smoke.stablefold.yml"
-pixi run -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-cuda12 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -133,12 +133,12 @@ dst.write_text(yaml.safe_dump(cfg, sort_keys=False))
 print(dst)
 PY
 
-pixi run -e openfold3-h100 select-training-backend \
+pixi run -e openfold3-cuda12 select-training-backend \
   "$SMOKE_BASE" --backend stablefold --output "$SMOKE_YAML"
 export OF3_RUN_CWD="$OF3_WORK"
 export CUDA_VISIBLE_DEVICES=0
 set -o pipefail
-pixi run -e openfold3-h100 train-single-gpu \
+pixi run -e openfold3-cuda12 train-single-gpu \
   train --runner-yaml "$SMOKE_YAML" --seed 42 \
   2>&1 | tee "$OF3_WORK/outputs/smoke/train.log"
 ```
@@ -159,17 +159,17 @@ mkdir -p "$OF3_WORK/configs" "$OF3_WORK/outputs" "$OF3_WORK/logs"
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-h100 generate-pdb-subset -- \
+pixi run -e openfold3-cuda12 generate-pdb-subset -- \
   --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --runner-yaml "$SUBSET_ROOT/train_pdb_subset_4096.yaml" \
   --train-size 4096 --seed 42
-pixi run -e openfold3-h100 download-pdb-subset -- \
+pixi run -e openfold3-cuda12 download-pdb-subset -- \
   --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --train-size 4096 --val-size 0 --workers 24 \
   2>&1 | tee "$OF3_WORK/logs/download_subset_4096.log"
-pixi run -e openfold3-h100 download-pdb-subset -- \
+pixi run -e openfold3-cuda12 download-pdb-subset -- \
   --verify --target-dir "$SUBSET_ROOT" \
   --output-dir "$SUBSET_ROOT/pdb_training_set" \
   --train-size 4096 --val-size 0 \
@@ -177,7 +177,7 @@ pixi run -e openfold3-h100 download-pdb-subset -- \
 
 export TRAIN_BASE="$OF3_WORK/configs/train_4096_crop384.base.yml"
 export TRAIN_BACKEND="$OF3_WORK/configs/train_4096_crop384.${BACKEND}.yml"
-pixi run -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-cuda12 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -207,7 +207,7 @@ dst.write_text(yaml.safe_dump(cfg, sort_keys=False))
 print(dst)
 PY
 
-pixi run -e openfold3-h100 select-training-backend \
+pixi run -e openfold3-cuda12 select-training-backend \
   "$TRAIN_BASE" --backend "$BACKEND" --output "$TRAIN_BACKEND"
 ```
 
@@ -231,7 +231,7 @@ mkdir -p "$OUTPUT_DIR"
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-cuda12 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -244,7 +244,7 @@ Path(os.environ["RUNNER_YAML"]).write_text(yaml.safe_dump(cfg, sort_keys=False))
 PY
 
 set -o pipefail
-pixi run -e openfold3-h100 train-single-gpu \
+pixi run -e openfold3-cuda12 train-single-gpu \
   train --runner-yaml "$RUNNER_YAML" --seed 42 \
   2>&1 | tee "$OUTPUT_DIR/train.log"
 ```
@@ -269,7 +269,7 @@ mkdir -p "$OUTPUT_DIR"
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-cuda12 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -282,7 +282,7 @@ Path(os.environ["RUNNER_YAML"]).write_text(yaml.safe_dump(cfg, sort_keys=False))
 PY
 
 set -o pipefail
-pixi run -e openfold3-h100 train-single-node \
+pixi run -e openfold3-cuda12 train-single-node \
   train --runner-yaml "$RUNNER_YAML" --seed 42 \
   2>&1 | tee "$OUTPUT_DIR/train.log"
 ```
@@ -305,7 +305,7 @@ export OUTPUT_DIR="$OF3_WORK/outputs/two_node_8gpu.${BACKEND}"
 mkdir -p "$OUTPUT_DIR"
 cd "$OF3_SRC"
 
-pixi run -e openfold3-h100 python - <<'PY'
+pixi run -e openfold3-cuda12 python - <<'PY'
 import os
 from pathlib import Path
 import yaml
@@ -335,7 +335,7 @@ cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 set -o pipefail
-pixi run -e openfold3-h100 train-multinode \
+pixi run -e openfold3-cuda12 train-multinode \
   --nnodes="$NNODES" --nproc-per-node="$GPUS_PER_NODE" \
   --node-rank="$NODE_RANK" --master-addr="$MASTER_ADDR" \
   --master-port="$MASTER_PORT" --module openfold3.run_openfold \
@@ -354,7 +354,7 @@ export PATH="$HOME/.pixi/bin:$PATH"
 export OF3_SRC=/mnt/shared/openfold3/src
 cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
-pixi run -e openfold3-h100 verify-aot
+pixi run -e openfold3-cuda12 verify-aot
 
 grep -RIE 'Traceback|CUDA error|out of memory|OOM|NCCL.*timeout' \
   /mnt/shared/openfold3/outputs --include='*.log' || true
