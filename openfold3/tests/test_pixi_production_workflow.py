@@ -61,6 +61,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         "doctor-h100",
         "download-pdb-subset",
         "generate-pdb-subset",
+        "purify-pdb-subset",
         "prepare-training-data",
         "setup-pdb-subset",
         "setup-stablefold-h100",
