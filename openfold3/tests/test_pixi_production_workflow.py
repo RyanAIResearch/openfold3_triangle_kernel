@@ -38,15 +38,30 @@ def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     assert production["dependencies"]["pytorch-gpu"] == "==2.10.0"
     assert production["dependencies"]["pytorch-lightning"] == "==2.6.1"
     assert production["dependencies"]["cuda-version"] == "12.9.*"
+    assert production["pypi-dependencies"]["openfold3"] == {
+        "path": (
+            "release_artifacts/stablefold-h100-ce15d03b/"
+            "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl"
+        )
+    }
 
     lock = yaml.safe_load((REPOSITORY / "pixi.lock").read_text())
     locked_environments = lock["environments"]
     assert "openfold3-h100" not in locked_environments
     locked = locked_environments["openfold3-cuda12"]
+    production_wheel = (
+        "./release_artifacts/stablefold-h100-ce15d03b/"
+        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl"
+    )
+    locked_pypi = []
     for packages in locked["packages"].values():
         for package in packages:
             if "pypi" in package:
-                assert package["pypi"].startswith(("https://", "http://"))
+                locked_pypi.append(package["pypi"])
+                assert package["pypi"].startswith(("https://", "http://")) or (
+                    package["pypi"] == production_wheel
+                )
+    assert locked_pypi.count(production_wheel) == 1
     development_locked = locked_environments["openfold3-cuda12-dev"]
     assert any(
         package.get("pypi") == "./"
@@ -75,7 +90,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
     assert commands["train-single-gpu"][-1] == "run_openfold"
     assert commands["train-single-node"][-1] == "run_openfold"
     assert commands["train-multinode"][-1] == "torchrun"
-    assert commands["setup-stablefold-h100"][3] == "install-prebuilt"
+    assert commands["setup-stablefold-h100"][3] == "verify-prebuilt"
     assert commands["verify-aot"][3] == "verify-prebuilt"
     assert not any("build" in " ".join(command) for command in commands.values())
     for name in ("train-single-gpu", "train-single-node", "train-multinode"):

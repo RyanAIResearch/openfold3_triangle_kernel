@@ -52,14 +52,14 @@ run them independently on every host because Pixi does not synchronize nodes.
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
 pixi install -e openfold3-cuda12
-pixi run -e openfold3-cuda12 setup-stablefold-h100
 pixi run -e openfold3-cuda12 doctor-h100
 pixi run -e openfold3-cuda12 verify-aot
 ```
 
 The production Pixi environment deliberately contains no editable OpenFold3
-dependency. `setup-stablefold-h100` verifies and installs the repository-pinned
-wheel without compiling any StableFold source, while every training task checks
+dependency. `pixi install` installs the repository-pinned wheel directly from
+the committed lockfile without compiling any StableFold source, while every
+training task checks
 that the installed package, artifact commit, ABI, embedded manifest, wheel
 RECORD, and five extension hashes still match before launching outside the
 source checkout. Dependencies may probe the Pixi-provided compiler ABI and

@@ -30,18 +30,20 @@ cd openfold3_triangle_kernel
 
 ```bash
 pixi install -e openfold3-cuda12
-pixi run -e openfold3-cuda12 setup-stablefold-h100
 ```
 
-The setup command installs the prebuilt StableFold kernels. To check the GPU,
-environment, and all five AOT kernel modules, run:
+This one command creates the environment and installs the repository-pinned
+OpenFold3 wheel with the prebuilt StableFold kernels. No separate setup command
+or local kernel build is required.
+
+To optionally check the GPU, environment, and all five AOT kernel modules, run:
 
 ```bash
 pixi run -e openfold3-cuda12 doctor-h100
 pixi run -e openfold3-cuda12 verify-aot
 ```
 
-If setup reports `StableFold AOT artifacts require a clean Git checkout`, first
+If verification reports `StableFold AOT artifacts require a clean Git checkout`, first
 inspect the checkout:
 
 ```bash
@@ -55,7 +57,7 @@ lockfile. Update it without reinstalling the repository:
 git restore --source=HEAD -- pixi.lock
 git pull --ff-only origin main
 pixi install -e openfold3-cuda12
-pixi run -e openfold3-cuda12 setup-stablefold-h100
+pixi run -e openfold3-cuda12 verify-aot
 ```
 
 Do not restore `pixi.lock` when you intentionally edited dependencies, and do

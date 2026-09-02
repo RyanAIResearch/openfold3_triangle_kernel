@@ -2881,6 +2881,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wcwidth-0.2.14-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
+      - pypi: ./release_artifacts/stablefold-h100-ce15d03b/openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/23/cd/066e86230ae37ed0be70aae89aabf03ca8d9f39c8aea0dec8029455b5540/opt_einsum-3.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4e/d0/4b9da3d9c5749bf2c93f2818af4dc306f3b3ccc671f68f6820635fd53b74/cuequivariance_torch-0.11.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/9e/77/3dee0c8f219cc5e68e7d84abc1ecc315856104c459658890bd9ecce17815/mypy_baseline-0.7.4-py3-none-any.whl
@@ -28872,6 +28873,53 @@ packages:
   timestamp: 1764777166076
 - pypi: ./
   name: openfold3
+  requires_dist:
+  - numpy
+  - scipy
+  - pandas
+  - torch
+  - ml-collections
+  - pytorch-lightning>=2.1
+  - biotite
+  - rdkit<2026
+  - pdbeccdutils
+  - kalign-python
+  - requests
+  - awscli
+  - awscrt
+  - boto3
+  - pyyaml
+  - ijson
+  - memory-profiler
+  - wandb
+  - func-timeout
+  - tqdm
+  - typing-extensions
+  - lmdb
+  - pytest ; extra == 'dev'
+  - pytest-xdist ; extra == 'dev'
+  - pytest-cov ; extra == 'dev'
+  - pytest-benchmark ; extra == 'dev'
+  - pytest-regressions ; extra == 'dev'
+  - pytest-vcr ; extra == 'dev'
+  - ruff ; extra == 'dev'
+  - mypy ; extra == 'dev'
+  - mypy-baseline ; extra == 'dev'
+  - pre-commit ; extra == 'dev'
+  - sphinx ; extra == 'dev'
+  - myst-parser ; extra == 'dev'
+  - furo ; extra == 'dev'
+  - cuequivariance>=0.8 ; extra == 'cuequivariance'
+  - cuequivariance-ops-torch-cu12>=0.8 ; extra == 'cuequivariance'
+  - cuequivariance-torch>=0.8 ; extra == 'cuequivariance'
+  - torch==2.10.0 ; extra == 'cuequivariance'
+  - deepspeed>=0.18.7 ; extra == 'deepspeed'
+  - torch==2.10.0 ; extra == 'stablefold-h100'
+  - pytorch-lightning==2.6.1 ; extra == 'stablefold-h100'
+  requires_python: ==3.14.*
+- pypi: ./release_artifacts/stablefold-h100-ce15d03b/openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl
+  name: openfold3
+  version: 0.4.3.dev5512+gce15d03b0
   requires_dist:
   - numpy
   - scipy
