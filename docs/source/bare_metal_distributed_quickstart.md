@@ -29,20 +29,16 @@ cd openfold3_triangle_kernel
 ### Set Up OpenFold3 and StableFold
 
 ```bash
-pixi install --frozen -e openfold3-cuda12
-pixi run --frozen -e openfold3-cuda12 setup-stablefold-h100
+pixi install -e openfold3-cuda12
+pixi run -e openfold3-cuda12 setup-stablefold-h100
 ```
-
-Use `--frozen` on every production Pixi command in this guide. Pixi otherwise
-may rewrite the committed `pixi.lock` before starting a task, while the
-StableFold artifact verifier intentionally requires a clean checkout.
 
 The setup command installs the prebuilt StableFold kernels. To check the GPU,
 environment, and all five AOT kernel modules, run:
 
 ```bash
-pixi run --frozen -e openfold3-cuda12 doctor-h100
-pixi run --frozen -e openfold3-cuda12 verify-aot
+pixi run -e openfold3-cuda12 doctor-h100
+pixi run -e openfold3-cuda12 verify-aot
 ```
 
 If setup reports `StableFold AOT artifacts require a clean Git checkout`, first
@@ -52,14 +48,14 @@ inspect the checkout:
 git status --short
 ```
 
-When the only output is `M pixi.lock` immediately after a plain `pixi install`,
-the change is a generated lockfile rewrite. Recover without reinstalling the
-repository:
+When the only output is `M pixi.lock`, the checkout predates the current
+lockfile. Update it without reinstalling the repository:
 
 ```bash
 git restore --source=HEAD -- pixi.lock
-pixi install --frozen -e openfold3-cuda12
-pixi run --frozen -e openfold3-cuda12 setup-stablefold-h100
+git pull --ff-only origin main
+pixi install -e openfold3-cuda12
+pixi run -e openfold3-cuda12 setup-stablefold-h100
 ```
 
 Do not restore `pixi.lock` when you intentionally edited dependencies, and do
@@ -73,14 +69,14 @@ For a quick training experiment, generate a reproducible subset with 1,000
 training structures:
 
 ```bash
-pixi run --frozen -e openfold3-cuda12 generate-pdb-subset -- \
+pixi run -e openfold3-cuda12 generate-pdb-subset -- \
   --train-size 1000 --seed 42
 ```
 
 ### Download the Subset
 
 ```bash
-pixi run --frozen -e openfold3-cuda12 download-pdb-subset -- \
+pixi run -e openfold3-cuda12 download-pdb-subset -- \
   --train-size 1000 --workers 24
 ```
 
@@ -100,7 +96,7 @@ Rerun the download once before purification to rule out a temporary network
 failure. If an object still reports `404`, `NoSuchKey`, or remains missing, run:
 
 ```bash
-pixi run --frozen -e openfold3-cuda12 purify-pdb-subset -- \
+pixi run -e openfold3-cuda12 purify-pdb-subset -- \
   --train-size 1000
 ```
 
@@ -123,7 +119,7 @@ use the same runner YAML path.
 Use StableFold by default:
 
 ```bash
-pixi run --frozen -e openfold3-cuda12 select-training-backend \
+pixi run -e openfold3-cuda12 select-training-backend \
   datasets/train_pdb_subset.purified.yaml \
   --backend stablefold \
   --output datasets/train_pdb_subset.purified.stablefold.yaml
@@ -136,7 +132,7 @@ To select another implementation, change `BACKEND` and use the generic form:
 ```bash
 export BACKEND=cueq
 
-pixi run --frozen -e openfold3-cuda12 select-training-backend \
+pixi run -e openfold3-cuda12 select-training-backend \
   datasets/train_pdb_subset.purified.yaml \
   --backend "$BACKEND" \
   --output "datasets/train_pdb_subset.purified.${BACKEND}.yaml"
@@ -165,7 +161,7 @@ and checkpoint output disabled:
 ```bash
 export BACKEND=stablefold
 
-pixi run --frozen -e openfold3-cuda12 select-training-backend \
+pixi run -e openfold3-cuda12 select-training-backend \
   datasets/train_pdb_subset.purified.yaml \
   --backend "$BACKEND" \
   --single-gpu-smoke \
@@ -208,7 +204,7 @@ export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run --frozen -e openfold3-cuda12 train-single-gpu \
+pixi run -e openfold3-cuda12 train-single-gpu \
   train \
   --runner-yaml "$PWD/datasets/single_gpu_smoke.${BACKEND}.yaml" \
   --seed 42
@@ -271,7 +267,7 @@ Launch training on one H100:
 export BACKEND=stablefold
 export CUDA_VISIBLE_DEVICES=0
 
-pixi run --frozen -e openfold3-cuda12 train-single-gpu \
+pixi run -e openfold3-cuda12 train-single-gpu \
   train \
   --runner-yaml "$PWD/datasets/train_pdb_subset.purified.${BACKEND}.yaml" \
   --seed 42
@@ -299,7 +295,7 @@ Then launch OpenFold3 once:
 export BACKEND=stablefold
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
-pixi run --frozen -e openfold3-cuda12 train-single-node \
+pixi run -e openfold3-cuda12 train-single-node \
   train \
   --runner-yaml "$PWD/datasets/train_pdb_subset.purified.${BACKEND}.yaml" \
   --seed 42
@@ -345,7 +341,7 @@ export MASTER_ADDR=10.0.0.10
 export MASTER_PORT=29500
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run --frozen -e openfold3-cuda12 train-multinode \
+pixi run -e openfold3-cuda12 train-multinode \
   --nnodes="$NNODES" \
   --nproc-per-node="$GPUS_PER_NODE" \
   --node-rank="$NODE_RANK" \

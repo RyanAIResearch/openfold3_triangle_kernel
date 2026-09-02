@@ -82,7 +82,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         assert "production_training" not in " ".join(commands[name])
 
 
-def test_h100_user_docs_keep_production_pixi_commands_frozen():
+def test_h100_user_docs_use_normal_pixi_commands():
     for relative in (
         "README.md",
         "docs/source/bare_metal_distributed_quickstart.md",
@@ -91,13 +91,12 @@ def test_h100_user_docs_keep_production_pixi_commands_frozen():
         assert "--as-is" not in text
         assert "--locked" not in text
         assert "openfold3-h100" not in text
-        assert "pixi install --frozen -e openfold3-cuda12" in text
-        assert "pixi run --frozen -e openfold3-cuda12" in text
-        assert "pixi install -e openfold3-cuda12" not in text
-        assert "pixi run -e openfold3-cuda12" not in text
+        assert "--frozen" not in text
+        assert "pixi install -e openfold3-cuda12" in text
+        assert "pixi run -e openfold3-cuda12" in text
 
 
-def test_dirty_pixi_lock_error_explains_frozen_recovery(monkeypatch):
+def test_dirty_pixi_lock_error_explains_repository_update(monkeypatch):
     monkeypatch.setattr(
         artifact_manager,
         "_git",
@@ -110,7 +109,7 @@ def test_dirty_pixi_lock_error_explains_frozen_recovery(monkeypatch):
     message = str(caught.value)
     assert "Dirty paths:\n M pixi.lock" in message
     assert "git restore --source=HEAD -- pixi.lock" in message
-    assert "pixi run --frozen -e openfold3-cuda12" in message
+    assert "git pull --ff-only origin main" in message
 
 
 def test_development_consumers_do_not_select_the_h100_runtime():

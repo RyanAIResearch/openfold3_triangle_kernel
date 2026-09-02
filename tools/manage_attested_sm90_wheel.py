@@ -100,12 +100,11 @@ def source_commit() -> str:
         dirty_paths = [line[3:].strip() for line in dirty.splitlines()]
         if dirty_paths and set(dirty_paths) == {"pixi.lock"}:
             message += (
-                "\nPixi rewrote only pixi.lock. If you did not intentionally change "
-                "dependencies, run:\n"
+                "\nOnly pixi.lock changed. If you did not intentionally change "
+                "dependencies, update to the current repository lockfile:\n"
                 "  git restore --source=HEAD -- pixi.lock\n"
-                "Then rerun Pixi with --frozen, for example:\n"
-                "  pixi run --frozen -e openfold3-cuda12 "
-                "setup-stablefold-h100"
+                "  git pull --ff-only origin main\n"
+                "Then rerun the same Pixi command."
             )
         raise ArtifactError(message)
     return _git("rev-parse", "HEAD")
