@@ -93,7 +93,21 @@ def source_commit() -> str:
 
     dirty = _git("status", "--porcelain", "--untracked-files=all")
     if dirty:
-        raise ArtifactError("StableFold AOT artifacts require a clean Git checkout")
+        message = (
+            "StableFold AOT artifacts require a clean Git checkout.\n"
+            f"Dirty paths:\n{dirty}"
+        )
+        dirty_paths = [line[3:].strip() for line in dirty.splitlines()]
+        if dirty_paths and set(dirty_paths) == {"pixi.lock"}:
+            message += (
+                "\nPixi rewrote only pixi.lock. If you did not intentionally change "
+                "dependencies, run:\n"
+                "  git restore --source=HEAD -- pixi.lock\n"
+                "Then rerun Pixi with --frozen, for example:\n"
+                "  pixi run --frozen -e openfold3-cuda12 "
+                "setup-stablefold-h100"
+            )
+        raise ArtifactError(message)
     return _git("rev-parse", "HEAD")
 
 

@@ -51,11 +51,17 @@ run them independently on every host because Pixi does not synchronize nodes.
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
-pixi install -e openfold3-cuda12
-pixi run -e openfold3-cuda12 setup-stablefold-h100
-pixi run -e openfold3-cuda12 doctor-h100
-pixi run -e openfold3-cuda12 verify-aot
+pixi install --frozen -e openfold3-cuda12
+pixi run --frozen -e openfold3-cuda12 setup-stablefold-h100
+pixi run --frozen -e openfold3-cuda12 doctor-h100
+pixi run --frozen -e openfold3-cuda12 verify-aot
 ```
+
+Keep `--frozen` on every production `pixi install` and `pixi run` command. It
+uses the committed lockfile without rewriting `pixi.lock`; the StableFold
+artifact verifier intentionally rejects a dirty checkout. If an earlier plain
+`pixi install` changed only `pixi.lock`, restore that generated change with
+`git restore --source=HEAD -- pixi.lock` and rerun the commands above.
 
 The production Pixi environment deliberately contains no editable OpenFold3
 dependency. `setup-stablefold-h100` verifies and installs the repository-pinned
