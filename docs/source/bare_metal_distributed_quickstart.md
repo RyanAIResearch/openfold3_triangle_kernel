@@ -94,24 +94,107 @@ The JSON report records every removed PDB ID and the files that were missing.
 Run the purifier even when no 404 is reported so the following commands always
 use the same runner YAML path.
 
-### Enable StableFold Kernels
+### Choose a Training Backend
 
 ```bash
+export BACKEND=stablefold
+
 pixi run -e openfold3-cuda12 select-training-backend \
   datasets/train_pdb_subset.purified.yaml \
-  --backend stablefold \
-  --output datasets/train_pdb_subset.purified.stablefold.yaml
+  --backend "$BACKEND" \
+  --output "datasets/train_pdb_subset.purified.${BACKEND}.yaml"
 ```
 
-This changes only the selected triangle attention and triangle multiplicative
-backends. OpenFold3 still owns the model, data pipeline, loss, optimizer, EMA,
-checkpointing, and distributed training.
+Change only `BACKEND` to select a different implementation:
+
+| `BACKEND` | Selected operator route |
+| --- | --- |
+| `aqlab` | Stock OpenFold3 PyTorch operators |
+| `cueq` | NVIDIA cuEquivariance triangle kernels |
+| `stablefold` | StableFold triangle attention and triangle multiplicative kernels |
+| `deepspeed-evo` | DeepSpeed Evo attention operator; this does not enable ZeRO |
+
+The selector first disables every mutually exclusive route and then enables the
+requested backend, so rerunning it cannot leave mixed backend flags. Diffusion
+stays on OpenFold3's original path. OpenFold3 continues to own the model, data
+pipeline, loss, optimizer, EMA, checkpointing, and distributed training.
 
 ## Training
 
+### First: Run a One-Step Single-GPU Smoke Test
+
+Always run this test before requesting multiple GPUs or starting a long job. It
+creates a separate runner YAML for one BF16 training step with validation, W&B,
+and checkpoint output disabled:
+
+```bash
+export BACKEND=stablefold
+
+pixi run -e openfold3-cuda12 select-training-backend \
+  datasets/train_pdb_subset.purified.yaml \
+  --backend "$BACKEND" \
+  --single-gpu-smoke \
+  --output "datasets/single_gpu_smoke.${BACKEND}.yaml"
+```
+
+The `--single-gpu-smoke` preset sets these values automatically; no manual YAML
+edit is required:
+
+```yaml
+experiment_settings:
+  restart_checkpoint_path: null
+
+data_module_args:
+  batch_size: 1
+  num_workers: 0
+  num_workers_validation: 0
+  epoch_len: 1
+
+checkpoint_config:
+  save_top_k: 0
+  save_last: false
+
+pl_trainer_args:
+  devices: 1
+  num_nodes: 1
+  precision: bf16-mixed
+  max_epochs: 1
+  max_steps: 1
+  limit_val_batches: 0
+  num_sanity_val_steps: 0
+```
+
+The official launcher runs outside the source checkout. Create its working
+directory and expose one H100:
+
+```bash
+mkdir -p ../openfold3-run
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
+export CUDA_VISIBLE_DEVICES=0
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
+
+pixi run -e openfold3-cuda12 train-single-gpu \
+  train \
+  --runner-yaml "$PWD/datasets/single_gpu_smoke.${BACKEND}.yaml" \
+  --seed 42
+```
+
+A successful smoke test completes exactly one forward pass, backward pass, and
+optimizer step through the selected backend. To smoke-test another backend,
+change only `BACKEND`, regenerate its runner YAML, and rerun the same launch
+command.
+
+This exact `stablefold` smoke path has been verified to reach `max_steps=1` on
+a Lambda H100 80 GB GPU. The first launch can spend about a minute in CPU-heavy
+model and data setup before the training progress bar appears. Warnings that no
+logger is configured are expected because the smoke preset deliberately
+disables W&B; they are not training failures.
+
+### Scheme 1: Single-GPU Training
+
 The generated YAML defaults to epoch-based training. For a pure 400-training-step
 run with no validation, update the existing entries in
-`datasets/train_pdb_subset.purified.stablefold.yaml`:
+`datasets/train_pdb_subset.purified.${BACKEND}.yaml`:
 
 ```yaml
 experiment_settings:
@@ -135,17 +218,6 @@ pl_trainer_args:
 `max_steps` is the stopping condition. Validation and validation sanity checks
 are disabled, so the result covers exactly 400 optimizer training steps.
 
-The official launcher runs outside the source checkout. Create its working
-directory once before starting training:
-
-```bash
-mkdir -p ../openfold3-run
-export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
-unset PYTHONPATH PYTHONHOME LD_PRELOAD
-```
-
-### Scheme 1: Single-GPU Training
-
 Use these topology values:
 
 ```yaml
@@ -161,11 +233,12 @@ pl_trainer_args:
 Launch training on one H100:
 
 ```bash
+export BACKEND=stablefold
 export CUDA_VISIBLE_DEVICES=0
 
 pixi run -e openfold3-cuda12 train-single-gpu \
   train \
-  --runner-yaml "$PWD/datasets/train_pdb_subset.purified.stablefold.yaml" \
+  --runner-yaml "$PWD/datasets/train_pdb_subset.purified.${BACKEND}.yaml" \
   --seed 42
 ```
 
@@ -188,11 +261,12 @@ pl_trainer_args:
 Then launch OpenFold3 once:
 
 ```bash
+export BACKEND=stablefold
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 pixi run -e openfold3-cuda12 train-single-node \
   train \
-  --runner-yaml "$PWD/datasets/train_pdb_subset.purified.stablefold.yaml" \
+  --runner-yaml "$PWD/datasets/train_pdb_subset.purified.${BACKEND}.yaml" \
   --seed 42
 ```
 
@@ -226,6 +300,7 @@ directory must use the same paths on every node. Run the following command on
 both allocated nodes, changing `NODE_RANK` to `0` or `1`:
 
 ```bash
+export BACKEND=stablefold
 export OF3_RUN_CWD=/shared/openfold3-run
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export NNODES=2
@@ -243,7 +318,7 @@ pixi run -e openfold3-cuda12 train-multinode \
   --master-port="$MASTER_PORT" \
   --module openfold3.run_openfold \
   train \
-  --runner-yaml /shared/train_pdb_subset.purified.stablefold.yaml \
+  --runner-yaml "/shared/train_pdb_subset.purified.${BACKEND}.yaml" \
   --seed 42
 ```
 

@@ -2,7 +2,11 @@ from copy import deepcopy
 
 import pytest
 
-from tools.select_training_backend import BACKEND_FLAGS, configure_training_backend
+from tools.select_training_backend import (
+    BACKEND_FLAGS,
+    configure_single_gpu_smoke,
+    configure_training_backend,
+)
 
 
 @pytest.fixture
@@ -71,3 +75,35 @@ def test_each_accelerated_backend_has_exactly_one_operator_family():
     assert BACKEND_FLAGS["stablefold"]["use_stable_triangle_attention"] is True
     assert BACKEND_FLAGS["stablefold"]["use_stable_triangle_multiplicative"] is True
     assert BACKEND_FLAGS["deepspeed-evo"]["use_deepspeed_evo_attention"] is True
+
+
+def test_single_gpu_smoke_is_one_validation_free_training_step(base_config):
+    configured = configure_single_gpu_smoke(base_config, backend="stablefold")
+
+    assert configured["experiment_settings"] == {
+        "output_dir": "./openfold3_smoke_stablefold",
+        "restart_checkpoint_path": None,
+    }
+    assert configured["data_module_args"] == {
+        "batch_size": 1,
+        "epoch_len": 1,
+        "num_workers": 0,
+        "num_workers_validation": 0,
+    }
+    assert configured["logging_config"]["wandb_config"] is None
+    assert configured["checkpoint_config"] == {
+        "save_top_k": 0,
+        "save_last": False,
+    }
+    assert configured["pl_trainer_args"] == {
+        "devices": 1,
+        "num_nodes": 1,
+        "deepspeed_config_path": None,
+        "mpi_plugin": False,
+        "precision": "bf16-mixed",
+        "max_epochs": 1,
+        "max_steps": 1,
+        "limit_val_batches": 0,
+        "num_sanity_val_steps": 0,
+        "log_every_n_steps": 1,
+    }

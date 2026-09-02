@@ -63,6 +63,45 @@ def configure_training_backend(
     return config
 
 
+def configure_single_gpu_smoke(
+    config: dict[str, Any],
+    *,
+    backend: str,
+) -> dict[str, Any]:
+    """Configure one validation-free BF16 training step on one GPU."""
+
+    experiment_settings = config.setdefault("experiment_settings", {})
+    experiment_settings.update(
+        output_dir=f"./openfold3_smoke_{backend}",
+        restart_checkpoint_path=None,
+    )
+    data_module_args = config.setdefault("data_module_args", {})
+    data_module_args.update(
+        batch_size=1,
+        num_workers=0,
+        num_workers_validation=0,
+        epoch_len=1,
+    )
+    logging_config = config.setdefault("logging_config", {})
+    logging_config["wandb_config"] = None
+    checkpoint_config = config.setdefault("checkpoint_config", {})
+    checkpoint_config.update(save_top_k=0, save_last=False)
+    pl_trainer_args = config.setdefault("pl_trainer_args", {})
+    pl_trainer_args.update(
+        devices=1,
+        num_nodes=1,
+        precision="bf16-mixed",
+        deepspeed_config_path=None,
+        mpi_plugin=False,
+        max_epochs=1,
+        max_steps=1,
+        limit_val_batches=0,
+        num_sanity_val_steps=0,
+        log_every_n_steps=1,
+    )
+    return config
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("runner_yaml", type=Path)
@@ -71,6 +110,11 @@ def main() -> None:
         "--output",
         type=Path,
         help="write a new YAML instead of replacing runner_yaml",
+    )
+    parser.add_argument(
+        "--single-gpu-smoke",
+        action="store_true",
+        help="also configure one validation-free BF16 training step on one GPU",
     )
     args = parser.parse_args()
 
@@ -82,6 +126,8 @@ def main() -> None:
         config,
         backend=args.backend,
     )
+    if args.single_gpu_smoke:
+        configure_single_gpu_smoke(config, backend=args.backend)
     destination = args.output or args.runner_yaml
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w") as target:
