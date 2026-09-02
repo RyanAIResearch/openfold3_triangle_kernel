@@ -230,6 +230,71 @@ model and data setup before the training progress bar appears. Warnings that no
 logger is configured are expected because the smoke preset deliberately
 disables W&B; they are not training failures.
 
+### Compare Backend Training Time and Loss
+
+Run every backend from scratch with the same purified data, initialization
+seed, data seed, BF16 precision, and single H100. The benchmark disables
+validation, W&B, and checkpoint output. It excludes five warmup steps, then
+measures 20 optimizer training steps:
+
+```bash
+mkdir -p ../openfold3-run/backend-comparison
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
+export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison"
+export CUDA_VISIBLE_DEVICES=0
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
+
+for BACKEND in aqlab cueq stablefold; do
+  pixi run -e openfold3-cuda12 benchmark-single-gpu \
+    --runner-yaml "$PWD/datasets/train_pdb_subset.purified.yaml" \
+    --backend "$BACKEND" \
+    --output-root "$RESULTS_ROOT" \
+    --warmup-steps 5 \
+    --measure-steps 20 \
+    --seed 42
+done
+
+pixi run -e openfold3-cuda12 plot-backend-comparison \
+  "$RESULTS_ROOT" \
+  --baseline aqlab
+```
+
+Add `deepspeed-evo` to the loop to compare that operator route as well. For a
+paper-quality 400-step comparison, use the same command with
+`--warmup-steps 10 --measure-steps 400` for every backend. Run the backends on
+the same otherwise-idle GPU; do not compare results collected on different GPU
+models or while another process is using the device.
+
+Each backend directory contains:
+
+```text
+runner.yaml
+steps.csv
+summary.json
+```
+
+`steps.csv` records the training loss and CUDA-event step time. `summary.json`
+reports total fit wall time, steady-state wall seconds per training step,
+samples per second, and mean, median, p95, minimum, and maximum GPU step time.
+Warmup is excluded from every steady-state timing statistic. CUDA events are
+recorded asynchronously and synchronized only at the measurement boundaries,
+so the benchmark does not add a device synchronization to every measured step.
+
+The comparison command writes:
+
+```text
+comparison/backend_comparison.csv
+comparison/backend_comparison.json
+comparison/training_time.png
+comparison/loss_curves.png
+```
+
+`training_time.png` shows seconds per optimizer training step and speedup over
+the selected baseline. `loss_curves.png` overlays matched-seed training loss by
+optimizer step so users can check that a faster backend still follows the same
+optimization trajectory. The CSV and JSON files are the source of truth for
+tables and paper plots.
+
 ### Scheme 1: Single-GPU Training
 
 The generated YAML defaults to epoch-based training. For a pure 400-training-step

@@ -85,11 +85,17 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         "train-single-gpu",
         "train-single-node",
         "train-multinode",
+        "benchmark-single-gpu",
+        "plot-backend-comparison",
     }
     commands = {name: value["cmd"] for name, value in tasks.items() if "cmd" in value}
     assert commands["train-single-gpu"][-1] == "run_openfold"
     assert commands["train-single-node"][-1] == "run_openfold"
     assert commands["train-multinode"][-1] == "torchrun"
+    assert commands["benchmark-single-gpu"][-1] == "tools/run_backend_benchmark.sh"
+    assert commands["plot-backend-comparison"][-1] == (
+        "tools/plot_backend_comparison.py"
+    )
     assert commands["setup-stablefold-h100"][3] == "verify-prebuilt"
     assert commands["verify-aot"][3] == "verify-prebuilt"
     assert not any("build" in " ".join(command) for command in commands.values())
@@ -162,6 +168,17 @@ def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():
         "max-restarts",
     ):
         assert forbidden not in wrapper
+
+
+def test_backend_benchmark_wrapper_uses_installed_runtime_outside_source():
+    wrapper = (REPOSITORY / "tools/run_backend_benchmark.sh").read_text()
+    assert "tools.manage_attested_sm90_wheel verify-prebuilt" in wrapper
+    assert "PYTHONPATH PYTHONHOME LD_PRELOAD" in wrapper
+    assert "OF3_RUN_CWD must be outside the source checkout" in wrapper
+    assert (
+        '"$prefix/bin/python" "$source_root/tools/benchmark_training_backend.py"'
+        in wrapper
+    )
 
 
 def test_prebuilt_bundle_is_checked_in_and_pinned_by_digest():

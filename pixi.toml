@@ -506,6 +506,14 @@ train-multinode.cmd = [
     "tools/run_official_training.sh",
     "torchrun",
 ]
+benchmark-single-gpu.cmd = [
+    "bash",
+    "tools/run_backend_benchmark.sh",
+]
+plot-backend-comparison.cmd = [
+    "python",
+    "tools/plot_backend_comparison.py",
+]
 
 
 # --- Openfold3 style MSA generation
