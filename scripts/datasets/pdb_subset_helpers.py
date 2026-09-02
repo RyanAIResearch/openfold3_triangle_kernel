@@ -525,6 +525,10 @@ def build_runner_yaml_config(cache_files: dict[str, Path], local_root: Path) -> 
     were downloaded into (i.e. download_subset.py's --output-dir), matching
     the layout produced by build_manifest.
     """
+    cache_files = {
+        split: path.expanduser().resolve() for split, path in cache_files.items()
+    }
+    local_root = local_root.expanduser().resolve()
     return {
         "experiment_settings": {
             "mode": "train",

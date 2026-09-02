@@ -78,9 +78,11 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         "generate-pdb-subset",
         "purify-pdb-subset",
         "prepare-training-data",
+        "prepare-pdb-subset",
         "setup-pdb-subset",
         "setup-stablefold-h100",
         "verify-aot",
+        "validate-training-data",
         "select-training-backend",
         "train-single-gpu",
         "train-single-node",
@@ -95,6 +97,10 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
     assert commands["train-multinode"][-1] == "torchrun"
     assert commands["benchmark-single-gpu"][-1] == "tools/run_backend_benchmark.sh"
     assert commands["benchmark-single-node"][-1] == "tools/run_backend_benchmark.sh"
+    assert commands["prepare-pdb-subset"][-1] == "tools/prepare_pdb_subset.py"
+    assert commands["validate-training-data"][-1] == (
+        "tools/validate_training_data.py"
+    )
     assert commands["plot-backend-comparison"][-1] == (
         "tools/plot_backend_comparison.py"
     )
@@ -119,11 +125,13 @@ def test_h100_user_docs_use_normal_pixi_commands():
         assert "pixi run -e openfold3-cuda12" in text
 
 
-def test_bare_metal_benchmark_prepares_four_thousand_samples():
+def test_bare_metal_benchmark_prepares_four_thousand_samples_atomically():
     text = (
         REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
     ).read_text()
-    assert text.count("--train-size 4000") == 3
+    assert text.count("--train-size 4000") == 1
+    assert "prepare-pdb-subset" in text
+    assert "validate-training-data" in text
     assert "--train-size 1000" not in text
 
 
@@ -155,9 +163,10 @@ def test_development_consumers_do_not_select_the_h100_runtime():
         assert "openfold3-cuda12-dev" in text
 
 
-def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():
+def test_official_launcher_preflights_data_and_aot_before_changing_cwd():
     wrapper = (REPOSITORY / "tools/run_official_training.sh").read_text()
     assert "tools.manage_attested_sm90_wheel verify-prebuilt" in wrapper
+    assert "tools/validate_training_data.py" in wrapper
     assert "PYTHONPATH PYTHONHOME LD_PRELOAD" in wrapper
     assert '"$prefix/bin/"*' in wrapper
     assert 'exec "$launcher_path" "$@"' in wrapper
@@ -175,6 +184,7 @@ def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():
 def test_backend_benchmark_wrapper_uses_installed_runtime_outside_source():
     wrapper = (REPOSITORY / "tools/run_backend_benchmark.sh").read_text()
     assert "tools.manage_attested_sm90_wheel verify-prebuilt" in wrapper
+    assert "tools/validate_training_data.py" in wrapper
     assert "PYTHONPATH PYTHONHOME LD_PRELOAD" in wrapper
     assert "OF3_RUN_CWD must be outside the source checkout" in wrapper
     assert (

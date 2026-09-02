@@ -65,7 +65,7 @@ not discard any other paths reported by `git status`.
 
 ## Prepare Training Data
 
-### Generate a PDB Subset
+### Prepare a Runnable PDB Subset
 
 For the standard 400-step comparison on up to eight GPUs, generate a
 reproducible subset with 4,000 training structures. Eight GPUs consume 3,200
@@ -73,35 +73,40 @@ sample draws over 400 optimizer steps at per-GPU batch size one, so 4,000
 provides coverage plus room for samples removed during purification:
 
 ```bash
-pixi run -e openfold3-cuda12 generate-pdb-subset -- \
-  --train-size 4000 --seed 42
+pixi run -e openfold3-cuda12 prepare-pdb-subset -- \
+  --train-size 4000 \
+  --seed 42 \
+  --workers 24
 ```
 
-### Download the Subset
+This is the recommended data command. It performs the complete sequence:
 
-```bash
-pixi run -e openfold3-cuda12 download-pdb-subset -- \
-  --train-size 4000 --workers 24
-```
+1. generates the reproducible train cache and pinned validation cache;
+2. downloads target structures, alignment arrays, templates, and reference
+   molecules;
+3. performs a second resumable download pass for transient failures;
+4. removes samples affected by persistent `404` or `NoSuchKey` responses; and
+5. validates every directory and cache path in the resulting runner YAML.
 
-The command downloads target structures, alignment arrays, templates, and
-reference molecules. It also generates:
+The command succeeds only after writing a runner YAML whose configured data
+paths exist:
 
 ```text
-datasets/train_pdb_subset.yaml
+datasets/train_pdb_subset.purified.yaml
+datasets/pdb_subset_purification_report.json
 ```
 
-Downloads are resumable. If the command is interrupted, run it again; existing
-files are skipped.
+Downloads are resumable. If the command is interrupted, paste the same command
+again; existing files are skipped. Persistent missing S3 objects are recorded
+in the JSON report and only dependent samples are removed. If the download
+directory is absent, purification removes every training sample, or a runner
+path is invalid, the command exits nonzero and does not claim the data is ready.
 
-### Purify Samples Affected by 404s
-
-Rerun the download once before purification to rule out a temporary network
-failure. If an object still reports `404`, `NoSuchKey`, or remains missing, run:
+To check an existing purified YAML without starting training, run:
 
 ```bash
-pixi run -e openfold3-cuda12 purify-pdb-subset -- \
-  --train-size 4000
+pixi run -e openfold3-cuda12 validate-training-data \
+  datasets/train_pdb_subset.purified.yaml
 ```
 
 The one-step single-GPU smoke test does not consume all 4,000 structures; the
@@ -109,19 +114,10 @@ larger subset is recommended so the same prepared data can also be reused for
 the full eight-GPU comparison. A smaller subset remains valid for installation
 and functional smoke testing.
 
-The purifier checks every sample's target structure, alignments, templates, and
-reference molecules. Samples that depend on a missing artifact or unreadable
-target structure are removed from a new cache; the original cache is unchanged.
-It writes:
-
-```text
-datasets/train_pdb_subset.purified.yaml
-datasets/pdb_subset_purification_report.json
-```
-
-The JSON report records every removed PDB ID and the files that were missing.
-Run the purifier even when no 404 is reported so the following commands always
-use the same runner YAML path.
+The original sampled caches are never modified. For debugging, the individual
+`generate-pdb-subset`, `download-pdb-subset`, and `purify-pdb-subset` tasks
+remain available, but the all-in-one command above is the supported quick-start
+path.
 
 ### Choose a Training Backend
 

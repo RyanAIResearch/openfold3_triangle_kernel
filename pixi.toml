@@ -462,6 +462,11 @@ prepare-training-data.cmd = [
     "tools.production_training",
     "prepare-training-data",
 ]
+prepare-pdb-subset.cmd = [
+    "python",
+    "-u",
+    "tools/prepare_pdb_subset.py",
+]
 generate-pdb-subset.cmd = [
     "python",
     "-u",
@@ -490,6 +495,7 @@ verify-aot.cmd = [
     "tools.manage_attested_sm90_wheel",
     "verify-prebuilt",
 ]
+validate-training-data.cmd = ["python", "tools/validate_training_data.py"]
 select-training-backend.cmd = ["python", "-m", "tools.select_training_backend"]
 train-single-gpu.cmd = [
     "bash",

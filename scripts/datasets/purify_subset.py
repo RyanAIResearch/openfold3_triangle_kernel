@@ -169,7 +169,7 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        from .pdb_subset_helpers import (
+        from .pdb_subset_helpers import (  # noqa: TID252
             default_target_dir,
             subset_cache_path,
             write_runner_yaml,
@@ -181,8 +181,15 @@ def main() -> None:
             write_runner_yaml,
         )
 
-    target_dir = args.target_dir or default_target_dir()
-    local_root = args.output_dir or (target_dir / "pdb_training_set")
+    target_dir = (args.target_dir or default_target_dir()).expanduser().resolve()
+    local_root = (
+        args.output_dir or (target_dir / "pdb_training_set")
+    ).expanduser().resolve()
+    if not local_root.is_dir():
+        parser.error(
+            f"download directory not found: {local_root.expanduser().resolve()}. "
+            "Run download-pdb-subset successfully before purification."
+        )
     train_source = subset_cache_path(
         target_dir / "training_cache_with_templates.json",
         args.train_size,
