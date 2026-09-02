@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import statistics
 import time
 from collections.abc import Mapping
@@ -33,8 +34,9 @@ def configure_benchmark(
     measure_steps: int,
     seed: int,
     num_workers: int,
+    devices: int,
 ) -> dict[str, Any]:
-    """Make a validation-free, single-GPU, from-scratch benchmark config."""
+    """Make a validation-free, single-node, from-scratch benchmark config."""
 
     total_steps = warmup_steps + measure_steps
     configure_training_backend(config, backend=backend)
@@ -49,7 +51,7 @@ def configure_benchmark(
         data_seed=seed,
         num_workers=num_workers,
         num_workers_validation=0,
-        epoch_len=total_steps,
+        epoch_len=total_steps * devices,
     )
     config.setdefault("logging_config", {}).update(
         wandb_config=None,
@@ -61,7 +63,7 @@ def configure_benchmark(
         save_last=False,
     )
     config.setdefault("pl_trainer_args", {}).update(
-        devices=1,
+        devices=devices,
         num_nodes=1,
         precision="bf16-mixed",
         accumulate_grad_batches=1,
@@ -96,6 +98,29 @@ def _percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     index = max(0, math.ceil(fraction * len(ordered)) - 1)
     return ordered[index]
+
+
+def aggregate_rank_metrics(
+    gpu_ms: torch.Tensor,
+    loss: torch.Tensor,
+    wall_seconds: torch.Tensor,
+) -> int:
+    """Aggregate finished measurements once, outside the measured interval."""
+
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return 1
+    world_size = torch.distributed.get_world_size()
+    torch.distributed.all_reduce(gpu_ms, op=torch.distributed.ReduceOp.MAX)
+    torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.SUM)
+    loss /= world_size
+    torch.distributed.all_reduce(wall_seconds, op=torch.distributed.ReduceOp.MAX)
+    return world_size
+
+
+def is_source_tree_import(module_path: Path, source_root: Path) -> bool:
+    """Return whether OpenFold3 was imported from source instead of a wheel."""
+
+    return module_path.resolve().is_relative_to((source_root / "openfold3").resolve())
 
 
 class BackendBenchmarkCallback(pl.Callback):
@@ -180,7 +205,7 @@ class BackendBenchmarkCallback(pl.Callback):
                 self.measurement_end = time.perf_counter()
 
     def on_train_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        del trainer, pl_module
+        del pl_module
         if not all(self.recorded):
             completed = sum(self.recorded)
             raise RuntimeError(
@@ -189,11 +214,51 @@ class BackendBenchmarkCallback(pl.Callback):
         if self.measurement_start is None or self.measurement_end is None:
             raise RuntimeError("benchmark timing boundaries were not recorded")
 
-        gpu_ms = [
+        local_gpu_ms = [
             start.elapsed_time(end) for start, end in zip(self.starts, self.ends)
         ]
-        steady_wall_seconds = self.measurement_end - self.measurement_start
-        loss_by_step = {step: float(loss.float().item()) for step, loss in self.losses}
+        local_wall_seconds = self.measurement_end - self.measurement_start
+        total_steps = self.warmup_steps + self.measure_steps
+        local_loss_by_step = {step: loss for step, loss in self.losses}
+        missing_steps = [
+            step for step in range(total_steps) if step not in local_loss_by_step
+        ]
+        if missing_steps:
+            raise RuntimeError(
+                "benchmark did not capture loss for training steps: "
+                + ", ".join(str(step) for step in missing_steps)
+            )
+
+        device = torch.device("cuda", torch.cuda.current_device())
+        gpu_ms_tensor = torch.tensor(local_gpu_ms, dtype=torch.float64, device=device)
+        loss_tensor = torch.stack(
+            [
+                local_loss_by_step[step].float().reshape(())
+                for step in range(total_steps)
+            ]
+        ).to(device=device, dtype=torch.float64)
+        wall_tensor = torch.tensor(
+            local_wall_seconds,
+            dtype=torch.float64,
+            device=device,
+        )
+
+        # These collectives run after the measured interval. GPU latency uses the
+        # critical-path rank; loss is the global mean for each optimizer step.
+        world_size = aggregate_rank_metrics(
+            gpu_ms_tensor,
+            loss_tensor,
+            wall_tensor,
+        )
+
+        if not trainer.is_global_zero:
+            return
+
+        gpu_ms = gpu_ms_tensor.cpu().tolist()
+        loss_by_step = {
+            step: value for step, value in enumerate(loss_tensor.cpu().tolist())
+        }
+        steady_wall_seconds = float(wall_tensor.item())
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         with (self.output_dir / "steps.csv").open("w", newline="") as handle:
@@ -202,7 +267,6 @@ class BackendBenchmarkCallback(pl.Callback):
                 fieldnames=("backend", "step", "phase", "loss", "gpu_step_ms"),
             )
             writer.writeheader()
-            total_steps = self.warmup_steps + self.measure_steps
             for step in range(total_steps):
                 measured_index = step - self.warmup_steps
                 writer.writerow(
@@ -218,11 +282,17 @@ class BackendBenchmarkCallback(pl.Callback):
                 )
 
         summary = {
-            "schema_version": 1,
+            "schema_version": 2,
             "backend": self.backend,
+            "topology": "single-gpu" if world_size == 1 else "single-node-ddp",
+            "devices": world_size,
+            "num_nodes": 1,
+            "world_size": world_size,
             "warmup_steps": self.warmup_steps,
             "measure_steps": self.measure_steps,
             "global_batch_size": self.global_batch_size,
+            "loss_reduction": "mean_across_ranks",
+            "gpu_timing_reduction": "max_across_ranks",
             "steady_wall_seconds": steady_wall_seconds,
             "steady_step_wall_seconds": steady_wall_seconds / self.measure_steps,
             "steady_samples_per_second": (
@@ -248,6 +318,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--measure-steps", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--devices",
+        type=int,
+        default=1,
+        help="GPUs on this node; Lightning launches local DDP when greater than one",
+    )
     return parser
 
 
@@ -259,12 +335,14 @@ def main() -> None:
         raise ValueError("--measure-steps must be at least 1")
     if args.num_workers < 0:
         raise ValueError("--num-workers must be non-negative")
+    if args.devices < 1:
+        raise ValueError("--devices must be at least 1")
 
     source_root = Path(__file__).resolve().parents[1]
     import openfold3
 
     installed_module = Path(openfold3.__file__).resolve()
-    if installed_module.is_relative_to(source_root):
+    if is_source_tree_import(installed_module, source_root):
         raise RuntimeError("benchmark must import OpenFold3 from the Pixi installation")
 
     from openfold3.core.config import config_utils
@@ -274,7 +352,8 @@ def main() -> None:
 
     runner_yaml = args.runner_yaml.resolve()
     output_dir = (args.output_root.resolve() / args.backend)
-    if output_dir.exists() and any(output_dir.iterdir()):
+    is_ddp_worker = "LOCAL_RANK" in os.environ
+    if output_dir.exists() and any(output_dir.iterdir()) and not is_ddp_worker:
         raise FileExistsError(f"benchmark output already exists: {output_dir}")
 
     runner_dict = config_utils.load_yaml(runner_yaml)
@@ -286,11 +365,13 @@ def main() -> None:
         measure_steps=args.measure_steps,
         seed=args.seed,
         num_workers=args.num_workers,
+        devices=args.devices,
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "runner.yaml").write_text(
-        yaml.safe_dump(runner_dict, sort_keys=False, default_flow_style=False)
-    )
+    if not is_ddp_worker:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "runner.yaml").write_text(
+            yaml.safe_dump(runner_dict, sort_keys=False, default_flow_style=False)
+        )
 
     _torch_gpu_setup()
     callback = BackendBenchmarkCallback(
@@ -298,7 +379,7 @@ def main() -> None:
         output_dir=output_dir,
         warmup_steps=args.warmup_steps,
         measure_steps=args.measure_steps,
-        global_batch_size=1,
+        global_batch_size=args.devices,
     )
 
     class BenchmarkRunner(TrainingExperimentRunner):
@@ -313,19 +394,20 @@ def main() -> None:
     runner.run()
     fit_wall_seconds = time.perf_counter() - fit_start
 
-    summary_path = output_dir / "summary.json"
-    summary = json.loads(summary_path.read_text())
-    summary.update(
-        fit_wall_seconds=fit_wall_seconds,
-        seed=args.seed,
-        runner_yaml=str(runner_yaml),
-        openfold3_module=str(installed_module),
-        torch_version=torch.__version__,
-        torch_cuda=torch.version.cuda,
-        gpu_name=torch.cuda.get_device_name(0),
-    )
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    if runner.trainer.is_global_zero:
+        summary_path = output_dir / "summary.json"
+        summary = json.loads(summary_path.read_text())
+        summary.update(
+            fit_wall_seconds=fit_wall_seconds,
+            seed=args.seed,
+            runner_yaml=str(runner_yaml),
+            openfold3_module=str(installed_module),
+            torch_version=torch.__version__,
+            torch_cuda=torch.version.cuda,
+            gpu_name=torch.cuda.get_device_name(),
+        )
+        summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

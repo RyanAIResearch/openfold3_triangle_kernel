@@ -86,6 +86,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         "train-single-node",
         "train-multinode",
         "benchmark-single-gpu",
+        "benchmark-single-node",
         "plot-backend-comparison",
     }
     commands = {name: value["cmd"] for name, value in tasks.items() if "cmd" in value}
@@ -93,6 +94,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
     assert commands["train-single-node"][-1] == "run_openfold"
     assert commands["train-multinode"][-1] == "torchrun"
     assert commands["benchmark-single-gpu"][-1] == "tools/run_backend_benchmark.sh"
+    assert commands["benchmark-single-node"][-1] == "tools/run_backend_benchmark.sh"
     assert commands["plot-backend-comparison"][-1] == (
         "tools/plot_backend_comparison.py"
     )

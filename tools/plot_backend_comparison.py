@@ -11,6 +11,10 @@ from typing import Any
 
 SUMMARY_COLUMNS = (
     "backend",
+    "topology",
+    "devices",
+    "world_size",
+    "global_batch_size",
     "fit_wall_seconds",
     "steady_wall_seconds",
     "steady_step_wall_seconds",
@@ -27,6 +31,10 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
     losses: dict[str, list[tuple[int, float]]] = {}
     for summary_path in sorted(results_root.glob("*/summary.json")):
         summary = json.loads(summary_path.read_text())
+        summary.setdefault("topology", "single-gpu")
+        summary.setdefault("devices", 1)
+        summary.setdefault("world_size", summary["devices"])
+        summary.setdefault("global_batch_size", summary["world_size"])
         backend = str(summary["backend"])
         steps_path = summary_path.parent / "steps.csv"
         if not steps_path.is_file():
@@ -43,6 +51,15 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
 
     if len(summaries) < 2:
         raise ValueError("at least two backend result directories are required")
+    topologies = {
+        (int(summary["world_size"]), str(summary.get("gpu_name", "unknown GPU")))
+        for summary in summaries
+    }
+    if len(topologies) != 1:
+        raise ValueError(
+            "all backends in one comparison must use the same GPU model and world size"
+        )
+    world_size, gpu_name = next(iter(topologies))
     by_backend = {str(summary["backend"]): summary for summary in summaries}
     if baseline not in by_backend:
         raise ValueError(f"baseline backend not found: {baseline}")
@@ -60,8 +77,10 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
             writer.writerow({key: summary[key] for key in SUMMARY_COLUMNS})
 
     combined = {
-        "schema_version": 1,
+        "schema_version": 2,
         "baseline": baseline,
+        "world_size": world_size,
+        "gpu_name": gpu_name,
         "backends": summaries,
     }
     (output_dir / "backend_comparison.json").write_text(
@@ -79,7 +98,7 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
     figure, axis = plt.subplots(figsize=(8, 4.8))
     bars = axis.bar(names, step_seconds, color="#4472C4")
     axis.set_ylabel("Steady-state wall seconds / training step")
-    axis.set_title("OpenFold3 backend training time")
+    axis.set_title(f"OpenFold3 backend training time ({world_size} GPU(s))")
     axis.grid(axis="y", alpha=0.25)
     for bar, seconds, speedup in zip(bars, step_seconds, speedups):
         axis.text(
@@ -105,7 +124,9 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
         )
     axis.set_xlabel("Optimizer training step")
     axis.set_ylabel("Training loss")
-    axis.set_title("Matched-seed backend loss curves")
+    axis.set_title(
+        f"Matched-seed backend loss curves ({world_size} GPU(s), global mean)"
+    )
     axis.grid(alpha=0.25)
     axis.legend()
     figure.tight_layout()

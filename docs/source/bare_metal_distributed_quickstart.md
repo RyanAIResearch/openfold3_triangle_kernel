@@ -233,9 +233,10 @@ disables W&B; they are not training failures.
 ### Compare Backend Training Time and Loss
 
 Run every backend from scratch with the same purified data, initialization
-seed, data seed, BF16 precision, and single H100. The benchmark disables
-validation, W&B, and checkpoint output. It excludes five warmup steps, then
-measures 20 optimizer training steps:
+seed, data seed, BF16 precision, and GPU topology. The benchmark disables
+validation, W&B, and checkpoint output. The following single-H100 smoke
+comparison excludes five warmup steps, then measures 20 optimizer training
+steps:
 
 ```bash
 mkdir -p ../openfold3-run/backend-comparison
@@ -251,6 +252,7 @@ for BACKEND in aqlab cueq stablefold; do
     --output-root "$RESULTS_ROOT" \
     --warmup-steps 5 \
     --measure-steps 20 \
+    --devices 1 \
     --seed 42
 done
 
@@ -265,6 +267,46 @@ paper-quality 400-step comparison, use the same command with
 the same otherwise-idle GPU; do not compare results collected on different GPU
 models or while another process is using the device.
 
+For a single-node multi-GPU comparison, change `DEVICES` and
+`CUDA_VISIBLE_DEVICES` together. This example benchmarks all backends on eight
+GPUs and keeps its results separate from the one-GPU run:
+
+```bash
+export DEVICES=8
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
+export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison-${DEVICES}gpu"
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
+
+for BACKEND in aqlab cueq stablefold; do
+  pixi run -e openfold3-cuda12 benchmark-single-node \
+    --runner-yaml "$PWD/datasets/train_pdb_subset.purified.yaml" \
+    --backend "$BACKEND" \
+    --output-root "$RESULTS_ROOT" \
+    --warmup-steps 10 \
+    --measure-steps 400 \
+    --devices "$DEVICES" \
+    --seed 42
+done
+
+pixi run -e openfold3-cuda12 plot-backend-comparison \
+  "$RESULTS_ROOT" \
+  --baseline aqlab
+```
+
+Use the same command for two or four GPUs by setting `DEVICES=2` with
+`CUDA_VISIBLE_DEVICES=0,1`, or `DEVICES=4` with
+`CUDA_VISIBLE_DEVICES=0,1,2,3`. Do not wrap `benchmark-single-node` in
+`torchrun`: PyTorch Lightning launches the local DDP workers. The benchmark
+sets per-GPU batch size to one, global batch size to `DEVICES`, and
+`epoch_len = (warmup_steps + measure_steps) * DEVICES`; `max_steps` remains the
+same optimizer-step count for 1, 2, 4, and 8 GPUs.
+
+Compare backends only within the same GPU count. Changing the GPU count changes
+the global batch and therefore can change the loss trajectory even when the
+seed is held fixed. Use a separate `RESULTS_ROOT` and generate a separate
+comparison for each of 1, 2, 4, and 8 GPUs.
+
 Each backend directory contains:
 
 ```text
@@ -273,12 +315,16 @@ steps.csv
 summary.json
 ```
 
-`steps.csv` records the training loss and CUDA-event step time. `summary.json`
-reports total fit wall time, steady-state wall seconds per training step,
-samples per second, and mean, median, p95, minimum, and maximum GPU step time.
-Warmup is excluded from every steady-state timing statistic. CUDA events are
-recorded asynchronously and synchronized only at the measurement boundaries,
-so the benchmark does not add a device synchronization to every measured step.
+`steps.csv` records the training loss and CUDA-event step time. On DDP, loss is
+the mean across ranks at each optimizer step and GPU step time is the maximum
+across ranks, representing the step's critical path. `summary.json` records the
+topology, device/world-size counts, global batch size, total fit wall time,
+steady-state wall seconds per training step, global samples per second, and
+mean, median, p95, minimum, and maximum critical-path GPU step time. Warmup is
+excluded from every steady-state timing statistic. CUDA events are recorded
+asynchronously; device synchronization occurs only at the measurement
+boundaries, and rank aggregation occurs after the measured interval, so the
+benchmark does not add a synchronization to every measured step.
 
 The comparison command writes:
 
@@ -290,10 +336,10 @@ comparison/loss_curves.png
 ```
 
 `training_time.png` shows seconds per optimizer training step and speedup over
-the selected baseline. `loss_curves.png` overlays matched-seed training loss by
-optimizer step so users can check that a faster backend still follows the same
-optimization trajectory. The CSV and JSON files are the source of truth for
-tables and paper plots.
+the selected baseline for the recorded GPU count. `loss_curves.png` overlays
+matched-seed training loss by optimizer step; for multi-GPU runs it plots the
+global mean loss. The CSV and JSON files are the source of truth for tables and
+paper plots.
 
 ### Scheme 1: Single-GPU Training
 
