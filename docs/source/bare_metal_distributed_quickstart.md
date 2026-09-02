@@ -67,19 +67,21 @@ not discard any other paths reported by `git status`.
 
 ### Generate a PDB Subset
 
-For a quick training experiment, generate a reproducible subset with 1,000
-training structures:
+For the standard 400-step comparison on up to eight GPUs, generate a
+reproducible subset with 4,000 training structures. Eight GPUs consume 3,200
+sample draws over 400 optimizer steps at per-GPU batch size one, so 4,000
+provides coverage plus room for samples removed during purification:
 
 ```bash
 pixi run -e openfold3-cuda12 generate-pdb-subset -- \
-  --train-size 1000 --seed 42
+  --train-size 4000 --seed 42
 ```
 
 ### Download the Subset
 
 ```bash
 pixi run -e openfold3-cuda12 download-pdb-subset -- \
-  --train-size 1000 --workers 24
+  --train-size 4000 --workers 24
 ```
 
 The command downloads target structures, alignment arrays, templates, and
@@ -99,8 +101,13 @@ failure. If an object still reports `404`, `NoSuchKey`, or remains missing, run:
 
 ```bash
 pixi run -e openfold3-cuda12 purify-pdb-subset -- \
-  --train-size 1000
+  --train-size 4000
 ```
+
+The one-step single-GPU smoke test does not consume all 4,000 structures; the
+larger subset is recommended so the same prepared data can also be reused for
+the full eight-GPU comparison. A smaller subset remains valid for installation
+and functional smoke testing.
 
 The purifier checks every sample's target structure, alignments, templates, and
 reference molecules. Samples that depend on a missing artifact or unreadable

@@ -111,6 +111,14 @@ def test_h100_user_docs_use_normal_pixi_commands():
         assert "pixi run -e openfold3-cuda12" in text
 
 
+def test_bare_metal_benchmark_prepares_four_thousand_samples():
+    text = (
+        REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
+    ).read_text()
+    assert text.count("--train-size 4000") == 3
+    assert "--train-size 1000" not in text
+
+
 def test_dirty_pixi_lock_error_explains_repository_update(monkeypatch):
     monkeypatch.setattr(
         artifact_manager,
