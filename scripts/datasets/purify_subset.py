@@ -161,8 +161,8 @@ def main() -> None:
         type=Path,
         default=None,
         help=(
-            "Purified runner YAML (default: "
-            "<target-dir>/train_pdb_subset.purified.yaml)"
+            "Final runnable YAML (default: "
+            "<target-dir>/train_pdb_subset.yaml)"
         ),
     )
     parser.add_argument("--report", type=Path, default=None)
@@ -223,9 +223,7 @@ def main() -> None:
     if train_report["kept_count"] == 0:
         parser.error("purification removed every training entry")
 
-    runner_yaml = args.runner_yaml or (
-        target_dir / "train_pdb_subset.purified.yaml"
-    )
+    runner_yaml = args.runner_yaml or (target_dir / "train_pdb_subset.yaml")
     write_runner_yaml(
         runner_yaml,
         {"train": train_output, "val": val_output},

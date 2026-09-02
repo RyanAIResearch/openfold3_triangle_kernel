@@ -103,7 +103,9 @@ def test_prepare_subset_runs_two_download_passes_then_purifies(
     monkeypatch, tmp_path
 ):
     calls = []
-    monkeypatch.setattr(preparer, "_run", lambda script, *args: calls.append(script))
+    monkeypatch.setattr(
+        preparer, "_run", lambda script, *args: calls.append((script, args))
+    )
     monkeypatch.setattr(preparer, "validate_runner_yaml", lambda *args, **kwargs: None)
 
     runner_yaml = preparer.prepare_subset(
@@ -116,10 +118,12 @@ def test_prepare_subset_runs_two_download_passes_then_purifies(
         force=False,
     )
 
-    assert calls == [
+    assert [script for script, _ in calls] == [
         "generate_subset_cache.py",
         "download_subset.py",
         "download_subset.py",
         "purify_subset.py",
     ]
-    assert runner_yaml == tmp_path / "datasets" / "train_pdb_subset.purified.yaml"
+    generate_args = calls[0][1]
+    assert generate_args[generate_args.index("--runner-yaml") + 1] == ""
+    assert runner_yaml == tmp_path / "datasets" / "train_pdb_subset.yaml"

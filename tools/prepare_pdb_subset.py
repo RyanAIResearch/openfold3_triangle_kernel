@@ -46,6 +46,11 @@ def prepare_subset(
         str(seed),
         "--output-dir",
         str(output_dir),
+        # The supported all-in-one path publishes only the final, purified
+        # runner YAML. Avoid leaving an unpurified intermediate runner with
+        # the same user-facing filename.
+        "--runner-yaml",
+        "",
     )
     if force:
         generate_arguments = (*generate_arguments, "--force")
@@ -64,7 +69,7 @@ def prepare_subset(
             str(output_dir),
         )
 
-    runner_yaml = target_dir / "train_pdb_subset.purified.yaml"
+    runner_yaml = target_dir / "train_pdb_subset.yaml"
     _run(
         "purify_subset.py",
         *common,

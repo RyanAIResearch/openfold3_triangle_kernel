@@ -92,7 +92,7 @@ The command succeeds only after writing a runner YAML whose configured data
 paths exist:
 
 ```text
-datasets/train_pdb_subset.purified.yaml
+datasets/train_pdb_subset.yaml
 datasets/pdb_subset_purification_report.json
 ```
 
@@ -102,11 +102,11 @@ in the JSON report and only dependent samples are removed. If the download
 directory is absent, purification removes every training sample, or a runner
 path is invalid, the command exits nonzero and does not claim the data is ready.
 
-To check an existing purified YAML without starting training, run:
+To check the prepared YAML without starting training, run:
 
 ```bash
 pixi run -e openfold3-cuda12 validate-training-data \
-  datasets/train_pdb_subset.purified.yaml
+  datasets/train_pdb_subset.yaml
 ```
 
 The one-step single-GPU smoke test does not consume all 4,000 structures; the
@@ -125,9 +125,9 @@ Use StableFold by default:
 
 ```bash
 pixi run -e openfold3-cuda12 select-training-backend \
-  datasets/train_pdb_subset.purified.yaml \
+  datasets/train_pdb_subset.yaml \
   --backend stablefold \
-  --output datasets/train_pdb_subset.purified.stablefold.yaml
+  --output datasets/train_pdb_subset.stablefold.yaml
 ```
 
 The command can be pasted directly into Bash.
@@ -138,9 +138,9 @@ To select another implementation, change `BACKEND` and use the generic form:
 export BACKEND=cueq
 
 pixi run -e openfold3-cuda12 select-training-backend \
-  datasets/train_pdb_subset.purified.yaml \
+  datasets/train_pdb_subset.yaml \
   --backend "$BACKEND" \
-  --output "datasets/train_pdb_subset.purified.${BACKEND}.yaml"
+  --output "datasets/train_pdb_subset.${BACKEND}.yaml"
 ```
 
 | `BACKEND` | Selected operator route |
@@ -167,7 +167,7 @@ and checkpoint output disabled:
 export BACKEND=stablefold
 
 pixi run -e openfold3-cuda12 select-training-backend \
-  datasets/train_pdb_subset.purified.yaml \
+  datasets/train_pdb_subset.yaml \
   --backend "$BACKEND" \
   --single-gpu-smoke \
   --output "datasets/single_gpu_smoke.${BACKEND}.yaml"
@@ -228,7 +228,7 @@ disables W&B; they are not training failures.
 
 ### Compare Backend Training Time and Loss
 
-Run every backend from scratch with the same purified data, initialization
+Run every backend from scratch with the same prepared data, initialization
 seed, data seed, BF16 precision, and GPU topology. The benchmark disables
 validation, W&B, and checkpoint output. The following single-H100 smoke
 comparison excludes five warmup steps, then measures 20 optimizer training
@@ -243,7 +243,7 @@ unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 for BACKEND in aqlab cueq stablefold; do
   pixi run -e openfold3-cuda12 benchmark-single-gpu \
-    --runner-yaml "$PWD/datasets/train_pdb_subset.purified.yaml" \
+    --runner-yaml "$PWD/datasets/train_pdb_subset.yaml" \
     --backend "$BACKEND" \
     --output-root "$RESULTS_ROOT" \
     --warmup-steps 5 \
@@ -276,7 +276,7 @@ unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 for BACKEND in aqlab cueq stablefold; do
   pixi run -e openfold3-cuda12 benchmark-single-node \
-    --runner-yaml "$PWD/datasets/train_pdb_subset.purified.yaml" \
+    --runner-yaml "$PWD/datasets/train_pdb_subset.yaml" \
     --backend "$BACKEND" \
     --output-root "$RESULTS_ROOT" \
     --warmup-steps 10 \
@@ -341,7 +341,7 @@ paper plots.
 
 The generated YAML defaults to epoch-based training. For a pure 400-training-step
 run with no validation, update the existing entries in
-`datasets/train_pdb_subset.purified.${BACKEND}.yaml`:
+`datasets/train_pdb_subset.${BACKEND}.yaml`:
 
 ```yaml
 experiment_settings:
@@ -385,7 +385,7 @@ export CUDA_VISIBLE_DEVICES=0
 
 pixi run -e openfold3-cuda12 train-single-gpu \
   train \
-  --runner-yaml "$PWD/datasets/train_pdb_subset.purified.${BACKEND}.yaml" \
+  --runner-yaml "$PWD/datasets/train_pdb_subset.${BACKEND}.yaml" \
   --seed 42
 ```
 
@@ -413,7 +413,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 pixi run -e openfold3-cuda12 train-single-node \
   train \
-  --runner-yaml "$PWD/datasets/train_pdb_subset.purified.${BACKEND}.yaml" \
+  --runner-yaml "$PWD/datasets/train_pdb_subset.${BACKEND}.yaml" \
   --seed 42
 ```
 
@@ -442,7 +442,7 @@ pl_trainer_args:
   max_steps: 400
 ```
 
-The repository, Pixi environment, purified runner YAML, dataset, and output
+The repository, Pixi environment, prepared runner YAML, dataset, and output
 directory must use the same paths on every node. Run the following command on
 both allocated nodes, changing `NODE_RANK` to `0` or `1`:
 
@@ -465,7 +465,7 @@ pixi run -e openfold3-cuda12 train-multinode \
   --master-port="$MASTER_PORT" \
   --module openfold3.run_openfold \
   train \
-  --runner-yaml "/shared/train_pdb_subset.purified.${BACKEND}.yaml" \
+  --runner-yaml "/shared/train_pdb_subset.${BACKEND}.yaml" \
   --seed 42
 ```
 

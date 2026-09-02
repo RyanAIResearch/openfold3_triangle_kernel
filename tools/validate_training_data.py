@@ -109,7 +109,7 @@ def validate_runner_yaml(runner_yaml: Path, *, base_dir: Path) -> None:
             "incomplete, or this runner YAML points at a different download "
             "directory. Complete the download and purification steps, then "
             "regenerate the backend/smoke YAML from "
-            "train_pdb_subset.purified.yaml."
+            "train_pdb_subset.yaml."
         )
 
 
