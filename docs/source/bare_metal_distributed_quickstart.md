@@ -96,16 +96,27 @@ use the same runner YAML path.
 
 ### Choose a Training Backend
 
+Use StableFold by default:
+
 ```bash
-export BACKEND=stablefold
+pixi run -e openfold3-cuda12 select-training-backend \
+  datasets/train_pdb_subset.purified.yaml \
+  --backend stablefold \
+  --output datasets/train_pdb_subset.purified.stablefold.yaml
+```
+
+The command can be pasted directly into Bash.
+
+To select another implementation, change `BACKEND` and use the generic form:
+
+```bash
+export BACKEND=cueq
 
 pixi run -e openfold3-cuda12 select-training-backend \
   datasets/train_pdb_subset.purified.yaml \
   --backend "$BACKEND" \
   --output "datasets/train_pdb_subset.purified.${BACKEND}.yaml"
 ```
-
-Change only `BACKEND` to select a different implementation:
 
 | `BACKEND` | Selected operator route |
 | --- | --- |
