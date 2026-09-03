@@ -125,6 +125,18 @@ def test_h100_user_docs_use_normal_pixi_commands():
         assert "pixi run -e openfold3-cuda12" in text
 
 
+def test_multinode_quickstart_uses_existing_runner_and_shared_rw_run_dir():
+    text = (
+        REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
+    ).read_text()
+    assert "mkdir -p /shared/openfold3-run" in text
+    assert "test -r /shared/openfold3-run && test -w /shared/openfold3-run" in text
+    assert 'export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"' in text
+    assert '--runner-yaml "$RUNNER_YAML"' in text
+    assert '--runner-yaml "/shared/train_pdb_subset.${BACKEND}.yaml"' not in text
+    assert "real shared, read-write filesystem" in text
+
+
 def test_bare_metal_benchmark_prepares_four_thousand_samples_atomically():
     text = (
         REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"

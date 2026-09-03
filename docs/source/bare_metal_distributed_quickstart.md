@@ -443,12 +443,30 @@ pl_trainer_args:
 ```
 
 The repository, Pixi environment, prepared runner YAML, dataset, and output
-directory must use the same paths on every node. Run the following command on
-both allocated nodes, changing `NODE_RANK` to `0` or `1`:
+directory must use the same paths on every node. The run directory must be a
+real shared, read-write filesystem: StableFold rank 0 writes the kernel receipt
+there and every other rank reads it back. A path that merely has the same name
+on each node is not sufficient.
+
+Install the pinned environment on every node from the shared repository. Then
+create and verify the shared run directory once before launching workers:
+
+```bash
+cd /shared/openfold3_triangle_kernel
+pixi install -e openfold3-cuda12
+
+mkdir -p /shared/openfold3-run
+test -r /shared/openfold3-run && test -w /shared/openfold3-run
+test -r "$PWD/datasets/train_pdb_subset.stablefold.yaml"
+```
+
+Run the following command on both allocated nodes from
+`/shared/openfold3_triangle_kernel`, changing `NODE_RANK` to `0` or `1`:
 
 ```bash
 export BACKEND=stablefold
 export OF3_RUN_CWD=/shared/openfold3-run
+export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export NNODES=2
 export GPUS_PER_NODE=8
@@ -465,7 +483,7 @@ pixi run -e openfold3-cuda12 train-multinode \
   --master-port="$MASTER_PORT" \
   --module openfold3.run_openfold \
   train \
-  --runner-yaml "/shared/train_pdb_subset.${BACKEND}.yaml" \
+  --runner-yaml "$RUNNER_YAML" \
   --seed 42
 ```
 
