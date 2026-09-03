@@ -249,6 +249,7 @@ for BACKEND in aqlab cueq stablefold; do
     --warmup-steps 5 \
     --measure-steps 20 \
     --devices 1 \
+    --use-tf32 \
     --seed 42
 done
 
@@ -262,6 +263,11 @@ paper-quality 400-step comparison, use the same command with
 `--warmup-steps 10 --measure-steps 400` for every backend. Run the backends on
 the same otherwise-idle GPU; do not compare results collected on different GPU
 models or while another process is using the device.
+
+The model remains in `bf16-mixed` precision. `--use-tf32` applies AQLab's
+official TF32 setting only to FP32 matrix multiplications and is passed to every
+backend so the comparison is matched. It is required by the current
+cuEquivariance triangle-attention backward implementation.
 
 For a single-node multi-GPU comparison, change `DEVICES` and
 `CUDA_VISIBLE_DEVICES` together. This example benchmarks all backends on eight
@@ -283,6 +289,7 @@ for BACKEND in aqlab cueq stablefold; do
     --warmup-steps 10 \
     --measure-steps 400 \
     --devices "$DEVICES" \
+    --use-tf32 \
     --seed 42
 done
 

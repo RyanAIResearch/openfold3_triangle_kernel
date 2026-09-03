@@ -126,12 +126,17 @@ def is_source_tree_import(module_path: Path, source_root: Path) -> bool:
     return module_path.resolve().is_relative_to((source_root / "openfold3").resolve())
 
 
-def configure_torch_backend_for_training() -> None:
+def configure_torch_backend_for_training(*, use_tf32: bool = False) -> None:
     """Match the backend setup used by AQLab's current training CLI."""
 
-    from openfold3.entry_points.import_utils import _configure_torch_backend
+    from openfold3.entry_points.import_utils import (
+        _configure_torch_backend,
+        _enable_tf32,
+    )
 
     _configure_torch_backend()
+    if use_tf32:
+        _enable_tf32()
 
 
 class BackendBenchmarkCallback(pl.Callback):
@@ -330,6 +335,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument(
+        "--use-tf32",
+        action="store_true",
+        help=(
+            "Allow TF32 for FP32 matrix multiplications while retaining the "
+            "configured BF16 mixed-precision training mode"
+        ),
+    )
+    parser.add_argument(
         "--devices",
         type=int,
         default=1,
@@ -383,7 +396,7 @@ def main() -> None:
             yaml.safe_dump(runner_dict, sort_keys=False, default_flow_style=False)
         )
 
-    configure_torch_backend_for_training()
+    configure_torch_backend_for_training(use_tf32=args.use_tf32)
     callback = BackendBenchmarkCallback(
         backend=args.backend,
         output_dir=output_dir,
@@ -415,6 +428,7 @@ def main() -> None:
             torch_version=torch.__version__,
             torch_cuda=torch.version.cuda,
             gpu_name=torch.cuda.get_device_name(),
+            use_tf32=args.use_tf32,
         )
         summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         print(json.dumps(summary, indent=2, sort_keys=True))

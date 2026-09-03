@@ -191,10 +191,18 @@ def test_benchmark_uses_current_aqlab_training_backend_setup(monkeypatch):
         "_configure_torch_backend",
         lambda: calls.append("configured"),
     )
+    monkeypatch.setattr(
+        import_utils,
+        "_enable_tf32",
+        lambda: calls.append("tf32"),
+    )
 
     configure_torch_backend_for_training()
-
     assert calls == ["configured"]
+
+    calls.clear()
+    configure_torch_backend_for_training(use_tf32=True)
+    assert calls == ["configured", "tf32"]
 
 
 def test_benchmark_script_is_valid_yaml_serializer_input(tmp_path):
