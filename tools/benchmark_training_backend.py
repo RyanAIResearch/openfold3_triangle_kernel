@@ -75,7 +75,10 @@ def configure_benchmark(
         num_sanity_val_steps=0,
         log_every_n_steps=1,
         enable_model_summary=False,
-        enable_progress_bar=False,
+        # AQLab's current runner always installs its
+        # SecondsPerIterationProgressBar callback. Lightning rejects that
+        # callback when the trainer-level progress bar switch is disabled.
+        enable_progress_bar=True,
     )
     return config
 

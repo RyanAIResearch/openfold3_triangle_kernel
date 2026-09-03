@@ -61,6 +61,7 @@ def test_benchmark_config_is_matched_validation_free_training(tmp_path):
     assert configured["pl_trainer_args"]["max_steps"] == 10
     assert configured["pl_trainer_args"]["limit_val_batches"] == 0
     assert configured["pl_trainer_args"]["num_sanity_val_steps"] == 0
+    assert configured["pl_trainer_args"]["enable_progress_bar"] is True
     train_memory = configured["model_update"]["custom"]["settings"]["memory"][
         "train"
     ]
