@@ -49,7 +49,7 @@ Available pixi environments:
 | Environment        | Supported platforms                                | Description                                                          |
 | ------------------ | -------------------------------------------------- | -------------------------------------------------------------------- |
 | `openfold3-base`   | `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64` | Environment without CUDA or ROCm. CPU-only on Linux; on Apple Silicon the same pytorch build also provides MPS acceleration. |
-| `openfold3-cuda12` | `linux-64`                                         | Pinned, non-editable H100 CUDA 12 environment for the StableFold production-candidate workflow. |
+| `openfold3-cuda12` | `linux-64`                                         | Pinned, non-editable H100 CUDA 12 environment for the StableFold production workflow. |
 | `openfold3-cuda12-dev` | `linux-64`, `linux-aarch64`                    | Editable general NVIDIA CUDA 12 development and test environment.    |
 | `openfold3-cuda13` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 13.                                |
 | `openfold3-rocm7`  | `linux-64`                                         | AMD GPU environment using ROCm 7.                                    |

@@ -20,26 +20,38 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_DIR = ROOT / "dist"
-PREBUILT_COMMIT = "ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca"
-PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "stablefold-h100-ce15d03b"
+PREBUILT_COMMIT = "87ebe22da13c657d36997dedb4ec398fbd62c6b7"
+PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "stablefold-h100-87ebe22d"
 PREBUILT_FILE_SHA256 = {
     "RECEIPT.json": (
-        "e85451dbffe40dd9f23b81f064982cc3d6bab8d8068f64b8804a13ae0b7629e1"
+        "1f967eae4e19abce1e5ed90ffcb3263da416ed2c57f8230fa4523942f9ff73a8"
     ),
-    "SHA256SUMS": ("71618162eb488451a01c1aaa8dd58bc4b63b411f354be4d0ff278697fe0ddcad"),
+    "SHA256SUMS": ("af4b90a6e22a08b086aa1db21b139df51b488b98c698a08df69f7c39ab5e5659"),
     "aot_clean_install_smoke.json": (
-        "2ead03061b1b0a99df50d5ee4e5a7333395b841406b826d7681ae7f546e3bd20"
+        "762fbbbe8b3ebc13d4510cdfa944652f6e8477836e0f043ec2c1a7e3b76a3297"
+    ),
+    "ema_ddp_post_init_audit.json": (
+        "5fc1e9e0d591a8431f22f91beb0b74d8e07f0e01a7cc6dc7c2ee9fd4dadaab29"
     ),
     (
-        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl"
-    ): "e3e6b80e08aa16e0580b2809a54523458ac6503ce185ea276e05179ae8a27d19",
+        "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
+    ): "ad9042dcf1f301ac42edcc30566537b5b971bc9933f62a50cda8f5f45a090738",
     (
-        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-"
+        "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-"
         "linux_x86_64.whl.attestation.json"
-    ): "e5c7d468d1887f1bca56e7e59af204ef5e0c0ef2f96cb27e017830dd6570be0f",
+    ): "34a3e3072066fa0f56be30e53acab192e6b3f7b5cb3aac112696893028ecceca",
     (
-        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl.sha256"
-    ): "ba20026faa198d54b9c1a9f1958661685bad6a18e3afd592dc7f1a836eb5da95",
+        "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl.sha256"
+    ): "0884c190aa94d2195e3d9dbe129abad1a1ffc2ea8246b901bcd5d9248bf90e2b",
+    "two_h100_backend_comparison.json": (
+        "144c7e8dbb57dfc710694b008cc14b9d38a76afaaa9d8fb8a159e7c8e08a10d3"
+    ),
+    "two_h100_ddp_receipt.json": (
+        "3124d668e70765acb9d6eb5cadb7ec59ccec8246188e296471b0e67459cd728d"
+    ),
+    "two_h100_smoke_summary.json": (
+        "fe77dcca3e808a4d8b05874462d399fa94dca59ec3540270c4de476350fceb06"
+    ),
 }
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 MODULE_KEYS = (
@@ -304,9 +316,9 @@ def prebuilt_bundle() -> ArtifactBundle:
             raise ArtifactError(f"prebuilt StableFold artifact digest mismatch: {name}")
 
     receipt = _read_json(PREBUILT_ARTIFACT_DIR / "RECEIPT.json")
-    if receipt.get("schema_version") != 1:
+    if receipt.get("schema_version") != 2:
         raise ArtifactError("unsupported prebuilt StableFold receipt schema")
-    if receipt.get("status") != "PASS_SINGLE_H100_PRODUCTION_CANDIDATE":
+    if receipt.get("status") != "PASS_SINGLE_NODE_2XH100_PRODUCTION":
         raise ArtifactError("prebuilt StableFold artifact is not qualified")
     if receipt.get("git_commit") != PREBUILT_COMMIT:
         raise ArtifactError("prebuilt StableFold receipt names another commit")

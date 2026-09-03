@@ -7,8 +7,8 @@ import yaml
 
 from tools.benchmark_training_backend import (
     aggregate_rank_metrics,
-    configure_torch_backend_for_training,
     configure_benchmark,
+    configure_torch_backend_for_training,
     is_source_tree_import,
 )
 from tools.plot_backend_comparison import build_report

@@ -1,0 +1,227 @@
+{
+  "aot_identity": {
+    "abi": {
+      "python_soabi": "cpython-314-x86_64-linux-gnu",
+      "python_version": "3.14.7",
+      "torch_cuda_version": "12.9",
+      "torch_cxx11_abi": true,
+      "torch_version": "2.10.0"
+    },
+    "extensions": {
+      "stablefold_delta": {
+        "filename": "_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
+        "sha256": "efe5ac474072a984444004b7f7d28de2dce77654e6fa40482cdb1bbdddf51c5b",
+        "symbols": [
+          "stablefold_triangle_delta_out",
+          "stablefold_triangle_delta_shadow_out"
+        ]
+      },
+      "stablefold_dkdv": {
+        "filename": "_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
+        "sha256": "d02922c35b69e2e6250218b3f0854c2ba9ad3e7539b7eb999132208f8af13268",
+        "symbols": [
+          "stablefold_triangle_dkdv_out",
+          "stablefold_triangle_dkdv_delta_true_out"
+        ]
+      },
+      "stablefold_dq_dbias": {
+        "filename": "_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
+        "sha256": "b023409b367f3a4025884950b9047c3848a3bf333fdf2282f7b727bb1715062e",
+        "symbols": [
+          "stablefold_triangle_dq_dbias_out",
+          "stablefold_reduce_broadcast_dbias_out",
+          "stablefold_triangle_sr_backward_out"
+        ]
+      },
+      "stablefold_forward": {
+        "filename": "_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
+        "sha256": "cad7ea63ae4f46a4a4a243c52e227c535560047a068329401a3afb2801403dba",
+        "symbols": [
+          "stablefold_triangle_forward_out",
+          "stablefold_pack_qkv",
+          "stablefold_triangle_forward_shadow_out"
+        ]
+      },
+      "stablefold_trimul": {
+        "filename": "_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
+        "sha256": "ea25ce8cf064f8ad99d56c9244e6e289f96facdc4ae898df81e4b05f078b7f12",
+        "symbols": [
+          "trimul_in_fwd",
+          "trimul_out_fwd",
+          "trimul_gate_split_bwd",
+          "sig_mul_bwd_out",
+          "ln_bwd_dx",
+          "ln_bwd_dgb",
+          "transpose_ln_bwd",
+          "trimul_wgrad_fixed_fold"
+        ]
+      }
+    },
+    "git": {
+      "commit": "87ebe22da13c657d36997dedb4ec398fbd62c6b7",
+      "dirty": false
+    },
+    "manifest_sha256": "d36e8c6e5f8fea4d2c0d680ab4018082be902b44f2c5a4066abc4aaea88da762",
+    "packaged_source_sha256": {
+      "openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md": "029c3eb0db9190718d101e778207f6b1ba896c9d5252b254ff7c0b845de24cf9",
+      "openfold3/core/kernels/cuda/_aot_runtime.py": "70983c8bb66d9ff26701365eee5ea4999732ef194d9bc40d1a676a9a04c7a473",
+      "openfold3/core/kernels/cuda/_ext/__init__.py": "94429df87bcc4294ba55e771e650b41fec40fa8a55c384271f4dc4c2cdb14818",
+      "openfold3/core/kernels/cuda/stablefold_triangle_attention.py": "37ca0c8f24bd10b12f2231563f16f23ce9c05c2f2a49a94fe0294af64455576a",
+      "openfold3/core/kernels/cuda/stablefold_triangle_delta.cu": "450430158a3977fdd54d7c6a7c31a6f504e0cb1efc367765001903175acd3c63",
+      "openfold3/core/kernels/cuda/stablefold_triangle_delta.py": "feda3c10bf8cc10db5f34eb26b384dac32ef4df6cd8c7b9eb08dbc52d66cc145",
+      "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.cu": "751ea17a0f898639accca70df2c4ffb753a322750fe14318372749668a35df3d",
+      "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.py": "9bea8154a0385c2434517abd5823833ccb3cf6d9bce10cc761099a9f376e35f9",
+      "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.cu": "269e9d2a017e0e53c52de5355f1f5ebdd07f1a7c7f41a0eab6985fa8924a6b2c",
+      "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.py": "2330622a2d5b3932e03d8525e2f6ef153944fa2c0e47cc9e712f43319770c73b",
+      "openfold3/core/kernels/cuda/stablefold_triangle_forward.cu": "fddb8404ea4a62932559701d9c18ac616044a5f2d1b692fc66cae904c859ff14",
+      "openfold3/core/kernels/cuda/stablefold_triangle_forward.py": "bfbdce2eda1ff1b42370ea52cdf823c8aeed69d87c8504c0a385491c5423b642",
+      "openfold3/core/kernels/cuda/stablefold_trimul.py": "221f7b14174831eadb2005838779a6542086f44193061571c6ec983f6ade9d5e",
+      "openfold3/core/kernels/cuda/stablefold_trimul_cuda.cu": "8962ca3513538070e5fb21259bd57a38a586641123aadfda40c62c44f9c9aa03",
+      "openfold3/core/kernels/cuda/stablefold_trimul_cuda.py": "69e971738e6ffe5a1ed689cd6c978076d84bb945fc905089ca19145a9687ce03"
+    },
+    "schema_version": 1,
+    "target": {
+      "cuda_arch": "sm_90a",
+      "ptx_embedded": false,
+      "torch_cuda_arch_list": "9.0a"
+    }
+  },
+  "backend": "nccl",
+  "expected_devices_per_node": 2,
+  "expected_num_nodes": 1,
+  "expected_world_size": 2,
+  "ranks": [
+    {
+      "compute_capability": [
+        9,
+        0
+      ],
+      "declared_aot_modules": [
+        "stablefold_forward",
+        "stablefold_delta",
+        "stablefold_dkdv",
+        "stablefold_dq_dbias",
+        "stablefold_trimul"
+      ],
+      "device_index": 0,
+      "device_multiprocessor_count": 132,
+      "device_name": "NVIDIA H100 80GB HBM3",
+      "device_total_memory_bytes": 85017624576,
+      "device_uuid": "77036a4e-4fab-dcc3-6696-7693a3b94e4f",
+      "execution_environment": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1",
+        "OPENFOLD3_TRIANGLE_ALLOW_JIT": "0"
+      },
+      "expected_devices_per_node": 2,
+      "expected_num_nodes": 1,
+      "expected_world_size": 2,
+      "global_rank": 0,
+      "hostname": "68-209-75-171",
+      "is_ddp_strategy": true,
+      "local_rank": 0,
+      "node_rank": 0,
+      "ok": true,
+      "process_group_backend": "nccl",
+      "process_group_rank": 0,
+      "process_group_world_size": 2,
+      "required_aot_modules": [
+        "stablefold_forward",
+        "stablefold_delta",
+        "stablefold_dkdv",
+        "stablefold_dq_dbias",
+        "stablefold_trimul"
+      ],
+      "runtime_identity": {
+        "installed_distribution": {
+          "installed_package_tree_sha256": "b349432ff80d88107f77a99b75a5cc1050fbb236338498e707313aff9e5db776",
+          "name": "openfold3",
+          "runtime_from_verified_distribution": true,
+          "verified_package_files": 469,
+          "version": "0.5.1.dev5860+g87ebe22da"
+        },
+        "lightning": "2.6.1",
+        "nccl": [
+          2,
+          30,
+          4
+        ],
+        "python": "3.14.7",
+        "torch": "2.10.0",
+        "torch_cuda": "12.9"
+      },
+      "strategy_class": "DDPStrategy",
+      "trainer_world_size": 2
+    },
+    {
+      "compute_capability": [
+        9,
+        0
+      ],
+      "declared_aot_modules": [
+        "stablefold_forward",
+        "stablefold_delta",
+        "stablefold_dkdv",
+        "stablefold_dq_dbias",
+        "stablefold_trimul"
+      ],
+      "device_index": 1,
+      "device_multiprocessor_count": 132,
+      "device_name": "NVIDIA H100 80GB HBM3",
+      "device_total_memory_bytes": 85017624576,
+      "device_uuid": "5b62e29e-9a44-d92a-7362-acea15990177",
+      "execution_environment": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1",
+        "OPENFOLD3_TRIANGLE_ALLOW_JIT": "0"
+      },
+      "expected_devices_per_node": 2,
+      "expected_num_nodes": 1,
+      "expected_world_size": 2,
+      "global_rank": 1,
+      "hostname": "68-209-75-171",
+      "is_ddp_strategy": true,
+      "local_rank": 1,
+      "node_rank": 0,
+      "ok": true,
+      "process_group_backend": "nccl",
+      "process_group_rank": 1,
+      "process_group_world_size": 2,
+      "required_aot_modules": [
+        "stablefold_forward",
+        "stablefold_delta",
+        "stablefold_dkdv",
+        "stablefold_dq_dbias",
+        "stablefold_trimul"
+      ],
+      "runtime_identity": {
+        "installed_distribution": {
+          "installed_package_tree_sha256": "b349432ff80d88107f77a99b75a5cc1050fbb236338498e707313aff9e5db776",
+          "name": "openfold3",
+          "runtime_from_verified_distribution": true,
+          "verified_package_files": 469,
+          "version": "0.5.1.dev5860+g87ebe22da"
+        },
+        "lightning": "2.6.1",
+        "nccl": [
+          2,
+          30,
+          4
+        ],
+        "python": "3.14.7",
+        "torch": "2.10.0",
+        "torch_cuda": "12.9"
+      },
+      "strategy_class": "DDPStrategy",
+      "trainer_world_size": 2
+    }
+  ],
+  "schema_version": 1,
+  "scope": "stablefold_kernel_ddp_only",
+  "status": "PASS"
+}

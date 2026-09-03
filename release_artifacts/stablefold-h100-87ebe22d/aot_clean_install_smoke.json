@@ -11,7 +11,7 @@
       "stablefold_delta": {
         "filename": "_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
-        "sha256": "682abb58e8b1edac729a4a2141c07fd1781979ad22ed3c4a7655c6676ffc8228",
+        "sha256": "efe5ac474072a984444004b7f7d28de2dce77654e6fa40482cdb1bbdddf51c5b",
         "symbols": [
           "stablefold_triangle_delta_out",
           "stablefold_triangle_delta_shadow_out"
@@ -20,7 +20,7 @@
       "stablefold_dkdv": {
         "filename": "_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
-        "sha256": "f9cc6592aea36fd39a93a03d879ec7600e59b48760de890a3eaea8ab70a528cb",
+        "sha256": "d02922c35b69e2e6250218b3f0854c2ba9ad3e7539b7eb999132208f8af13268",
         "symbols": [
           "stablefold_triangle_dkdv_out",
           "stablefold_triangle_dkdv_delta_true_out"
@@ -29,7 +29,7 @@
       "stablefold_dq_dbias": {
         "filename": "_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
-        "sha256": "c2c58986c4134f0c2792d168727e01df30f74dc2a04089ed2e1dec05af393f2a",
+        "sha256": "b023409b367f3a4025884950b9047c3848a3bf333fdf2282f7b727bb1715062e",
         "symbols": [
           "stablefold_triangle_dq_dbias_out",
           "stablefold_reduce_broadcast_dbias_out",
@@ -39,7 +39,7 @@
       "stablefold_forward": {
         "filename": "_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
-        "sha256": "3c371aef98b53aafcc05f4cb3b9966e9ab0ff6ea794cd6e6e9ec056543705f84",
+        "sha256": "cad7ea63ae4f46a4a4a243c52e227c535560047a068329401a3afb2801403dba",
         "symbols": [
           "stablefold_triangle_forward_out",
           "stablefold_pack_qkv",
@@ -49,7 +49,7 @@
       "stablefold_trimul": {
         "filename": "_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so",
         "module": "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
-        "sha256": "b3899ad7e70e7e728657f63887be95ea29c3fbc8c7908c87a7d1f052d2368a05",
+        "sha256": "ea25ce8cf064f8ad99d56c9244e6e289f96facdc4ae898df81e4b05f078b7f12",
         "symbols": [
           "trimul_in_fwd",
           "trimul_out_fwd",
@@ -63,10 +63,10 @@
       }
     },
     "git": {
-      "commit": "ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca",
+      "commit": "87ebe22da13c657d36997dedb4ec398fbd62c6b7",
       "dirty": false
     },
-    "manifest_sha256": "725ccc5011846ee6cac3f8383ebd2a89a539e143c0cca7e34d6379f1b86505b1",
+    "manifest_sha256": "d36e8c6e5f8fea4d2c0d680ab4018082be902b44f2c5a4066abc4aaea88da762",
     "packaged_source_sha256": {
       "openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md": "029c3eb0db9190718d101e778207f6b1ba896c9d5252b254ff7c0b845de24cf9",
       "openfold3/core/kernels/cuda/_aot_runtime.py": "70983c8bb66d9ff26701365eee5ea4999732ef194d9bc40d1a676a9a04c7a473",
@@ -108,11 +108,11 @@
     }
   },
   "binaries": [
-    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
-    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
-    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
-    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
-    "/tmp/openfold3-aot-sm90a-build.QVfZVH/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so"
+    "/tmp/openfold3-aot-sm90a-build.C4ddg0/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.C4ddg0/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.C4ddg0/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.C4ddg0/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
+    "/tmp/openfold3-aot-sm90a-build.C4ddg0/runtime/openfold3/core/kernels/cuda/_ext/_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so"
   ],
   "compute_capability": [
     9,
@@ -120,11 +120,11 @@
   ],
   "device": "NVIDIA H100 80GB HBM3",
   "installed_distribution": {
-    "installed_package_tree_sha256": "787414bc0571b9524720fa33ea4fac758cdcd9839d3564961d45441787a5893c",
+    "installed_package_tree_sha256": "b349432ff80d88107f77a99b75a5cc1050fbb236338498e707313aff9e5db776",
     "name": "openfold3",
     "runtime_from_verified_distribution": true,
-    "verified_package_files": 459,
-    "version": "0.4.3.dev5512+gce15d03b0"
+    "verified_package_files": 469,
+    "version": "0.5.1.dev5860+g87ebe22da"
   },
   "torch": "2.10.0",
   "torch_cuda": "12.9",
@@ -278,18 +278,18 @@
   },
   "trimul_short_sequence_stock": {
     "fields": {
-      "d_layer_norm_in.bias": "c424d12d805b5889f18ced8d79e8ac5bb1facc897a71980493444ad2e79d7f25",
-      "d_layer_norm_in.weight": "1691615d8d740a11e714104f5ed89ff6d954f87c80a9d0728be84dcd0d567812",
-      "d_layer_norm_out.bias": "d917b438686876d89e325a1461e99fe09e030d2e1073132016f7f5afe9ec68b5",
-      "d_layer_norm_out.weight": "9a0e7cbadf1a70b0698c26f339de5bc4dc62506995aad7e3c86a4cea036b8030",
-      "d_linear_a_g.weight": "98935863cc5ddf4f2f93a9058f0e8a7a5bbfad3f00f4e3868305ea15f81a556c",
-      "d_linear_a_p.weight": "50c013ad14265da0a3ddddd76c98e863c37eb552555ca8e21537cd906efb9c16",
-      "d_linear_b_g.weight": "41fe8ecc1b6d69e73cd9c01711c38e398937b638bfc1940517ff2118cd5122c8",
-      "d_linear_b_p.weight": "46551628fc8e7e181e693d434a9a4d55b470301337a7a45a96104909bb6960a8",
-      "d_linear_g.weight": "ad1ffa392e7b61e7a40a2e50fb4f249c6587e3a75dfe49a6efbdcea2d55712aa",
-      "d_linear_z.weight": "1bb12fc012503ec6fdd4c9079917cd2afc9a6887c7108cae3843863f8cfc1f63",
-      "d_z": "de2022e229a785619e6bdde5eccefd84e8dc147a6b3427f162b22895af6a04f9",
-      "output": "b9e9ae6e7e638fa019450ecb85aa187f9994f2fb3f1e9d0ab777f782387c2bce"
+      "d_layer_norm_in.bias": "0aa0502c7ece4d93466d25b54a410e9b0c2f8a6c6cef6ddfbf193ed04cd163f4",
+      "d_layer_norm_in.weight": "25d53be75c804447659d02ad60075b864e797ae01fdd05141ec8d307e1c617c3",
+      "d_layer_norm_out.bias": "d4fc4ec4d61b67150263878744236d46f148555695ddb5e4555d0f1d638f1849",
+      "d_layer_norm_out.weight": "d57c4ba7d65c29d30d6408406b6364cca8ce03ef275997b01e1a48387d540bed",
+      "d_linear_a_g.weight": "084de9188897f96dbd63971e1283ac15b82e3ada76b2eabc5dafb91cd29a762f",
+      "d_linear_a_p.weight": "921d12f7903c79be0c0b12474b2f4349b849c802e31a612c6da0090227eff050",
+      "d_linear_b_g.weight": "ab8e48d27f2625a527fd01ff460d8c6bbdb82f1e9e16339351db1600bf5aa899",
+      "d_linear_b_p.weight": "ce6ba6d2ca71b4640d59d2f1df81c3315a5fcf0018ea7e8237faff0a59eb07c6",
+      "d_linear_g.weight": "f35266847518c8dd76f0b9d48bed7346a7eee55bf6ae120cf38fca447f9a564c",
+      "d_linear_z.weight": "9338ecc5a0df3685bdf65ab3c0e3f9c0ac6dbf4c55d89a5ebbb07447d150be62",
+      "d_z": "20053bdca7f5ea7165470bbce82256c67636d2f311425386f000dc6da41afe30",
+      "output": "4c39d3f130d5d6bbf844dd3b10588d9d47df33c4a6a3aff7ddc8b74fe65d0e95"
     },
     "route_counts": {
       "cueq": 0,

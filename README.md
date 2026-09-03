@@ -78,10 +78,12 @@ behavior, and the selector changes only the training kernel-route flags.
 
 The integration checkout and the binary artifact intentionally have separate
 identities: the `main` checkout contains the installer and guide, while the
-wheel records the qualified source commit `ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca`.
+wheel records the qualified source commit `87ebe22da13c657d36997dedb4ec398fbd62c6b7`.
 That wheel keeps Diffusion on AQLab's original attention path and runs
 StableFold only for non-Diffusion triangle Attention and TMU outside the source
-checkout.
+checkout. Its single-node DDP path has been exercised on two real H100s through
+scratch training, validation, checkpointing, and resume. Eight-H100 and real
+multi-node qualification remain pending hardware.
 
 For a copy-and-run bare-metal path covering clone, data, prebuilt installation,
 backend selection, single-GPU training, single-node DDP, and multi-node launch,

@@ -449,7 +449,7 @@ setuptools-scm = ">=8"
 wheel = "*"
 
 [feature.stablefold-h100.pypi-dependencies]
-openfold3 = { path = "release_artifacts/stablefold-h100-ce15d03b/openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl" }
+openfold3 = { path = "release_artifacts/stablefold-h100-87ebe22d/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl" }
 
 [feature.stablefold-h100.activation]
 env.PYTHONNOUSERSITE = "1"

@@ -206,9 +206,9 @@ semantics used by the single-node configuration.
 
 StableFold adds a kernel-only preflight to AQLab's ordinary DDP path; it does
 not replace the DDP strategy or alter gradients, EMA, losses, checkpoints, or
-logging. The production-candidate target is one process per full NVIDIA H100
-GPU, with the same clean AOT wheel installed on every node and these execution
-flags set identically:
+logging. The production target is one process per full NVIDIA H100 GPU, with
+the same clean AOT wheel installed on every node and these execution flags set
+identically:
 
 ```bash
 export OPENFOLD3_TRIANGLE_ALLOW_JIT=0
@@ -226,8 +226,10 @@ TriMul permits only its documented stock route for sequence lengths at or below
 
 The operator flag ``use_deepspeed_evo_attention`` is not the same as
 Lightning's DeepSpeed/ZeRO strategy. StableFold's kernel preflight is currently
-qualified only with AQLab's standard DDP strategy; all other backends retain the
-strategy behavior selected by the unmodified AQLab runner.
+qualified with AQLab's standard DDP strategy on a real single-node two-H100
+NCCL run through validation, checkpointing, and resume. Eight-GPU and real
+multi-node qualification remain pending hardware; all other backends retain
+the strategy behavior selected by the unmodified AQLab runner.
 
 For a concise source-to-launch example and an explicit selector for native
 AQLab/OpenFold3 stock PyTorch, cuEquivariance, StableFold, and DeepSpeed Evo

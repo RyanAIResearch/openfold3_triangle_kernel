@@ -420,6 +420,12 @@ pixi run -e openfold3-cuda12 train-single-node \
 Do not wrap this single-node command in `torchrun`. PyTorch Lightning starts
 the local DDP workers.
 
+The production wheel has completed a real two-H100 NCCL
+scratch-to-validation-to-checkpoint-to-resume qualification on this launcher.
+The eight-GPU configuration uses the same Lightning DDP path and world-size
+contract, but an actual eight-H100 qualification is still pending hardware; do
+not treat the two-GPU receipt as an eight-GPU scaling result.
+
 For batch size one, use:
 
 ```text
@@ -489,6 +495,9 @@ pixi run -e openfold3-cuda12 train-multinode \
 
 Use Slurm or the site's scheduler to allocate the nodes and start the per-node
 commands concurrently.
+
+The multi-node wiring and fail-closed kernel receipt contract are implemented,
+but a real two-node H100 qualification remains pending hardware.
 
 ## Fine-tuning
 

@@ -40,8 +40,8 @@ def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     assert production["dependencies"]["cuda-version"] == "12.9.*"
     assert production["pypi-dependencies"]["openfold3"] == {
         "path": (
-            "release_artifacts/stablefold-h100-ce15d03b/"
-            "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl"
+            "release_artifacts/stablefold-h100-87ebe22d/"
+            "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
         )
     }
 
@@ -50,8 +50,8 @@ def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     assert "openfold3-h100" not in locked_environments
     locked = locked_environments["openfold3-cuda12"]
     production_wheel = (
-        "./release_artifacts/stablefold-h100-ce15d03b/"
-        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl"
+        "./release_artifacts/stablefold-h100-87ebe22d/"
+        "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
     )
     locked_pypi = []
     for packages in locked["packages"].values():
@@ -266,9 +266,9 @@ def test_prebuilt_wheel_keeps_diffusion_on_the_aqlab_path():
     rollout_calls = self_calls(method("_rollout"), "sample_diffusion")
     assert len(rollout_calls) == 1
     rollout_keywords = keywords(rollout_calls[0])
-    stablefold = rollout_keywords["use_stable_triangle_attention"]
-    assert isinstance(stablefold, ast.Constant) and stablefold.value is False
-    assert "use_high_precision_attention" not in rollout_keywords
+    assert "use_stable_triangle_attention" not in rollout_keywords
+    high_precision = rollout_keywords["use_high_precision_attention"]
+    assert isinstance(high_precision, ast.Constant) and high_precision.value is True
 
     training_calls = self_calls(method("_train_diffusion"), "diffusion_module")
     assert len(training_calls) == 1
