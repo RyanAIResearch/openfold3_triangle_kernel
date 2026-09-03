@@ -37,6 +37,7 @@ def _config(
 ):
     return SimpleNamespace(
         settings=SimpleNamespace(
+            debug=SimpleNamespace(log_iteration_time=False),
             memory=SimpleNamespace(
                 train={
                     "use_stable_triangle_attention": train_attention,
@@ -295,6 +296,7 @@ def test_training_runner_keeps_aqlab_ddp_and_adds_only_kernel_callback(
     runner.deepspeed_config_path = None
     runner.logging_config = SimpleNamespace(log_lr=False, wandb_config=None)
     runner.checkpoint_config = None
+    runner.memory_snapshot = SimpleNamespace(enabled=False)
     runner.experiment_config = SimpleNamespace(
         experiment_settings=SimpleNamespace(
             output_dir=tmp_path,
