@@ -46,15 +46,6 @@ def _keywords(call: ast.Call) -> dict[str, ast.expr]:
     }
 
 
-def _is_mode_setting(value: ast.expr, name: str) -> bool:
-    return (
-        isinstance(value, ast.Attribute)
-        and isinstance(value.value, ast.Name)
-        and value.value.id == "mode_mem_settings"
-        and value.attr == name
-    )
-
-
 def test_rollout_keeps_aqlab_diffusion_and_disables_stablefold():
     rollout = _openfold3_method("_rollout")
     sample_diffusion = _self_call(rollout, "sample_diffusion")
@@ -64,11 +55,12 @@ def test_rollout_keeps_aqlab_diffusion_and_disables_stablefold():
         "use_deepspeed_evo_attention",
         "use_triton_triangle_kernels",
         "use_cueq_triangle_kernels",
+        "use_stable_triangle_attention",
         "use_lma",
     ):
-        assert _is_mode_setting(keywords[name], name)
-    assert isinstance(keywords["use_stable_triangle_attention"], ast.Constant)
-    assert keywords["use_stable_triangle_attention"].value is False
+        assert name not in keywords
+    assert isinstance(keywords["use_high_precision_attention"], ast.Constant)
+    assert keywords["use_high_precision_attention"].value is True
 
     enclosing = next(
         node
