@@ -70,6 +70,28 @@ def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     )
 
 
+def test_cuequivariance_comparator_is_exactly_pinned_to_0_10_0():
+    manifest = _manifest()
+    for feature, platform, ops_package in (
+        ("cuequivariance-cuda12", "*-cuda12", "cuequivariance-ops-torch-cu12"),
+        ("cuequivariance-cuda13", "*-cuda13", "cuequivariance-ops-torch-cu13"),
+    ):
+        dependencies = manifest["feature"][feature]["target"][platform][
+            "pypi-dependencies"
+        ]
+        assert dependencies == {
+            "cuequivariance": "==0.10.0",
+            "cuequivariance-torch": "==0.10.0",
+            ops_package: "==0.10.0",
+        }
+
+    project = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
+    cueq_extra = project["project"]["optional-dependencies"]["cuequivariance"]
+    assert "cuequivariance==0.10.0" in cueq_extra
+    assert "cuequivariance-torch==0.10.0" in cueq_extra
+    assert "cuequivariance-ops-torch-cu12==0.10.0" in cueq_extra
+
+
 def test_h100_pixi_tasks_keep_training_in_official_launchers():
     tasks = _manifest()["feature"]["stablefold-h100"]["tasks"]
     assert set(tasks) == {
@@ -158,6 +180,9 @@ def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     assert 'export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison-${DEVICES}gpu"' in text
     assert "two-H100" not in text
     assert "two-node H100 qualification" not in text
+    assert text.count("--use-tf32") >= 2
+    assert "cuEquivariance" in text
+    assert "0.10.0" in text
 
 
 def test_dirty_pixi_lock_error_explains_repository_update(monkeypatch):

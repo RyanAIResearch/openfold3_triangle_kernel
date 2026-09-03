@@ -424,14 +424,14 @@ torch = { version = "*", index = "https://download.pytorch.org/whl/cu130" }
 #
 
 [feature.cuequivariance-cuda12.target."*-cuda12".pypi-dependencies]
-cuequivariance = ">=0.8"
-cuequivariance-torch = ">=0.8"
-cuequivariance-ops-torch-cu12 = ">=0.8"
+cuequivariance = "==0.10.0"
+cuequivariance-torch = "==0.10.0"
+cuequivariance-ops-torch-cu12 = "==0.10.0"
 
 [feature.cuequivariance-cuda13.target."*-cuda13".pypi-dependencies]
-cuequivariance = ">=0.8"
-cuequivariance-torch = ">=0.8"
-cuequivariance-ops-torch-cu13 = ">=0.8"
+cuequivariance = "==0.10.0"
+cuequivariance-torch = "==0.10.0"
+cuequivariance-ops-torch-cu13 = "==0.10.0"
 
 
 # --- StableFold H100 production-candidate workflow

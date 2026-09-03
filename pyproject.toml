@@ -72,9 +72,9 @@ optional-dependencies.dev = [
     "furo"
 ]
 optional-dependencies.cuequivariance = [
-    "cuequivariance>=0.8",
-    "cuequivariance-ops-torch-cu12>=0.8",
-    "cuequivariance-torch>=0.8",
+    "cuequivariance==0.10.0",
+    "cuequivariance-ops-torch-cu12==0.10.0",
+    "cuequivariance-torch==0.10.0",
     "torch==2.10.0",
 ]
 optional-dependencies.deepspeed = [

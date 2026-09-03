@@ -2882,14 +2882,14 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: ./release_artifacts/stablefold-h100-87ebe22d/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/1b/52/3131b6dc9577eaa556b2b66584a44df32a9d4356aa641ff5d33c8b797225/cuequivariance-0.10.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/23/cd/066e86230ae37ed0be70aae89aabf03ca8d9f39c8aea0dec8029455b5540/opt_einsum-3.4.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/4e/d0/4b9da3d9c5749bf2c93f2818af4dc306f3b3ccc671f68f6820635fd53b74/cuequivariance_torch-0.11.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/2b/a3/5c2b6cac9bf5d210536c26bfb1ba191c3c36883ec8188076576332a4a49f/cuequivariance_torch-0.10.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/9b/aa/ff2ac0defafd3862cc35498a1b6fcf4efdf51c43b043befbb5af64e11b24/cuequivariance_ops_cu12-0.10.0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/9e/77/3dee0c8f219cc5e68e7d84abc1ecc315856104c459658890bd9ecce17815/mypy_baseline-0.7.4-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/a9/6a/e6515ee5698d720aab969e7bb1e1f2118acd267a99007519cc76f4684cd6/cuequivariance_ops_torch_cu12-0.10.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b8/85/e4af82cc9202023862090bfca4ea827d533329e925c758f0cde964cb54b7/nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/c3/2a/e96be054fd1a498655df3ffd0fec7c8f29711c7244a8e3e99c9181ec0200/cuequivariance_ops_cu12-0.11.0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/cb/c0/0a517bfe63ccd3b92eb254d264e28fca3c7cab75d07daea315250fb1bf73/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/cf/ca/85a3d6b8e8b7209fb6626909e666f4b69c299deba85b33fd91cdfabf8101/cuequivariance_ops_torch_cu12-0.11.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-      - pypi: https://files.pythonhosted.org/packages/e7/a8/7f99cfa83f61d2d8cb29f31e1f90a6233873a6038b4cdfb30179ef90e5a6/cuequivariance-0.11.1-py3-none-any.whl
   openfold3-cuda12-dev:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -28909,9 +28909,9 @@ packages:
   - sphinx ; extra == 'dev'
   - myst-parser ; extra == 'dev'
   - furo ; extra == 'dev'
-  - cuequivariance>=0.8 ; extra == 'cuequivariance'
-  - cuequivariance-ops-torch-cu12>=0.8 ; extra == 'cuequivariance'
-  - cuequivariance-torch>=0.8 ; extra == 'cuequivariance'
+  - cuequivariance==0.10.0 ; extra == 'cuequivariance'
+  - cuequivariance-ops-torch-cu12==0.10.0 ; extra == 'cuequivariance'
+  - cuequivariance-torch==0.10.0 ; extra == 'cuequivariance'
   - torch==2.10.0 ; extra == 'cuequivariance'
   - deepspeed>=0.18.7 ; extra == 'deepspeed'
   - torch==2.10.0 ; extra == 'stablefold-h100'
@@ -29895,13 +29895,6 @@ packages:
   - pytest ; extra == 'dev'
   - setuptools ; extra == 'dev'
   requires_python: '>=3.9'
-- pypi: https://files.pythonhosted.org/packages/4e/d0/4b9da3d9c5749bf2c93f2818af4dc306f3b3ccc671f68f6820635fd53b74/cuequivariance_torch-0.11.1-py3-none-any.whl
-  name: cuequivariance-torch
-  version: 0.11.1
-  sha256: 7a649eb59e623ef90f4862d84972a9aa12142892814f7a00dd652a1206628391
-  requires_dist:
-  - cuequivariance
-  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/4f/22/7c08d8e93f6a2e4879ac83c12696aecaf17a0fc2c9e8d204caceaa3b8426/nvidia_cublas-13.6.0.2-py3-none-manylinux_2_27_aarch64.whl
   name: nvidia-cublas
   version: 13.6.0.2
@@ -31679,18 +31672,6 @@ packages:
   version: 13.0.85
   sha256: 4936d1d6780fbe68db454f5e72a42ff64d1fd6397df9f363ae786930fd5c1cd4
   requires_python: '>=3'
-- pypi: https://files.pythonhosted.org/packages/c3/2a/e96be054fd1a498655df3ffd0fec7c8f29711c7244a8e3e99c9181ec0200/cuequivariance_ops_cu12-0.11.0-py3-none-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
-  name: cuequivariance-ops-cu12
-  version: 0.11.0
-  sha256: 13b23ba0d81939a7136545c9c68f12494c6ac6ac3baa1ede89af76df894cb9e5
-  requires_dist:
-  - nvidia-cublas-cu12>=12.5.0
-  - tqdm
-  - nvidia-ml-py
-  - platformdirs
-  - numpy ; extra == 'test'
-  - pytest ; extra == 'test'
-  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/c3/68/483a78f5e8f31b08fb1bb671559968c0ca3a065ac7acabfc7cee55214fd6/nvidia_cuda_nvrtc-13.0.88-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl
   name: nvidia-cuda-nvrtc
   version: 13.0.88
@@ -31907,25 +31888,6 @@ packages:
   requires_dist:
   - nvidia-cuda-nvrtc-cu12
   requires_python: '>=3'
-- pypi: https://files.pythonhosted.org/packages/cf/ca/85a3d6b8e8b7209fb6626909e666f4b69c299deba85b33fd91cdfabf8101/cuequivariance_ops_torch_cu12-0.11.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
-  name: cuequivariance-ops-torch-cu12
-  version: 0.11.0
-  sha256: 8246c830d5a0eaeb72f8b6380320dd77b0a25da9ab2bfb60d9b29c239dc00c66
-  requires_dist:
-  - cuequivariance-ops-cu12==0.11.0
-  - scipy
-  - torch>=2.11 ; extra == 'test'
-  - numpy>=1.23,<2.0a0 ; extra == 'test'
-  - pytest ; extra == 'test'
-  - onnx ; extra == 'plugins'
-  - onnxscript ; extra == 'plugins'
-  - onnxruntime ; extra == 'plugins'
-  - onnxruntime-extensions ; extra == 'plugins'
-  - onnx-graphsurgeon ; extra == 'plugins'
-  - tensorrt>=10 ; extra == 'plugins'
-  - polygraphy ; extra == 'plugins'
-  - cuda-bindings ; extra == 'plugins'
-  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl
   name: colorama
   version: 0.4.6
@@ -32266,19 +32228,6 @@ packages:
   - zarr<3.2.0 ; extra == 'test-full'
   - zstandard ; python_full_version < '3.14' and extra == 'test-full'
   - tqdm ; extra == 'tqdm'
-  requires_python: '>=3.10'
-- pypi: https://files.pythonhosted.org/packages/e7/a8/7f99cfa83f61d2d8cb29f31e1f90a6233873a6038b4cdfb30179ef90e5a6/cuequivariance-0.11.1-py3-none-any.whl
-  name: cuequivariance
-  version: 0.11.1
-  sha256: b570d4dc6f798a06c7333283a4b36e580272985abcb65843339984a84544395c
-  requires_dist:
-  - networkx
-  - numpy
-  - opt-einsum
-  - scipy
-  - sympy
-  - graphviz ; extra == 'dev'
-  - pytest ; extra == 'dev'
   requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/e7/b6/60a3641111d39ebfcfcd8b8bfd0290d7623c4b8b5f90952c2d84776f8ca4/nvidia_cuda_nvrtc-13.3.33-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
   name: nvidia-cuda-nvrtc

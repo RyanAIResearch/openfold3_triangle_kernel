@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.metadata
 import json
 import math
 import os
@@ -429,6 +430,13 @@ def main() -> None:
             torch_cuda=torch.version.cuda,
             gpu_name=torch.cuda.get_device_name(),
             use_tf32=args.use_tf32,
+            cuequivariance_version=importlib.metadata.version("cuequivariance"),
+            cuequivariance_torch_version=importlib.metadata.version(
+                "cuequivariance-torch"
+            ),
+            cuequivariance_ops_torch_version=importlib.metadata.version(
+                "cuequivariance-ops-torch-cu12"
+            ),
         )
         summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         print(json.dumps(summary, indent=2, sort_keys=True))

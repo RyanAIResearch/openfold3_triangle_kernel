@@ -264,10 +264,14 @@ paper-quality 400-step comparison, use the same command with
 the same otherwise-idle GPU; do not compare results collected on different GPU
 models or while another process is using the device.
 
-The model remains in `bf16-mixed` precision. `--use-tf32` applies AQLab's
-official TF32 setting only to FP32 matrix multiplications and is passed to every
-backend so the comparison is matched. It is required by the current
-cuEquivariance triangle-attention backward implementation.
+The model remains in `bf16-mixed` precision. `--use-tf32` enables TF32 only for
+the remaining FP32 matrix multiplications and is passed to every backend so the
+comparison is matched. The repository pins all three cuEquivariance
+distributions to `0.10.0`; its full-training triangle-attention backward sees
+an FP32 bias and requires TF32. This also matches the historical AQLab training
+entry point used by the sealed single-H100 comparison, which enabled high
+float32 matmul precision. It is an explicit benchmark protocol, not the current
+AQLab training CLI default.
 
 For a single-node multi-GPU comparison, change `DEVICES` and
 `CUDA_VISIBLE_DEVICES` together. This example benchmarks all backends on eight
