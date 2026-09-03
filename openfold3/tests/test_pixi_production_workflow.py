@@ -38,15 +38,30 @@ def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     assert production["dependencies"]["pytorch-gpu"] == "==2.10.0"
     assert production["dependencies"]["pytorch-lightning"] == "==2.6.1"
     assert production["dependencies"]["cuda-version"] == "12.9.*"
+    assert production["pypi-dependencies"]["openfold3"] == {
+        "path": (
+            "release_artifacts/stablefold-h100-ce15d03b/"
+            "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl"
+        )
+    }
 
     lock = yaml.safe_load((REPOSITORY / "pixi.lock").read_text())
     locked_environments = lock["environments"]
     assert "openfold3-h100" not in locked_environments
     locked = locked_environments["openfold3-cuda12"]
+    production_wheel = (
+        "./release_artifacts/stablefold-h100-ce15d03b/"
+        "openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl"
+    )
+    locked_pypi = []
     for packages in locked["packages"].values():
         for package in packages:
             if "pypi" in package:
-                assert package["pypi"].startswith(("https://", "http://"))
+                locked_pypi.append(package["pypi"])
+                assert package["pypi"].startswith(("https://", "http://")) or (
+                    package["pypi"] == production_wheel
+                )
+    assert locked_pypi.count(production_wheel) == 1
     development_locked = locked_environments["openfold3-cuda12-dev"]
     assert any(
         package.get("pypi") == "./"
@@ -61,20 +76,35 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         "doctor-h100",
         "download-pdb-subset",
         "generate-pdb-subset",
+        "purify-pdb-subset",
         "prepare-training-data",
+        "prepare-pdb-subset",
         "setup-pdb-subset",
         "setup-stablefold-h100",
         "verify-aot",
+        "validate-training-data",
         "select-training-backend",
         "train-single-gpu",
         "train-single-node",
         "train-multinode",
+        "benchmark-single-gpu",
+        "benchmark-single-node",
+        "plot-backend-comparison",
     }
     commands = {name: value["cmd"] for name, value in tasks.items() if "cmd" in value}
     assert commands["train-single-gpu"][-1] == "run_openfold"
     assert commands["train-single-node"][-1] == "run_openfold"
     assert commands["train-multinode"][-1] == "torchrun"
-    assert commands["setup-stablefold-h100"][3] == "install-prebuilt"
+    assert commands["benchmark-single-gpu"][-1] == "tools/run_backend_benchmark.sh"
+    assert commands["benchmark-single-node"][-1] == "tools/run_backend_benchmark.sh"
+    assert commands["prepare-pdb-subset"][-1] == "tools/prepare_pdb_subset.py"
+    assert commands["validate-training-data"][-1] == (
+        "tools/validate_training_data.py"
+    )
+    assert commands["plot-backend-comparison"][-1] == (
+        "tools/plot_backend_comparison.py"
+    )
+    assert commands["setup-stablefold-h100"][3] == "verify-prebuilt"
     assert commands["verify-aot"][3] == "verify-prebuilt"
     assert not any("build" in " ".join(command) for command in commands.values())
     for name in ("train-single-gpu", "train-single-node", "train-multinode"):
@@ -90,7 +120,35 @@ def test_h100_user_docs_use_normal_pixi_commands():
         assert "--as-is" not in text
         assert "--locked" not in text
         assert "openfold3-h100" not in text
+        assert "--frozen" not in text
+        assert "pixi install -e openfold3-cuda12" in text
         assert "pixi run -e openfold3-cuda12" in text
+
+
+def test_bare_metal_benchmark_prepares_four_thousand_samples_atomically():
+    text = (
+        REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
+    ).read_text()
+    assert text.count("--train-size 4000") == 1
+    assert "prepare-pdb-subset" in text
+    assert "validate-training-data" in text
+    assert "--train-size 1000" not in text
+
+
+def test_dirty_pixi_lock_error_explains_repository_update(monkeypatch):
+    monkeypatch.setattr(
+        artifact_manager,
+        "_git",
+        lambda *args: " M pixi.lock",
+    )
+
+    with pytest.raises(ArtifactError) as caught:
+        artifact_manager.source_commit()
+
+    message = str(caught.value)
+    assert "Dirty paths:\n M pixi.lock" in message
+    assert "git restore --source=HEAD -- pixi.lock" in message
+    assert "git pull --ff-only origin main" in message
 
 
 def test_development_consumers_do_not_select_the_h100_runtime():
@@ -105,9 +163,10 @@ def test_development_consumers_do_not_select_the_h100_runtime():
         assert "openfold3-cuda12-dev" in text
 
 
-def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():
+def test_official_launcher_preflights_data_and_aot_before_changing_cwd():
     wrapper = (REPOSITORY / "tools/run_official_training.sh").read_text()
     assert "tools.manage_attested_sm90_wheel verify-prebuilt" in wrapper
+    assert "tools/validate_training_data.py" in wrapper
     assert "PYTHONPATH PYTHONHOME LD_PRELOAD" in wrapper
     assert '"$prefix/bin/"*' in wrapper
     assert 'exec "$launcher_path" "$@"' in wrapper
@@ -120,6 +179,18 @@ def test_official_launcher_wrapper_only_preflights_aot_and_changes_cwd():
         "max-restarts",
     ):
         assert forbidden not in wrapper
+
+
+def test_backend_benchmark_wrapper_uses_installed_runtime_outside_source():
+    wrapper = (REPOSITORY / "tools/run_backend_benchmark.sh").read_text()
+    assert "tools.manage_attested_sm90_wheel verify-prebuilt" in wrapper
+    assert "tools/validate_training_data.py" in wrapper
+    assert "PYTHONPATH PYTHONHOME LD_PRELOAD" in wrapper
+    assert "OF3_RUN_CWD must be outside the source checkout" in wrapper
+    assert (
+        '"$prefix/bin/python" "$source_root/tools/benchmark_training_backend.py"'
+        in wrapper
+    )
 
 
 def test_prebuilt_bundle_is_checked_in_and_pinned_by_digest():

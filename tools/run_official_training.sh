@@ -20,6 +20,7 @@ for name in PYTHONPATH PYTHONHOME LD_PRELOAD; do
 done
 
 prefix=$(cd "${CONDA_PREFIX:?CONDA_PREFIX is not set}" && pwd -P)
+caller_cwd=$(pwd -P)
 launcher_path=$(command -v "$launcher")
 case "$launcher_path" in
   "$prefix/bin/"*) ;;
@@ -43,6 +44,29 @@ case "$run_cwd/" in
     exit 2
     ;;
 esac
+
+runner_yaml=
+arguments=("$@")
+for ((index = 0; index < ${#arguments[@]}; index++)); do
+  case "${arguments[$index]}" in
+    --runner-yaml)
+      if ((index + 1 >= ${#arguments[@]})); then
+        echo "--runner-yaml requires a path" >&2
+        exit 2
+      fi
+      runner_yaml=${arguments[$((index + 1))]}
+      ;;
+    --runner-yaml=*) runner_yaml=${arguments[$index]#--runner-yaml=} ;;
+  esac
+done
+if [[ -n "$runner_yaml" ]]; then
+  case "$runner_yaml" in
+    /*) ;;
+    *) runner_yaml="$caller_cwd/$runner_yaml" ;;
+  esac
+  "$prefix/bin/python" "$source_root/tools/validate_training_data.py" \
+    "$runner_yaml" --base-dir "$run_cwd"
+fi
 
 (
   cd "$source_root"

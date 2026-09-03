@@ -1,362 +1,510 @@
-# OpenFold3 H100 + StableFold reproduction guide (no kernel build)
+# OpenFold3 + StableFold Training Quick Start
 
-This workflow preserves AQLab OpenFold3 data, training entry points, Lightning DDP, EMA, gradients, losses, checkpoints, and loggers while changing only the selected operator backend.
-All five StableFold `sm_90a` AOT extensions are shipped in a qualified wheel inside this repository, so users do not need a system CUDA Toolkit, user-invoked NVCC, CMake, or runtime JIT.
-Complete steps 1–4, choose exactly one launch topology from steps 5–7, and use the same Git revision, Pixi lock, runner YAML, and shared paths on every node.
+This guide follows the Lambda OpenFold3 quick-start flow: set up the
+environment, prepare a small PDB dataset, remove samples affected by unavailable
+files, and launch training on one or more GPUs.
 
-| Topology | Environment installation | YAML `devices` | YAML `num_nodes` | Launch method |
-| --- | --- | ---: | ---: | --- |
-| One GPU | Install once on that host | 1 | 1 | Invoke `run_openfold` once |
-| Multiple GPUs on one host | Install once on that host | Visible GPUs per host | 1 | Invoke `run_openfold` once; Lightning spawns local DDP |
-| Multiple hosts with a shared prefix | Install once on node 0 | GPUs per host | Host count | Invoke standard `torchrun` once on each host |
-| Multiple hosts with node-local prefixes | Install independently on every host | GPUs per host | Host count | Invoke standard `torchrun` once on each host |
+The current prebuilt StableFold package supports full NVIDIA H100 80 GB GPUs on
+Linux x86-64. It does not require a system CUDA Toolkit or local kernel build.
 
-## 1. Bootstrap every H100 host
+## Setup
 
-Use Linux x86-64 with full NVIDIA H100 80 GB GPUs, a compatible NVIDIA driver, `git`, `curl`, `tmux`, and a filesystem mounted at `/mnt/shared` on every node; a system CUDA Toolkit and NVCC are not required.
-Install Pixi on every host, then clone the `main` branch once on node 0 into the shared filesystem after configuring GitHub read access if the repository is private.
-Confirm that every host reads the same clean checkout and that `git rev-parse HEAD` returns the same value everywhere.
+### Install Pixi
 
 ```bash
-# Every host.
-sudo apt-get update
-sudo apt-get install -y git curl ca-certificates tmux
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
-
-# Node 0 only; /mnt/shared must be mounted on every node.
-export OF3_SRC=/mnt/shared/openfold3/src
-mkdir -p /mnt/shared/openfold3
-git clone --branch main --single-branch \
-  https://github.com/RyanAIResearch/openfold3_triangle_kernel.git "$OF3_SRC"
-cd "$OF3_SRC"
-git rev-parse HEAD
-test -z "$(git status --porcelain=v1)"
-nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv
 ```
 
-## 2. Install Pixi and the prebuilt StableFold wheel
+Restart the shell if the `pixi` command is not immediately available.
 
-The non-editable `openfold3-cuda12` environment pins Python 3.14, PyTorch 2.10, CUDA runtime 12.9, and Lightning 2.6.1.
-`setup-stablefold-h100` validates and installs the wheel stored in the checkout without compiling StableFold source or downloading a kernel binary; dependencies may still probe the Pixi-provided compiler ABI and CUDA version.
-Install once into the shared prefix on node 0, then run the read-only doctor and AOT verifier on every host; success reports artifact commit `ce15d03b0a3b8793b6cf7e40a03c9475e432d6ca`, wheel SHA-256 `e3e6b80e…a27d19`, and H100 capability `[9, 0]`.
+### Clone the Repository
 
 ```bash
-export PATH="$HOME/.pixi/bin:$PATH"
-export OF3_SRC=/mnt/shared/openfold3/src
-cd "$OF3_SRC"
-unset PYTHONPATH PYTHONHOME LD_PRELOAD
+git clone --branch main --single-branch \
+  https://github.com/RyanAIResearch/openfold3_triangle_kernel.git
+cd openfold3_triangle_kernel
+```
 
-# One host, including a multi-GPU host: run both commands once on that host.
-# Multiple hosts with one shared /mnt/shared/openfold3/src prefix: run them once on node 0.
-# Multiple hosts with node-local prefixes: run them independently on every host.
+### Set Up OpenFold3 and StableFold
+
+```bash
 pixi install -e openfold3-cuda12
-pixi run -e openfold3-cuda12 setup-stablefold-h100
+```
 
-# Every host: check the environment.
+This one command creates the environment and installs the repository-pinned
+OpenFold3 wheel with the prebuilt StableFold kernels. No separate setup command
+or local kernel build is required.
+
+To optionally check the GPU, environment, and all five AOT kernel modules, run:
+
+```bash
 pixi run -e openfold3-cuda12 doctor-h100
 pixi run -e openfold3-cuda12 verify-aot
 ```
 
-## 3. Run a one-step StableFold smoke test
-
-Use AQLab's subset tools to run one BF16 training step that jointly checks data loading, CUDA, non-Diffusion StableFold routing, backward, and the official `run_openfold train` entry point.
-The commands write all generated data, configuration, and output outside the checkout and use an empty validation cache so the downloader verifies exactly the artifacts consumed by this validation-disabled smoke.
-This canary deliberately disables validation and checkpoint output for speed, so use AQLab's full training test when checkpoint and validation coverage is required.
+If verification reports `StableFold AOT artifacts require a clean Git checkout`, first
+inspect the checkout:
 
 ```bash
-export PATH="$HOME/.pixi/bin:$PATH"
-export OF3_SRC=/mnt/shared/openfold3/src
-export OF3_WORK=/mnt/shared/openfold3
-export SUBSET_ROOT="$OF3_WORK/subset"
-mkdir -p "$SUBSET_ROOT" "$OF3_WORK/configs" "$OF3_WORK/outputs/smoke"
-cd "$OF3_SRC"
-unset PYTHONPATH PYTHONHOME LD_PRELOAD
+git status --short
+```
 
-pixi run -e openfold3-cuda12 generate-pdb-subset -- \
-  --target-dir "$SUBSET_ROOT" \
-  --output-dir "$SUBSET_ROOT/pdb_training_set" \
-  --runner-yaml "$SUBSET_ROOT/train_pdb_subset.yaml"
-pixi run -e openfold3-cuda12 python - <<'PY'
-import json
-import os
-from pathlib import Path
+When the only output is `M pixi.lock`, the checkout predates the current
+lockfile. Update it without reinstalling the repository:
 
-path = Path(os.environ["SUBSET_ROOT"]) / "validation_cache_with_templates_subset_0.json"
-path.write_text(json.dumps({
-    "_type": "ValidationDatasetCache",
-    "name": "Validation-disabled-0",
-    "reference_molecule_data": {},
-    "structure_data": {},
-}))
-print(path)
-PY
-pixi run -e openfold3-cuda12 download-pdb-subset -- \
-  --target-dir "$SUBSET_ROOT" \
-  --output-dir "$SUBSET_ROOT/pdb_training_set" \
-  --val-size 0
-pixi run -e openfold3-cuda12 download-pdb-subset -- \
-  --verify --target-dir "$SUBSET_ROOT" \
-  --output-dir "$SUBSET_ROOT/pdb_training_set" \
-  --val-size 0
+```bash
+git restore --source=HEAD -- pixi.lock
+git pull --ff-only origin main
+pixi install -e openfold3-cuda12
+pixi run -e openfold3-cuda12 verify-aot
+```
 
-export SMOKE_BASE="$OF3_WORK/configs/smoke.base.yml"
-export SMOKE_YAML="$OF3_WORK/configs/smoke.stablefold.yml"
-pixi run -e openfold3-cuda12 python - <<'PY'
-import os
-from pathlib import Path
-import yaml
+Do not restore `pixi.lock` when you intentionally edited dependencies, and do
+not discard any other paths reported by `git status`.
 
-src = Path(os.environ["SUBSET_ROOT"]) / "train_pdb_subset.yaml"
-dst = Path(os.environ["SMOKE_BASE"])
-cfg = yaml.safe_load(src.read_text())
-cfg["experiment_settings"].update(
-    output_dir=str(Path(os.environ["OF3_WORK"]) / "outputs" / "smoke"),
-    restart_checkpoint_path=None,
-)
-cfg["data_module_args"].update(
-    batch_size=1, num_workers=0, num_workers_validation=0, epoch_len=1
-)
-cfg["checkpoint_config"].update(save_top_k=0, save_last=False)
-cfg["logging_config"]["wandb_config"] = None
-cfg["pl_trainer_args"].update(
-    devices=1,
-    num_nodes=1,
-    precision="bf16-mixed",
-    max_epochs=1,
-    max_steps=1,
-    limit_val_batches=0,
-    num_sanity_val_steps=0,
-    log_every_n_steps=1,
-)
-dst.write_text(yaml.safe_dump(cfg, sort_keys=False))
-print(dst)
-PY
+## Prepare Training Data
+
+### Prepare a Runnable PDB Subset
+
+For the standard 400-step comparison on up to eight GPUs, generate a
+reproducible subset with 4,000 training structures. Eight GPUs consume 3,200
+sample draws over 400 optimizer steps at per-GPU batch size one, so 4,000
+provides coverage plus room for samples removed during purification:
+
+```bash
+pixi run -e openfold3-cuda12 prepare-pdb-subset -- \
+  --train-size 4000 \
+  --seed 42 \
+  --workers 24
+```
+
+This is the recommended data command. It performs the complete sequence:
+
+1. generates the reproducible train cache and pinned validation cache;
+2. downloads target structures, alignment arrays, templates, and reference
+   molecules;
+3. performs a second resumable download pass for transient failures;
+4. removes samples affected by persistent `404` or `NoSuchKey` responses; and
+5. validates every directory and cache path in the resulting runner YAML.
+
+The command succeeds only after writing a runner YAML whose configured data
+paths exist:
+
+```text
+datasets/train_pdb_subset.yaml
+datasets/pdb_subset_purification_report.json
+```
+
+Downloads are resumable. If the command is interrupted, paste the same command
+again; existing files are skipped. Persistent missing S3 objects are recorded
+in the JSON report and only dependent samples are removed. If the download
+directory is absent, purification removes every training sample, or a runner
+path is invalid, the command exits nonzero and does not claim the data is ready.
+
+To check the prepared YAML without starting training, run:
+
+```bash
+pixi run -e openfold3-cuda12 validate-training-data \
+  datasets/train_pdb_subset.yaml
+```
+
+The one-step single-GPU smoke test does not consume all 4,000 structures; the
+larger subset is recommended so the same prepared data can also be reused for
+the full eight-GPU comparison. A smaller subset remains valid for installation
+and functional smoke testing.
+
+The original sampled caches are never modified. For debugging, the individual
+`generate-pdb-subset`, `download-pdb-subset`, and `purify-pdb-subset` tasks
+remain available, but the all-in-one command above is the supported quick-start
+path.
+
+### Choose a Training Backend
+
+Use StableFold by default:
+
+```bash
+pixi run -e openfold3-cuda12 select-training-backend \
+  datasets/train_pdb_subset.yaml \
+  --backend stablefold \
+  --output datasets/train_pdb_subset.stablefold.yaml
+```
+
+The command can be pasted directly into Bash.
+
+To select another implementation, change `BACKEND` and use the generic form:
+
+```bash
+export BACKEND=cueq
 
 pixi run -e openfold3-cuda12 select-training-backend \
-  "$SMOKE_BASE" --backend stablefold --output "$SMOKE_YAML"
-export OF3_RUN_CWD="$OF3_WORK"
-export CUDA_VISIBLE_DEVICES=0
-set -o pipefail
-pixi run -e openfold3-cuda12 train-single-gpu \
-  train --runner-yaml "$SMOKE_YAML" --seed 42 \
-  2>&1 | tee "$OF3_WORK/outputs/smoke/train.log"
+  datasets/train_pdb_subset.yaml \
+  --backend "$BACKEND" \
+  --output "datasets/train_pdb_subset.${BACKEND}.yaml"
 ```
 
-## 4. Prepare a 4,096-example canary and select a backend
+| `BACKEND` | Selected operator route |
+| --- | --- |
+| `aqlab` | Stock OpenFold3 PyTorch operators |
+| `cueq` | NVIDIA cuEquivariance triangle kernels |
+| `stablefold` | StableFold triangle attention and triangle multiplicative kernels |
+| `deepspeed-evo` | DeepSpeed Evo attention operator; this does not enable ZeRO |
 
-For a longer public-data canary, use AQLab's subset tools to sample a deterministic 4,096-entry candidate pool and rerun the downloader after any network interruption because existing files are skipped.
-Set `BACKEND` to `aqlab` for stock PyTorch, `cueq` for cuEquivariance, `stablefold` for non-Diffusion StableFold Attention plus TriMul, or `deepspeed-evo` for the DeepSpeed Evo attention operator rather than ZeRO; Diffusion always stays on AQLab's original path, and the selector changes only six mutually exclusive training operator flags while leaving optimizer, EMA, loss, checkpoint, and DDP behavior untouched.
-The example below creates a crop-384, local-batch-one, BF16, 400-step PDB canary with validation disabled; production training must instead provision every dataset referenced by AQLab's official `initial_training.yml`.
+The selector first disables every mutually exclusive route and then enables the
+requested backend, so rerunning it cannot leave mixed backend flags. Diffusion
+stays on OpenFold3's original path. OpenFold3 continues to own the model, data
+pipeline, loss, optimizer, EMA, checkpointing, and distributed training.
+
+## Training
+
+### First: Run a One-Step Single-GPU Smoke Test
+
+Always run this test before requesting multiple GPUs or starting a long job. It
+creates a separate runner YAML for one BF16 training step with validation, W&B,
+and checkpoint output disabled:
 
 ```bash
-export PATH="$HOME/.pixi/bin:$PATH"
-export OF3_SRC=/mnt/shared/openfold3/src
-export OF3_WORK=/mnt/shared/openfold3
-export SUBSET_ROOT="$OF3_WORK/subset"
-export BACKEND=${BACKEND:-stablefold}
-mkdir -p "$OF3_WORK/configs" "$OF3_WORK/outputs" "$OF3_WORK/logs"
-cd "$OF3_SRC"
-unset PYTHONPATH PYTHONHOME LD_PRELOAD
-
-pixi run -e openfold3-cuda12 generate-pdb-subset -- \
-  --target-dir "$SUBSET_ROOT" \
-  --output-dir "$SUBSET_ROOT/pdb_training_set" \
-  --runner-yaml "$SUBSET_ROOT/train_pdb_subset_4096.yaml" \
-  --train-size 4096 --seed 42
-pixi run -e openfold3-cuda12 download-pdb-subset -- \
-  --target-dir "$SUBSET_ROOT" \
-  --output-dir "$SUBSET_ROOT/pdb_training_set" \
-  --train-size 4096 --val-size 0 --workers 24 \
-  2>&1 | tee "$OF3_WORK/logs/download_subset_4096.log"
-pixi run -e openfold3-cuda12 download-pdb-subset -- \
-  --verify --target-dir "$SUBSET_ROOT" \
-  --output-dir "$SUBSET_ROOT/pdb_training_set" \
-  --train-size 4096 --val-size 0 \
-  2>&1 | tee "$OF3_WORK/logs/verify_subset_4096.log"
-
-export TRAIN_BASE="$OF3_WORK/configs/train_4096_crop384.base.yml"
-export TRAIN_BACKEND="$OF3_WORK/configs/train_4096_crop384.${BACKEND}.yml"
-pixi run -e openfold3-cuda12 python - <<'PY'
-import os
-from pathlib import Path
-import yaml
-
-steps = 400
-src = Path(os.environ["SUBSET_ROOT"]) / "train_pdb_subset_4096.yaml"
-dst = Path(os.environ["TRAIN_BASE"])
-cfg = yaml.safe_load(src.read_text())
-cfg["experiment_settings"].update(restart_checkpoint_path=None)
-cfg["data_module_args"].update(
-    batch_size=1, num_workers=4, num_workers_validation=0, epoch_len=steps
-)
-cfg["checkpoint_config"].update(save_top_k=0, save_last=True)
-cfg["logging_config"]["wandb_config"] = None
-cfg["pl_trainer_args"].update(
-    precision="bf16-mixed",
-    max_epochs=1,
-    max_steps=steps,
-    limit_val_batches=0,
-    num_sanity_val_steps=0,
-    log_every_n_steps=1,
-)
-train = cfg["dataset_configs"]["train"]["weighted-pdb"]
-train["weight"] = 1.0
-train["config"]["crop"]["token_crop"]["token_budget"] = 384
-dst.write_text(yaml.safe_dump(cfg, sort_keys=False))
-print(dst)
-PY
+export BACKEND=stablefold
 
 pixi run -e openfold3-cuda12 select-training-backend \
-  "$TRAIN_BASE" --backend "$BACKEND" --output "$TRAIN_BACKEND"
+  datasets/train_pdb_subset.yaml \
+  --backend "$BACKEND" \
+  --single-gpu-smoke \
+  --output "datasets/single_gpu_smoke.${BACKEND}.yaml"
 ```
 
-## 5. Launch on one H100
+The `--single-gpu-smoke` preset sets these values automatically; no manual YAML
+edit is required:
 
-Set `devices: 1` and `num_nodes: 1`, expose exactly one H100, and invoke the official `run_openfold` entry point once.
-The small configuration block below writes a topology-specific runner and output directory without changing training code.
-The Pixi task verifies the prebuilt wheel, moves outside the checkout, and then directly executes AQLab's launcher.
+```yaml
+experiment_settings:
+  restart_checkpoint_path: null
+
+data_module_args:
+  batch_size: 1
+  num_workers: 0
+  num_workers_validation: 0
+  epoch_len: 1
+
+checkpoint_config:
+  save_top_k: 0
+  save_last: false
+
+pl_trainer_args:
+  devices: 1
+  num_nodes: 1
+  precision: bf16-mixed
+  max_epochs: 1
+  max_steps: 1
+  limit_val_batches: 0
+  num_sanity_val_steps: 0
+```
+
+The official launcher runs outside the source checkout. Create its working
+directory and expose one H100:
 
 ```bash
-export PATH="$HOME/.pixi/bin:$PATH"
-export OF3_SRC=/mnt/shared/openfold3/src
-export OF3_WORK=/mnt/shared/openfold3
-export BACKEND=${BACKEND:-stablefold}
-export INPUT_YAML="$OF3_WORK/configs/train_4096_crop384.${BACKEND}.yml"
-export RUNNER_YAML="$OF3_WORK/configs/single_gpu.${BACKEND}.yml"
-export OUTPUT_DIR="$OF3_WORK/outputs/single_gpu.${BACKEND}"
-export OF3_RUN_CWD="$OF3_WORK"
+mkdir -p ../openfold3-run
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0
-mkdir -p "$OUTPUT_DIR"
-cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-cuda12 python - <<'PY'
-import os
-from pathlib import Path
-import yaml
-
-cfg = yaml.safe_load(Path(os.environ["INPUT_YAML"]).read_text())
-cfg["experiment_settings"]["output_dir"] = os.environ["OUTPUT_DIR"]
-cfg["data_module_args"]["epoch_len"] = 400
-cfg["pl_trainer_args"].update(devices=1, num_nodes=1)
-Path(os.environ["RUNNER_YAML"]).write_text(yaml.safe_dump(cfg, sort_keys=False))
-PY
-
-set -o pipefail
 pixi run -e openfold3-cuda12 train-single-gpu \
-  train --runner-yaml "$RUNNER_YAML" --seed 42 \
-  2>&1 | tee "$OUTPUT_DIR/train.log"
+  train \
+  --runner-yaml "$PWD/datasets/single_gpu_smoke.${BACKEND}.yaml" \
+  --seed 42
 ```
 
-## 6. Launch multiple H100s on one host
+A successful smoke test completes exactly one forward pass, backward pass, and
+optimizer step through the selected backend. To smoke-test another backend,
+change only `BACKEND`, regenerate its runner YAML, and rerun the same launch
+command.
 
-For eight local GPUs, set `devices: 8` and `num_nodes: 1`, expose exactly eight H100s, and invoke `run_openfold` once without wrapping it in `torchrun`.
-Lightning preserves AQLab's original DDP behavior while each StableFold kernel executes only on its rank-local GPU and current CUDA stream.
-Keep local batch size one and make `epoch_len` divisible by world size; 3,200 examples below represent 400 eight-GPU optimizer steps.
+This exact `stablefold` smoke path has been verified to reach `max_steps=1` on
+a Lambda H100 80 GB GPU. The first launch can spend about a minute in CPU-heavy
+model and data setup before the training progress bar appears. Warnings that no
+logger is configured are expected because the smoke preset deliberately
+disables W&B; they are not training failures.
+
+### Compare Backend Training Time and Loss
+
+Run every backend from scratch with the same prepared data, initialization
+seed, data seed, BF16 precision, and GPU topology. The benchmark disables
+validation, W&B, and checkpoint output. The following single-H100 smoke
+comparison excludes five warmup steps, then measures 20 optimizer training
+steps:
 
 ```bash
-export PATH="$HOME/.pixi/bin:$PATH"
-export OF3_SRC=/mnt/shared/openfold3/src
-export OF3_WORK=/mnt/shared/openfold3
-export BACKEND=${BACKEND:-stablefold}
-export INPUT_YAML="$OF3_WORK/configs/train_4096_crop384.${BACKEND}.yml"
-export RUNNER_YAML="$OF3_WORK/configs/one_node_8gpu.${BACKEND}.yml"
-export OUTPUT_DIR="$OF3_WORK/outputs/one_node_8gpu.${BACKEND}"
-export OF3_RUN_CWD="$OF3_WORK"
+mkdir -p ../openfold3-run/backend-comparison
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
+export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison"
+export CUDA_VISIBLE_DEVICES=0
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
+
+for BACKEND in aqlab cueq stablefold; do
+  pixi run -e openfold3-cuda12 benchmark-single-gpu \
+    --runner-yaml "$PWD/datasets/train_pdb_subset.yaml" \
+    --backend "$BACKEND" \
+    --output-root "$RESULTS_ROOT" \
+    --warmup-steps 5 \
+    --measure-steps 20 \
+    --devices 1 \
+    --seed 42
+done
+
+pixi run -e openfold3-cuda12 plot-backend-comparison \
+  "$RESULTS_ROOT" \
+  --baseline aqlab
+```
+
+Add `deepspeed-evo` to the loop to compare that operator route as well. For a
+paper-quality 400-step comparison, use the same command with
+`--warmup-steps 10 --measure-steps 400` for every backend. Run the backends on
+the same otherwise-idle GPU; do not compare results collected on different GPU
+models or while another process is using the device.
+
+For a single-node multi-GPU comparison, change `DEVICES` and
+`CUDA_VISIBLE_DEVICES` together. This example benchmarks all backends on eight
+GPUs and keeps its results separate from the one-GPU run:
+
+```bash
+export DEVICES=8
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-mkdir -p "$OUTPUT_DIR"
-cd "$OF3_SRC"
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
+export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison-${DEVICES}gpu"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-cuda12 python - <<'PY'
-import os
-from pathlib import Path
-import yaml
+for BACKEND in aqlab cueq stablefold; do
+  pixi run -e openfold3-cuda12 benchmark-single-node \
+    --runner-yaml "$PWD/datasets/train_pdb_subset.yaml" \
+    --backend "$BACKEND" \
+    --output-root "$RESULTS_ROOT" \
+    --warmup-steps 10 \
+    --measure-steps 400 \
+    --devices "$DEVICES" \
+    --seed 42
+done
 
-cfg = yaml.safe_load(Path(os.environ["INPUT_YAML"]).read_text())
-cfg["experiment_settings"]["output_dir"] = os.environ["OUTPUT_DIR"]
-cfg["data_module_args"]["epoch_len"] = 400 * 8
-cfg["pl_trainer_args"].update(devices=8, num_nodes=1)
-Path(os.environ["RUNNER_YAML"]).write_text(yaml.safe_dump(cfg, sort_keys=False))
-PY
-
-set -o pipefail
-pixi run -e openfold3-cuda12 train-single-node \
-  train --runner-yaml "$RUNNER_YAML" --seed 42 \
-  2>&1 | tee "$OUTPUT_DIR/train.log"
+pixi run -e openfold3-cuda12 plot-backend-comparison \
+  "$RESULTS_ROOT" \
+  --baseline aqlab
 ```
 
-## 7. Launch multiple H100 hosts
+Use the same command for two or four GPUs by setting `DEVICES=2` with
+`CUDA_VISIBLE_DEVICES=0,1`, or `DEVICES=4` with
+`CUDA_VISIBLE_DEVICES=0,1,2,3`. Do not wrap `benchmark-single-node` in
+`torchrun`: PyTorch Lightning launches the local DDP workers. The benchmark
+sets per-GPU batch size to one, global batch size to `DEVICES`, and
+`epoch_len = (warmup_steps + measure_steps) * DEVICES`; `max_steps` remains the
+same optimizer-step count for 1, 2, 4, and 8 GPUs.
 
-For two eight-GPU hosts, generate one shared runner on node 0 and run the same `torchrun` command concurrently on both hosts with `NODE_RANK=0` and `1`.
-Set `MASTER_ADDR` to node 0's reachable address, mount data, configuration, output, and logs as the same shared read/write paths, and let Slurm or the site supervisor provide allocation and global failure handling.
-StableFold adds only AOT, ABI, device, cross-rank identity, and strict-route checks; AQLab and standard PyTorch/Lightning continue to own sampling, DDP, gradient synchronization, and training state.
+Compare backends only within the same GPU count. Changing the GPU count changes
+the global batch and therefore can change the loss trajectory even when the
+seed is held fixed. Use a separate `RESULTS_ROOT` and generate a separate
+comparison for each of 1, 2, 4, and 8 GPUs.
+
+Each backend directory contains:
+
+```text
+runner.yaml
+steps.csv
+summary.json
+```
+
+`steps.csv` records the training loss and CUDA-event step time. On DDP, loss is
+the mean across ranks at each optimizer step and GPU step time is the maximum
+across ranks, representing the step's critical path. `summary.json` records the
+topology, device/world-size counts, global batch size, total fit wall time,
+steady-state wall seconds per training step, global samples per second, and
+mean, median, p95, minimum, and maximum critical-path GPU step time. Warmup is
+excluded from every steady-state timing statistic. CUDA events are recorded
+asynchronously; device synchronization occurs only at the measurement
+boundaries, and rank aggregation occurs after the measured interval, so the
+benchmark does not add a synchronization to every measured step.
+
+The comparison command writes:
+
+```text
+comparison/backend_comparison.csv
+comparison/backend_comparison.json
+comparison/training_time.png
+comparison/loss_curves.png
+```
+
+`training_time.png` shows seconds per optimizer training step and speedup over
+the selected baseline for the recorded GPU count. `loss_curves.png` overlays
+matched-seed training loss by optimizer step; for multi-GPU runs it plots the
+global mean loss. The CSV and JSON files are the source of truth for tables and
+paper plots.
+
+### Scheme 1: Single-GPU Training
+
+The generated YAML defaults to epoch-based training. For a pure 400-training-step
+run with no validation, update the existing entries in
+`datasets/train_pdb_subset.${BACKEND}.yaml`:
+
+```yaml
+experiment_settings:
+  output_dir: ./openfold3_output
+  restart_checkpoint_path: null
+
+data_module_args:
+  batch_size: 1
+  epoch_len: 400
+
+pl_trainer_args:
+  devices: 1
+  num_nodes: 1
+  precision: bf16-mixed
+  max_epochs: -1
+  max_steps: 400
+  limit_val_batches: 0
+  num_sanity_val_steps: 0
+```
+
+`max_steps` is the stopping condition. Validation and validation sanity checks
+are disabled, so the result covers exactly 400 optimizer training steps.
+
+Use these topology values:
+
+```yaml
+data_module_args:
+  epoch_len: 400
+
+pl_trainer_args:
+  devices: 1
+  num_nodes: 1
+  max_steps: 400
+```
+
+Launch training on one H100:
 
 ```bash
-# Node 0 only: write the shared runner once.
-export PATH="$HOME/.pixi/bin:$PATH"
-export OF3_SRC=/mnt/shared/openfold3/src
-export OF3_WORK=/mnt/shared/openfold3
-export BACKEND=${BACKEND:-stablefold}
-export INPUT_YAML="$OF3_WORK/configs/train_4096_crop384.${BACKEND}.yml"
-export RUNNER_YAML="$OF3_WORK/configs/two_node_8gpu.${BACKEND}.yml"
-export OUTPUT_DIR="$OF3_WORK/outputs/two_node_8gpu.${BACKEND}"
-mkdir -p "$OUTPUT_DIR"
-cd "$OF3_SRC"
+export BACKEND=stablefold
+export CUDA_VISIBLE_DEVICES=0
 
-pixi run -e openfold3-cuda12 python - <<'PY'
-import os
-from pathlib import Path
-import yaml
+pixi run -e openfold3-cuda12 train-single-gpu \
+  train \
+  --runner-yaml "$PWD/datasets/train_pdb_subset.${BACKEND}.yaml" \
+  --seed 42
+```
 
-cfg = yaml.safe_load(Path(os.environ["INPUT_YAML"]).read_text())
-cfg["experiment_settings"]["output_dir"] = os.environ["OUTPUT_DIR"]
-cfg["data_module_args"]["epoch_len"] = 400 * 8 * 2
-cfg["pl_trainer_args"].update(devices=8, num_nodes=2)
-Path(os.environ["RUNNER_YAML"]).write_text(yaml.safe_dump(cfg, sort_keys=False))
-PY
+### Scheme 2: Multi-GPU Training
 
-# Every node: repeat all exports and change NODE_RANK only.
-export PATH="$HOME/.pixi/bin:$PATH"
-export OF3_SRC=/mnt/shared/openfold3/src
-export OF3_WORK=/mnt/shared/openfold3
-export BACKEND=${BACKEND:-stablefold}
-export RUNNER_YAML="$OF3_WORK/configs/two_node_8gpu.${BACKEND}.yml"
-export OUTPUT_DIR="$OF3_WORK/outputs/two_node_8gpu.${BACKEND}"
-export OF3_RUN_CWD="$OF3_WORK"
+#### Multiple GPUs on One Node
+
+For eight H100s on one node, configure:
+
+```yaml
+data_module_args:
+  epoch_len: 3200
+
+pl_trainer_args:
+  devices: 8
+  num_nodes: 1
+  max_steps: 400
+```
+
+Then launch OpenFold3 once:
+
+```bash
+export BACKEND=stablefold
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+pixi run -e openfold3-cuda12 train-single-node \
+  train \
+  --runner-yaml "$PWD/datasets/train_pdb_subset.${BACKEND}.yaml" \
+  --seed 42
+```
+
+Do not wrap this single-node command in `torchrun`. PyTorch Lightning starts
+the local DDP workers.
+
+For batch size one, use:
+
+```text
+epoch_len = max_steps * devices * num_nodes
+```
+
+This gives every topology the same number of global optimizer steps.
+
+#### Multiple Nodes
+
+For two nodes with eight H100s per node, configure:
+
+```yaml
+data_module_args:
+  epoch_len: 6400
+
+pl_trainer_args:
+  devices: 8
+  num_nodes: 2
+  max_steps: 400
+```
+
+The repository, Pixi environment, prepared runner YAML, dataset, and output
+directory must use the same paths on every node. Run the following command on
+both allocated nodes, changing `NODE_RANK` to `0` or `1`:
+
+```bash
+export BACKEND=stablefold
+export OF3_RUN_CWD=/shared/openfold3-run
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export NNODES=2
 export GPUS_PER_NODE=8
+export NODE_RANK=0
 export MASTER_ADDR=10.0.0.10
 export MASTER_PORT=29500
-export NODE_RANK=0
-cd "$OF3_SRC"
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-set -o pipefail
 pixi run -e openfold3-cuda12 train-multinode \
-  --nnodes="$NNODES" --nproc-per-node="$GPUS_PER_NODE" \
-  --node-rank="$NODE_RANK" --master-addr="$MASTER_ADDR" \
-  --master-port="$MASTER_PORT" --module openfold3.run_openfold \
-  train --runner-yaml "$RUNNER_YAML" --seed 42 \
-  2>&1 | tee "$OUTPUT_DIR/train.node${NODE_RANK}.log"
+  --nnodes="$NNODES" \
+  --nproc-per-node="$GPUS_PER_NODE" \
+  --node-rank="$NODE_RANK" \
+  --master-addr="$MASTER_ADDR" \
+  --master-port="$MASTER_PORT" \
+  --module openfold3.run_openfold \
+  train \
+  --runner-yaml "/shared/train_pdb_subset.${BACKEND}.yaml" \
+  --seed 42
 ```
 
-## 8. Verify the run and understand the current boundary
+Use Slurm or the site's scheduler to allocate the nodes and start the per-node
+commands concurrently.
 
-Run `verify-aot` before each launch and continue to use AQLab's existing console, W&B, checkpoints, and cluster monitoring for loss, OOM, and failure diagnosis.
-Prebuilt installation, five-module forward/backward, routing, and the training entry point are qualified on one H100, but real 2+ GPU NCCL and two-node H100 soak gates remain pending, so this is a wired production candidate rather than multi-node GA.
-The wheel supports full H100 `sm_90a` GPUs only and does not claim H200, B200, MIG, FSDP, ZeRO, `torch.compile`, or local batch sizes greater than one.
+## Fine-tuning
 
-```bash
-export PATH="$HOME/.pixi/bin:$PATH"
-export OF3_SRC=/mnt/shared/openfold3/src
-cd "$OF3_SRC"
-unset PYTHONPATH PYTHONHOME LD_PRELOAD
-pixi run -e openfold3-cuda12 verify-aot
+To initialize training from a checkpoint, keep a new output directory and set
+the checkpoint path in the runner YAML:
 
-grep -RIE 'Traceback|CUDA error|out of memory|OOM|NCCL.*timeout' \
-  /mnt/shared/openfold3/outputs --include='*.log' || true
-find /mnt/shared/openfold3/outputs -path '*/checkpoints/*' -type f -print
+```yaml
+experiment_settings:
+  mode: train
+  output_dir: ./finetune_output
+  seed: 42
+  restart_checkpoint_path: /path/to/pretrained.ckpt
 ```
+
+Then use the same single-GPU or distributed launch command.
+
+## Checkpointing and Resuming
+
+Checkpoints are saved under `{output_dir}/checkpoints/`. The checkpoint policy
+can be configured in the runner YAML:
+
+```yaml
+checkpoint_config:
+  every_n_epochs: 1
+  auto_insert_metric_name: false
+  save_last: true
+  save_top_k: -1
+```
+
+To resume the same output directory from its most recent checkpoint, set:
+
+```yaml
+experiment_settings:
+  restart_checkpoint_path: last
+```
+
+To start from scratch, set `restart_checkpoint_path: null`.

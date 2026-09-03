@@ -448,6 +448,9 @@ setuptools = "*"
 setuptools-scm = ">=8"
 wheel = "*"
 
+[feature.stablefold-h100.pypi-dependencies]
+openfold3 = { path = "release_artifacts/stablefold-h100-ce15d03b/openfold3-0.4.3.dev5512+gce15d03b0-cp314-cp314-linux_x86_64.whl" }
+
 [feature.stablefold-h100.activation]
 env.PYTHONNOUSERSITE = "1"
 env.PYTHONDONTWRITEBYTECODE = "1"
@@ -463,6 +466,11 @@ prepare-training-data.cmd = [
     "tools.production_training",
     "prepare-training-data",
 ]
+prepare-pdb-subset.cmd = [
+    "python",
+    "-u",
+    "tools/prepare_pdb_subset.py",
+]
 generate-pdb-subset.cmd = [
     "python",
     "-u",
@@ -473,12 +481,17 @@ download-pdb-subset.cmd = [
     "-u",
     "scripts/datasets/download_subset.py",
 ]
+purify-pdb-subset.cmd = [
+    "python",
+    "-u",
+    "scripts/datasets/purify_subset.py",
+]
 setup-pdb-subset.depends-on = ["generate-pdb-subset", "download-pdb-subset"]
 setup-stablefold-h100.cmd = [
     "python",
     "-m",
     "tools.manage_attested_sm90_wheel",
-    "install-prebuilt",
+    "verify-prebuilt",
 ]
 verify-aot.cmd = [
     "python",
@@ -486,6 +499,7 @@ verify-aot.cmd = [
     "tools.manage_attested_sm90_wheel",
     "verify-prebuilt",
 ]
+validate-training-data.cmd = ["python", "tools/validate_training_data.py"]
 select-training-backend.cmd = ["python", "-m", "tools.select_training_backend"]
 train-single-gpu.cmd = [
     "bash",
@@ -501,6 +515,18 @@ train-multinode.cmd = [
     "bash",
     "tools/run_official_training.sh",
     "torchrun",
+]
+benchmark-single-gpu.cmd = [
+    "bash",
+    "tools/run_backend_benchmark.sh",
+]
+benchmark-single-node.cmd = [
+    "bash",
+    "tools/run_backend_benchmark.sh",
+]
+plot-backend-comparison.cmd = [
+    "python",
+    "tools/plot_backend_comparison.py",
 ]
 
 
@@ -640,4 +666,5 @@ tasks.safe-but-slow-update.cmd = [
 # invokes them.
 tasks.generate-pdb-subset.cmd = ["python", "-u", "scripts/datasets/generate_subset_cache.py"]
 tasks.download-pdb-subset.cmd = ["python", "-u", "scripts/datasets/download_subset.py"]
+tasks.purify-pdb-subset.cmd = ["python", "-u", "scripts/datasets/purify_subset.py"]
 tasks.setup-pdb-subset.depends-on = ["generate-pdb-subset", "download-pdb-subset"]
