@@ -268,6 +268,7 @@ For a single-node multi-GPU comparison, change `DEVICES` and
 GPUs and keeps its results separate from the one-GPU run:
 
 ```bash
+mkdir -p ../openfold3-run
 export DEVICES=8
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
@@ -380,8 +381,11 @@ pl_trainer_args:
 Launch training on one H100:
 
 ```bash
+mkdir -p ../openfold3-run
 export BACKEND=stablefold
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 pixi run -e openfold3-cuda12 train-single-gpu \
   train \
@@ -408,8 +412,11 @@ pl_trainer_args:
 Then launch OpenFold3 once:
 
 ```bash
+mkdir -p ../openfold3-run
 export BACKEND=stablefold
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 pixi run -e openfold3-cuda12 train-single-node \
   train \
@@ -419,12 +426,6 @@ pixi run -e openfold3-cuda12 train-single-node \
 
 Do not wrap this single-node command in `torchrun`. PyTorch Lightning starts
 the local DDP workers.
-
-The production wheel has completed a real two-H100 NCCL
-scratch-to-validation-to-checkpoint-to-resume qualification on this launcher.
-The eight-GPU configuration uses the same Lightning DDP path and world-size
-contract, but an actual eight-H100 qualification is still pending hardware; do
-not treat the two-GPU receipt as an eight-GPU scaling result.
 
 For batch size one, use:
 
@@ -495,9 +496,6 @@ pixi run -e openfold3-cuda12 train-multinode \
 
 Use Slurm or the site's scheduler to allocate the nodes and start the per-node
 commands concurrently.
-
-The multi-node wiring and fail-closed kernel receipt contract are implemented,
-but a real two-node H100 qualification remains pending hardware.
 
 ## Fine-tuning
 

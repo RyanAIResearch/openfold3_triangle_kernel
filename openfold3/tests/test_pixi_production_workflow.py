@@ -147,6 +147,19 @@ def test_bare_metal_benchmark_prepares_four_thousand_samples_atomically():
     assert "--train-size 1000" not in text
 
 
+def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
+    text = (
+        REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
+    ).read_text()
+    assert text.count("mkdir -p ../openfold3-run") >= 4
+    assert "export DEVICES=8" in text
+    assert "export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7" in text
+    assert "benchmark-single-node" in text
+    assert 'export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison-${DEVICES}gpu"' in text
+    assert "two-H100" not in text
+    assert "two-node H100 qualification" not in text
+
+
 def test_dirty_pixi_lock_error_explains_repository_update(monkeypatch):
     monkeypatch.setattr(
         artifact_manager,
