@@ -7,6 +7,7 @@ import yaml
 
 from tools.benchmark_training_backend import (
     aggregate_rank_metrics,
+    configure_torch_backend_for_training,
     configure_benchmark,
     is_source_tree_import,
 )
@@ -178,6 +179,21 @@ def test_installed_pixi_wheel_is_not_mistaken_for_source_import(tmp_path):
         / "__init__.py",
         source_root,
     )
+
+
+def test_benchmark_uses_current_aqlab_training_backend_setup(monkeypatch):
+    import openfold3.entry_points.import_utils as import_utils
+
+    calls = []
+    monkeypatch.setattr(
+        import_utils,
+        "_configure_torch_backend",
+        lambda: calls.append("configured"),
+    )
+
+    configure_torch_backend_for_training()
+
+    assert calls == ["configured"]
 
 
 def test_benchmark_script_is_valid_yaml_serializer_input(tmp_path):

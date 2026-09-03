@@ -123,6 +123,14 @@ def is_source_tree_import(module_path: Path, source_root: Path) -> bool:
     return module_path.resolve().is_relative_to((source_root / "openfold3").resolve())
 
 
+def configure_torch_backend_for_training() -> None:
+    """Match the backend setup used by AQLab's current training CLI."""
+
+    from openfold3.entry_points.import_utils import _configure_torch_backend
+
+    _configure_torch_backend()
+
+
 class BackendBenchmarkCallback(pl.Callback):
     """Capture loss and steady-state GPU/wall timing without per-step syncs."""
 
@@ -347,7 +355,6 @@ def main() -> None:
 
     from openfold3.core.config import config_utils
     from openfold3.entry_points.experiment_runner import TrainingExperimentRunner
-    from openfold3.entry_points.import_utils import _torch_gpu_setup
     from openfold3.entry_points.validator import TrainingExperimentConfig
 
     runner_yaml = args.runner_yaml.resolve()
@@ -373,7 +380,7 @@ def main() -> None:
             yaml.safe_dump(runner_dict, sort_keys=False, default_flow_style=False)
         )
 
-    _torch_gpu_setup()
+    configure_torch_backend_for_training()
     callback = BackendBenchmarkCallback(
         backend=args.backend,
         output_dir=output_dir,
