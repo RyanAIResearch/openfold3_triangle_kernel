@@ -1,0 +1,123 @@
+{
+  "artifact_sha256": {
+    "aqlab_runner_yaml": "919e97859294a856a643e7c049e9d342485c8c88c3cb3d57a6886eafe27792e5",
+    "aqlab_steps_csv": "c7c09ed65384be209519a3a66c0ce5d13ef77be232d38b9cb50a042f38fd1b35",
+    "aqlab_summary_json": "b3a8ac358015f7eae06c4bef1687f908e7fed1edaf39b73806fda4c103cc8450",
+    "backend_comparison_csv": "2f5bf01c5c773ac89702975a6ca4696bf54f9e86cf0ad64fd762c66302f6227a",
+    "backend_comparison_json": "582acf7c458ceb15f43ca579386060f0322eb234700f39dd3324e95f2959d618",
+    "cueq_runner_yaml": "65e03220dec5d13163f01a2007f859d6257676c9f6c39230a2127701a580aaf1",
+    "cueq_steps_csv": "d8594c986d47a3a2a308932f553ddf6d49406f44a6ee23192d9bca65b8bd46ad",
+    "cueq_summary_json": "bde0cfadd4da3be63949056d8ff2d40eca89cfdfb61b489afb851155e0e3ab34",
+    "loss_curves_png": "a420e7e42babed3868c0de00ebba9680ad480de4e134330282b1cf660e6025a7",
+    "stablefold_runner_yaml": "6df4286e2d9725578829df4068df2b4a80db123acb34c08541ea60d4635a956a",
+    "stablefold_steps_csv": "e0edf9b0905a8e7a1857f1ceea7efd970190108096249c2158e266c807ed670f",
+    "stablefold_summary_json": "98f12337c03bc69930b694bc14beb6811e71a397c767429386a09bead56863c0",
+    "training_time_png": "8ebf519b38aafe563455b772c780b1f256343fa5060bfb27c63381f35fdb3c05"
+  },
+  "backends": {
+    "aqlab": {
+      "fit_wall_seconds": 348.9279341809997,
+      "gpu_step_max_ms": 10139.587890625,
+      "gpu_step_mean_ms": 7453.93310546875,
+      "gpu_step_median_ms": 7159.358642578125,
+      "gpu_step_min_ms": 5601.1123046875,
+      "gpu_step_p95_ms": 9720.2939453125,
+      "speedup_vs_aqlab": 1.0,
+      "steady_samples_per_second": 0.20624306226265077,
+      "steady_step_wall_seconds": 9.697295889900033
+    },
+    "cueq": {
+      "fit_wall_seconds": 294.4379957069996,
+      "gpu_step_max_ms": 7379.18994140625,
+      "gpu_step_mean_ms": 5113.8271484375,
+      "gpu_step_median_ms": 4705.16064453125,
+      "gpu_step_min_ms": 4059.26806640625,
+      "gpu_step_p95_ms": 7345.2421875,
+      "speedup_vs_aqlab": 1.3203204464167388,
+      "steady_samples_per_second": 0.2723069320369783,
+      "steady_step_wall_seconds": 7.344653274300072
+    },
+    "stablefold": {
+      "fit_wall_seconds": 286.42728526200153,
+      "gpu_step_max_ms": 7273.279296875,
+      "gpu_step_mean_ms": 4920.134692382812,
+      "gpu_step_median_ms": 4613.57373046875,
+      "gpu_step_min_ms": 3969.20068359375,
+      "gpu_step_p95_ms": 7176.91357421875,
+      "speedup_vs_aqlab": 1.3590309654457906,
+      "steady_samples_per_second": 0.2802907080233066,
+      "steady_step_wall_seconds": 7.135448813500079
+    }
+  },
+  "comparison": {
+    "cueq_time_reduction_vs_aqlab_percent": 24.260810872547,
+    "stablefold_speedup_vs_cueq": 1.029319033219632,
+    "stablefold_time_reduction_vs_aqlab_percent": 26.418159304267,
+    "stablefold_time_reduction_vs_cueq_percent": 2.848391244445
+  },
+  "correctness": {
+    "all_backends_finite_gpu_timings": true,
+    "all_backends_finite_losses": true,
+    "cueq_vs_aqlab": {
+      "final_loss_relative_difference_percent": 0.00002607308628761266,
+      "maximum_loss_relative_difference_percent": 0.020980563918027082,
+      "maximum_loss_relative_difference_step": 22,
+      "mean_absolute_loss_difference": 0.0004052400588989258
+    },
+    "loss_reduction": "mean_across_ranks",
+    "stablefold_vs_aqlab": {
+      "final_loss_relative_difference_percent": 0.010831504989196803,
+      "maximum_loss_relative_difference_percent": 0.03594468376615289,
+      "maximum_loss_relative_difference_step": 22,
+      "mean_absolute_loss_difference": 0.0007663846015930175
+    }
+  },
+  "environment": {
+    "cuda_arch": "sm_90a",
+    "cuda_visible_devices": "0,1",
+    "driver_version": "580.105.08",
+    "gpu_interconnect": "NV18",
+    "gpu_name": "NVIDIA H100 80GB HBM3",
+    "gpu_total_memory_mib_each": 81559,
+    "lightning_version": "2.6.1",
+    "num_gpus": 2,
+    "python_version": "3.14.7",
+    "torch_cuda_version": "12.9",
+    "torch_version": "2.10.0"
+  },
+  "method": {
+    "crop_token_budget": 384,
+    "data_seed": 42,
+    "devices": 2,
+    "fp32_matmul_mode": "AQLab official TF32 setting enabled for every backend",
+    "global_batch_size": 2,
+    "gpu_timing_reduction": "maximum_across_ranks",
+    "measure_steps": 20,
+    "num_nodes": 1,
+    "per_gpu_batch_size": 1,
+    "precision": "bf16-mixed",
+    "seed": 42,
+    "timing_scope": "steady optimizer-step wall time with warmup excluded",
+    "topology": "single-node DDP over NCCL",
+    "warmup_steps": 5,
+    "world_size": 2
+  },
+  "notes": [
+    "The three generated runner YAMLs differ only in output_dir and the selected backend flags.",
+    "Diffusion remains on the AQLab OpenFold3 path for every backend.",
+    "cuEquivariance reported its generic H100 triangle-attention path and cast the attention bias to float32.",
+    "The StableFold run used the production Pixi activation contract: no source JIT, single-reconstruction backward enabled, and shadow validation enabled.",
+    "This receipt qualifies only the measured single-node two-H100 comparison; it is not an eight-H100 or multi-node result."
+  ],
+  "recorded_utc": "2026-09-03T03:43:17Z",
+  "schema_version": 1,
+  "source": {
+    "benchmark_tool_commit": "7262b4030b04f1477a3504ece73b5de615d2ac63",
+    "pinned_aqlab_upstream": "e47adbf95448956574603c9e8eb703cbb0c3bb0b",
+    "production_release_commit": "b24b88d3",
+    "runtime_wheel_source_commit": "87ebe22da13c657d36997dedb4ec398fbd62c6b7",
+    "wheel_name": "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl",
+    "wheel_sha256": "ad9042dcf1f301ac42edcc30566537b5b971bc9933f62a50cda8f5f45a090738"
+  },
+  "status": "PASS_SINGLE_NODE_2XH100_THREE_BACKEND_TF32"
+}
