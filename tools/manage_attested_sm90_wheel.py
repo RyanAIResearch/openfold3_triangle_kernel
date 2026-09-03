@@ -26,7 +26,7 @@ PREBUILT_FILE_SHA256 = {
     "RECEIPT.json": (
         "1f967eae4e19abce1e5ed90ffcb3263da416ed2c57f8230fa4523942f9ff73a8"
     ),
-    "SHA256SUMS": ("0f6d00d067f7b70002f796a667bb24372f15a622d8d6b5f229dc9d8bf492830e"),
+    "SHA256SUMS": ("d00a086f56136733047e7183f579c081c084b9c70a03ba79e468aaa04d9c0799"),
     "aot_clean_install_smoke.json": (
         "762fbbbe8b3ebc13d4510cdfa944652f6e8477836e0f043ec2c1a7e3b76a3297"
     ),
@@ -51,6 +51,9 @@ PREBUILT_FILE_SHA256 = {
     ),
     "two_h100_smoke_summary.json": (
         "fe77dcca3e808a4d8b05874462d399fa94dca59ec3540270c4de476350fceb06"
+    ),
+    "two_h100_three_backend_cueq010_receipt.json": (
+        "f98278e18a64fc3942fab43b6c28a405fd5bdca7292d68696a06e5130b881e93"
     ),
     "two_h100_three_backend_tf32_receipt.json": (
         "9385e505bae985fc8e5ae1aabe47fa377c6d26955de9f5c267780ca90c3f2970"

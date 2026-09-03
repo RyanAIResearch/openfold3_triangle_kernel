@@ -1,0 +1,107 @@
+{
+  "artifact_sha256": {
+    "aqlab_runner_yaml": "b7443c4cdeba736fd7f1599b9dd53d17fe4c6747ae7a44038da2c063e8b00595",
+    "aqlab_steps_csv": "00c0c92e5a3c5ef19550bc17d04196cb642b35a21188cae12d98a69470e4a701",
+    "aqlab_summary_json": "ba21a6379b6b41d5665795d794eef63009af0d829df82aaa7ad6f5c3c44611c7",
+    "backend_comparison_csv": "056992ec66cb77a7e372c2f5335b0a0d04f6611743377d899aa73d7c44763f45",
+    "backend_comparison_json": "2f2e20c3302a057fd4f329544b22f49fc249420459566ac1596732784a0220bf",
+    "cueq_runner_yaml": "72dd5e25d05dad5d78ee8f19113659374569e8e1a1c063fb414eeff7fea13233",
+    "cueq_steps_csv": "57d9996856747b8d7d9c94ab7be7b2add27d2b12f1fd0d467e20a4ceea55cd61",
+    "cueq_summary_json": "f82e3c929423b136e36653b4bda787ddd4082babd92688cf3537da50265c498f",
+    "loss_curves_png": "9709c3bd3cd602caf269850425ace12fc497e0ccb412e38924144736200df92b",
+    "stablefold_runner_yaml": "fe9a1d82feacd34d645895ec122ae0988eda387c0e5585e83e0a6ef540dce612",
+    "stablefold_steps_csv": "0a927d4025d9670f630afe95d565002f0a041bd0899fee52d31eb708c5020076",
+    "stablefold_summary_json": "1d3058243cd66a99cc8688411e24b850d21dd9b30f5e0ba29dfae8c7b53db3e2",
+    "training_time_png": "2393950230823dd1cf8921a4624a26e7b1c4d8af8186de7d5cb3b88ab4b020e5"
+  },
+  "backends": {
+    "aqlab": {
+      "fit_wall_seconds": 355.39643346900084,
+      "speedup_vs_aqlab": 1.0,
+      "steady_samples_per_second": 0.20589278037119757,
+      "steady_step_wall_seconds": 9.713793734750016
+    },
+    "cueq": {
+      "fit_wall_seconds": 298.53731202699964,
+      "speedup_vs_aqlab": 1.3171535049309469,
+      "steady_samples_per_second": 0.2711923973059005,
+      "steady_step_wall_seconds": 7.374838011199972
+    },
+    "stablefold": {
+      "fit_wall_seconds": 293.2397231699997,
+      "speedup_vs_aqlab": 1.3556342391995408,
+      "steady_samples_per_second": 0.2791153026751865,
+      "steady_step_wall_seconds": 7.165497487350057
+    }
+  },
+  "comparison": {
+    "cueq_time_reduction_vs_aqlab_percent": 24.078704854342238,
+    "stablefold_speedup_vs_cueq": 1.029215071838276,
+    "stablefold_time_reduction_vs_aqlab_percent": 26.233789979333334,
+    "stablefold_time_reduction_vs_cueq_percent": 2.83857792580657
+  },
+  "correctness": {
+    "all_backends_finite_losses": true,
+    "cueq_vs_aqlab": {
+      "maximum_absolute_loss_difference": 0.0005156993865966797,
+      "maximum_relative_loss_difference_percent": 0.00784009,
+      "mean_absolute_loss_difference": 0.00011429786682128906
+    },
+    "loss_reduction": "mean_across_ranks",
+    "stablefold_vs_aqlab": {
+      "maximum_absolute_loss_difference": 0.0050601959228515625,
+      "maximum_relative_loss_difference_percent": 0.0603371,
+      "mean_absolute_loss_difference": 0.0008336353302001953
+    },
+    "stablefold_vs_cueq": {
+      "maximum_relative_loss_difference_percent": 0.0592303
+    }
+  },
+  "environment": {
+    "cuda_arch": "sm_90a",
+    "cuda_visible_devices": "0,1",
+    "cuequivariance_ops_torch_version": "0.10.0",
+    "cuequivariance_torch_version": "0.10.0",
+    "cuequivariance_version": "0.10.0",
+    "driver_version": "580.105.08",
+    "gpu_interconnect": "NV18",
+    "gpu_name": "NVIDIA H100 80GB HBM3",
+    "num_gpus": 2,
+    "torch_cuda_version": "12.9",
+    "torch_version": "2.10.0"
+  },
+  "method": {
+    "crop_token_budget": 384,
+    "data_seed": 42,
+    "devices": 2,
+    "fp32_matmul_mode": "TF32 enabled uniformly for eligible FP32 matmuls",
+    "global_batch_size": 2,
+    "measure_steps": 20,
+    "num_nodes": 1,
+    "per_gpu_batch_size": 1,
+    "precision": "bf16-mixed",
+    "seed": 42,
+    "timing_scope": "steady optimizer-step wall time with warmup excluded",
+    "topology": "single-node DDP over NCCL",
+    "warmup_steps": 5,
+    "world_size": 2
+  },
+  "notes": [
+    "All three backends used the same BF16-mixed and TF32-enabled benchmark protocol.",
+    "Diffusion remained on the AQLab OpenFold3 path for every backend.",
+    "The comparison pins cuequivariance, cuequivariance-torch, and cuequivariance-ops-torch-cu12 to 0.10.0.",
+    "The StableFold run used the sealed production wheel and source-less AOT kernels.",
+    "This receipt qualifies the measured single-node two-H100 comparison; the same single-node launcher supports eight GPUs, but this is not an eight-H100 performance receipt."
+  ],
+  "recorded_utc": "2026-09-03T04:28:42Z",
+  "schema_version": 1,
+  "source": {
+    "benchmark_candidate_parent_commit": "44cfed1484c0f7a4079129f70e02e333a56ecea0",
+    "benchmark_tool_commit": "5811a552d2f0d69247a53b1bd172d040289f51fc",
+    "pinned_aqlab_upstream": "e47adbf95448956574603c9e8eb703cbb0c3bb0b",
+    "runtime_wheel_source_commit": "87ebe22da13c657d36997dedb4ec398fbd62c6b7",
+    "wheel_name": "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl",
+    "wheel_sha256": "ad9042dcf1f301ac42edcc30566537b5b971bc9933f62a50cda8f5f45a090738"
+  },
+  "status": "PASS_SINGLE_NODE_2XH100_CUEQ_0_10_0"
+}
