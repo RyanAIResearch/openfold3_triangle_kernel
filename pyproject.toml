@@ -51,7 +51,7 @@ dependencies = [
     "func_timeout",
     "tqdm",
     "typing-extensions",
-    "lmdb", # == 1.6  # This verison might be required to avoid Error during training
+    "lmdb",
 ]
 
 optional-dependencies.dev = [
@@ -109,14 +109,14 @@ test = [
 
 
 [tool.setuptools_scm]
-fallback_version = "0.4.2"
+fallback_version = "0.5.0"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["openfold3*", "scripts*"]
+include = ["openfold3*"]
 
 [tool.setuptools.package-data]
 openfold3 = [
@@ -137,6 +137,7 @@ openfold3 = [
 
 [tool.ruff]
 line-length = 88
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = [
