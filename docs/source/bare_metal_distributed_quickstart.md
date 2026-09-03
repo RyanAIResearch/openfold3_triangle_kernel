@@ -67,14 +67,16 @@ not discard any other paths reported by `git status`.
 
 ### Prepare a Runnable PDB Subset
 
-For the standard 400-step comparison on up to eight GPUs, generate a
-reproducible subset with 4,000 training structures. Eight GPUs consume 3,200
-sample draws over 400 optimizer steps at per-GPU batch size one, so 4,000
-provides coverage plus room for samples removed during purification:
+For installation checks and backend comparisons on up to eight GPUs, generate a
+reproducible subset with 512 training structures. OpenFold3's distributed
+sampler samples with replacement, so the same subset can provide the 3,200
+draws used by an eight-GPU, 400-step timing run. This compact subset is intended
+for functional and performance validation, not model-quality or convergence
+claims:
 
 ```bash
 pixi run -e openfold3-cuda12 prepare-pdb-subset -- \
-  --train-size 4000 \
+  --train-size 512 \
   --seed 42 \
   --workers 24
 ```
@@ -109,10 +111,8 @@ pixi run -e openfold3-cuda12 validate-training-data \
   datasets/train_pdb_subset.yaml
 ```
 
-The one-step single-GPU smoke test does not consume all 4,000 structures; the
-larger subset is recommended so the same prepared data can also be reused for
-the full eight-GPU comparison. A smaller subset remains valid for installation
-and functional smoke testing.
+The one-step single-GPU smoke test does not consume all 512 structures. The same
+prepared subset can be reused for the full eight-GPU backend comparison.
 
 The original sampled caches are never modified. For debugging, the individual
 `generate-pdb-subset`, `download-pdb-subset`, and `purify-pdb-subset` tasks

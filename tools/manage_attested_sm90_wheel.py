@@ -443,10 +443,16 @@ def verify_installed(
             (sys.executable, "-c", _verification_program(bundle, expected_commit)),
             cwd=directory,
             env=environment,
-            check=True,
             capture_output=True,
             text=True,
         )
+    if result.returncode != 0:
+        detail = (
+            result.stderr.strip()
+            or result.stdout.strip()
+            or "no diagnostic output"
+        )
+        raise ArtifactError(f"installed-wheel verification failed:\n{detail}")
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as error:

@@ -159,13 +159,16 @@ def test_multinode_quickstart_uses_existing_runner_and_shared_rw_run_dir():
     assert "real shared, read-write filesystem" in text
 
 
-def test_bare_metal_benchmark_prepares_four_thousand_samples_atomically():
+def test_bare_metal_benchmark_prepares_compact_subset_atomically():
     text = (
         REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
     ).read_text()
-    assert text.count("--train-size 4000") == 1
+    assert text.count("--train-size 512") == 1
     assert "prepare-pdb-subset" in text
     assert "validate-training-data" in text
+    assert "samples with replacement" in text
+    assert "not model-quality or convergence" in text
+    assert "--train-size 4000" not in text
     assert "--train-size 1000" not in text
 
 
@@ -262,6 +265,25 @@ def test_prebuilt_bundle_is_checked_in_and_pinned_by_digest():
     assert (
         bundle.wheel_sha256 == artifact_manager.PREBUILT_FILE_SHA256[bundle.wheel.name]
     )
+
+
+def test_installed_wheel_verification_surfaces_child_diagnostic(monkeypatch):
+    bundle = artifact_manager.prebuilt_bundle()
+    monkeypatch.setattr(
+        artifact_manager.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="installed AOT identity differs from selected bundle",
+        ),
+    )
+
+    with pytest.raises(
+        ArtifactError,
+        match="installed AOT identity differs from selected bundle",
+    ):
+        artifact_manager.verify_installed(bundle, artifact_manager.PREBUILT_COMMIT)
 
 
 def test_prebuilt_wheel_keeps_diffusion_on_the_aqlab_path():

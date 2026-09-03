@@ -88,7 +88,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-dir", type=Path, default=ROOT / "datasets")
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--train-size", type=int, default=4000)
+    parser.add_argument("--train-size", type=int, default=512)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--workers", type=int, default=24)
     parser.add_argument("--download-attempts", type=int, default=2)
