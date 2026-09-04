@@ -26,6 +26,14 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_deepspeed_evo_attention": False,
         "use_lma": False,
     },
+    "triton": {
+        "use_triton_triangle_kernels": True,
+        "use_cueq_triangle_kernels": False,
+        "use_stable_triangle_attention": False,
+        "use_stable_triangle_multiplicative": False,
+        "use_deepspeed_evo_attention": False,
+        "use_lma": False,
+    },
     "stablefold": {
         "use_triton_triangle_kernels": False,
         "use_cueq_triangle_kernels": False,

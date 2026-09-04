@@ -148,6 +148,7 @@ pixi run -e openfold3-cuda12 select-training-backend \
 | `aqlab` | Stock OpenFold3 PyTorch operators |
 | `cueq` | NVIDIA cuEquivariance triangle kernels |
 | `stablefold` | StableFold triangle attention and triangle multiplicative kernels |
+| `triton` | OpenFold3's Triton triangle kernels, the route AQLab's own fine-tuning runs use |
 | `deepspeed-evo` | DeepSpeed Evo attention operator; this does not enable ZeRO |
 
 The selector first disables every mutually exclusive route and then enables the
@@ -258,7 +259,8 @@ pixi run -e openfold3-cuda12 plot-backend-comparison \
   --baseline aqlab
 ```
 
-Add `deepspeed-evo` to the loop to compare that operator route as well. For a
+Add `triton` or `deepspeed-evo` to the loop to compare those operator routes
+as well; `triton` is the baseline that matches AQLab's fine-tuning configs. For a
 paper-quality 400-step comparison, use the same command with
 `--warmup-steps 10 --measure-steps 400` for every backend. Run the backends on
 the same otherwise-idle GPU; do not compare results collected on different GPU

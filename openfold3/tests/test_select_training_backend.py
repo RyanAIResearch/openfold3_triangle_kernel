@@ -75,6 +75,20 @@ def test_each_accelerated_backend_has_exactly_one_operator_family():
     assert BACKEND_FLAGS["stablefold"]["use_stable_triangle_attention"] is True
     assert BACKEND_FLAGS["stablefold"]["use_stable_triangle_multiplicative"] is True
     assert BACKEND_FLAGS["deepspeed-evo"]["use_deepspeed_evo_attention"] is True
+    assert BACKEND_FLAGS["triton"]["use_triton_triangle_kernels"] is True
+    for name, flags in BACKEND_FLAGS.items():
+        if name == "aqlab":
+            continue
+        # Every accelerated backend enables exactly one operator family; the
+        # StableFold family spans its attention and TriMul flags.
+        families = {
+            "cueq": flags["use_cueq_triangle_kernels"],
+            "triton": flags["use_triton_triangle_kernels"],
+            "deepspeed-evo": flags["use_deepspeed_evo_attention"],
+            "stablefold": flags["use_stable_triangle_attention"]
+            or flags["use_stable_triangle_multiplicative"],
+        }
+        assert sum(families.values()) == 1, name
 
 
 def test_single_gpu_smoke_is_one_validation_free_training_step(base_config):
