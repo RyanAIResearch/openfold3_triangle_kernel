@@ -1,0 +1,276 @@
+crop_tokens,backend,backend_label,topology,devices,world_size,step,phase,loss,gpu_step_ms
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,0,warmup,7.1750593185424805,
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,1,warmup,6.814309358596802,
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,2,warmup,7.313044309616089,
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,3,warmup,6.939101219177246,
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,4,warmup,6.925243377685547,
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,5,measure,7.4829020500183105,7399.29638671875
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,6,measure,7.331348180770874,5059.12939453125
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,7,measure,6.6579413414001465,6774.9306640625
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,8,measure,6.83633828163147,5200.86474609375
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,9,measure,6.538191795349121,5765.85986328125
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,10,measure,7.097276210784912,7670.45361328125
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,11,measure,6.862109422683716,8050.51171875
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,12,measure,6.939079523086548,6700.9033203125
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,13,measure,6.9902448654174805,7484.0849609375
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,14,measure,7.59563136100769,6759.0322265625
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,15,measure,7.753169298171997,7503.6171875
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,16,measure,6.5103819370269775,6715.5458984375
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,17,measure,6.805856466293335,5128.87060546875
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,18,measure,6.7712180614471436,7398.77685546875
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,19,measure,7.162827014923096,5892.0498046875
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,20,measure,6.624821424484253,6806.6669921875
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,21,measure,6.948620080947876,6057.171875
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,22,measure,6.505159139633179,5868.5224609375
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,23,measure,7.019587755203247,7501.0595703125
+384,aqlab,AQLab PyTorch,single-node-ddp,2,2,24,measure,6.495442628860474,7432.4111328125
+384,triton,AQLab Triton,single-node-ddp,2,2,0,warmup,7.1750593185424805,
+384,triton,AQLab Triton,single-node-ddp,2,2,1,warmup,6.814309358596802,
+384,triton,AQLab Triton,single-node-ddp,2,2,2,warmup,7.313050270080566,
+384,triton,AQLab Triton,single-node-ddp,2,2,3,warmup,6.939117431640625,
+384,triton,AQLab Triton,single-node-ddp,2,2,4,warmup,6.925279855728149,
+384,triton,AQLab Triton,single-node-ddp,2,2,5,measure,7.482985258102417,5560.24169921875
+384,triton,AQLab Triton,single-node-ddp,2,2,6,measure,7.331490755081177,4096.32568359375
+384,triton,AQLab Triton,single-node-ddp,2,2,7,measure,6.658126592636108,5254.96337890625
+384,triton,AQLab Triton,single-node-ddp,2,2,8,measure,6.8366005420684814,4241.0869140625
+384,triton,AQLab Triton,single-node-ddp,2,2,9,measure,6.538576364517212,4824.1376953125
+384,triton,AQLab Triton,single-node-ddp,2,2,10,measure,7.09771728515625,5595.97607421875
+384,triton,AQLab Triton,single-node-ddp,2,2,11,measure,6.862880229949951,6224.96923828125
+384,triton,AQLab Triton,single-node-ddp,2,2,12,measure,6.939627170562744,5156.55517578125
+384,triton,AQLab Triton,single-node-ddp,2,2,13,measure,6.991002559661865,5656.30126953125
+384,triton,AQLab Triton,single-node-ddp,2,2,14,measure,7.596406698226929,5242.33154296875
+384,triton,AQLab Triton,single-node-ddp,2,2,15,measure,7.7541937828063965,5698.68701171875
+384,triton,AQLab Triton,single-node-ddp,2,2,16,measure,6.51196026802063,5188.56201171875
+384,triton,AQLab Triton,single-node-ddp,2,2,17,measure,6.807325124740601,4185.9150390625
+384,triton,AQLab Triton,single-node-ddp,2,2,18,measure,6.773375988006592,5589.26513671875
+384,triton,AQLab Triton,single-node-ddp,2,2,19,measure,7.164839029312134,4659.2685546875
+384,triton,AQLab Triton,single-node-ddp,2,2,20,measure,6.6284754276275635,5269.33740234375
+384,triton,AQLab Triton,single-node-ddp,2,2,21,measure,6.9524102210998535,5328.83984375
+384,triton,AQLab Triton,single-node-ddp,2,2,22,measure,6.508873701095581,4394.67919921875
+384,triton,AQLab Triton,single-node-ddp,2,2,23,measure,7.023696660995483,5680.89990234375
+384,triton,AQLab Triton,single-node-ddp,2,2,24,measure,6.497513055801392,5614.4453125
+384,cueq,cuEq,single-node-ddp,2,2,0,warmup,7.1750593185424805,
+384,cueq,cuEq,single-node-ddp,2,2,1,warmup,6.814309358596802,
+384,cueq,cuEq,single-node-ddp,2,2,2,warmup,7.313050746917725,
+384,cueq,cuEq,single-node-ddp,2,2,3,warmup,6.939115047454834,
+384,cueq,cuEq,single-node-ddp,2,2,4,warmup,6.925274133682251,
+384,cueq,cuEq,single-node-ddp,2,2,5,measure,7.48298454284668,4443.30419921875
+384,cueq,cuEq,single-node-ddp,2,2,6,measure,7.331505060195923,3511.917236328125
+384,cueq,cuEq,single-node-ddp,2,2,7,measure,6.658148765563965,4368.72216796875
+384,cueq,cuEq,single-node-ddp,2,2,8,measure,6.836606025695801,3636.3701171875
+384,cueq,cuEq,single-node-ddp,2,2,9,measure,6.538633584976196,3709.061767578125
+384,cueq,cuEq,single-node-ddp,2,2,10,measure,7.09771728515625,5163.34716796875
+384,cueq,cuEq,single-node-ddp,2,2,11,measure,6.8629326820373535,5678.23095703125
+384,cueq,cuEq,single-node-ddp,2,2,12,measure,6.939598560333252,4202.41943359375
+384,cueq,cuEq,single-node-ddp,2,2,13,measure,6.990885972976685,4632.54296875
+384,cueq,cuEq,single-node-ddp,2,2,14,measure,7.595964670181274,4294.39990234375
+384,cueq,cuEq,single-node-ddp,2,2,15,measure,7.753955364227295,4628.65673828125
+384,cueq,cuEq,single-node-ddp,2,2,16,measure,6.512027978897095,4232.1689453125
+384,cueq,cuEq,single-node-ddp,2,2,17,measure,6.807446241378784,3559.3515625
+384,cueq,cuEq,single-node-ddp,2,2,18,measure,6.773728132247925,4531.2119140625
+384,cueq,cuEq,single-node-ddp,2,2,19,measure,7.164204359054565,3867.156494140625
+384,cueq,cuEq,single-node-ddp,2,2,20,measure,6.628470420837402,4325.40380859375
+384,cueq,cuEq,single-node-ddp,2,2,21,measure,6.952763319015503,4078.809814453125
+384,cueq,cuEq,single-node-ddp,2,2,22,measure,6.509734869003296,3790.91552734375
+384,cueq,cuEq,single-node-ddp,2,2,23,measure,7.024287223815918,4575.01318359375
+384,cueq,cuEq,single-node-ddp,2,2,24,measure,6.498479127883911,4941.8388671875
+384,stablefold,StableFold,single-node-ddp,2,2,0,warmup,7.1750593185424805,
+384,stablefold,StableFold,single-node-ddp,2,2,1,warmup,6.814309358596802,
+384,stablefold,StableFold,single-node-ddp,2,2,2,warmup,7.313047885894775,
+384,stablefold,StableFold,single-node-ddp,2,2,3,warmup,6.939110517501831,
+384,stablefold,StableFold,single-node-ddp,2,2,4,warmup,6.9252660274505615,
+384,stablefold,StableFold,single-node-ddp,2,2,5,measure,7.482952117919922,4251.02001953125
+384,stablefold,StableFold,single-node-ddp,2,2,6,measure,7.331455230712891,3305.33251953125
+384,stablefold,StableFold,single-node-ddp,2,2,7,measure,6.658081769943237,4107.962890625
+384,stablefold,StableFold,single-node-ddp,2,2,8,measure,6.836510896682739,3452.0185546875
+384,stablefold,StableFold,single-node-ddp,2,2,9,measure,6.538472414016724,3482.103271484375
+384,stablefold,StableFold,single-node-ddp,2,2,10,measure,7.097563743591309,4475.259765625
+384,stablefold,StableFold,single-node-ddp,2,2,11,measure,6.862653732299805,4945.71630859375
+384,stablefold,StableFold,single-node-ddp,2,2,12,measure,6.939302921295166,4016.415771484375
+384,stablefold,StableFold,single-node-ddp,2,2,13,measure,6.9905173778533936,4330.86865234375
+384,stablefold,StableFold,single-node-ddp,2,2,14,measure,7.595820188522339,4105.2626953125
+384,stablefold,StableFold,single-node-ddp,2,2,15,measure,7.753521680831909,4351.12841796875
+384,stablefold,StableFold,single-node-ddp,2,2,16,measure,6.511422157287598,4039.6591796875
+384,stablefold,StableFold,single-node-ddp,2,2,17,measure,6.806675910949707,3375.637451171875
+384,stablefold,StableFold,single-node-ddp,2,2,18,measure,6.772756814956665,4268.67041015625
+384,stablefold,StableFold,single-node-ddp,2,2,19,measure,7.163131952285767,3692.1796875
+384,stablefold,StableFold,single-node-ddp,2,2,20,measure,6.626816749572754,4139.36083984375
+384,stablefold,StableFold,single-node-ddp,2,2,21,measure,6.951702833175659,3844.108154296875
+384,stablefold,StableFold,single-node-ddp,2,2,22,measure,6.507940769195557,4079.354736328125
+384,stablefold,StableFold,single-node-ddp,2,2,23,measure,7.022626638412476,4381.533203125
+384,stablefold,StableFold,single-node-ddp,2,2,24,measure,6.49851655960083,4294.22412109375
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,0,warmup,6.942020893096924,
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,1,warmup,6.92280125617981,
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,2,warmup,7.1176111698150635,
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,3,warmup,6.952085256576538,
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,4,warmup,7.206634998321533,
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,5,measure,7.253243923187256,23767.923828125
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,6,measure,7.5251336097717285,15073.640625
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,7,measure,6.852649688720703,21269.826171875
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,8,measure,7.127286911010742,15277.8623046875
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,9,measure,6.998470306396484,15683.5361328125
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,10,measure,7.028573513031006,21676.767578125
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,11,measure,7.241976261138916,24413.482421875
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,12,measure,7.241189002990723,21072.736328125
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,13,measure,7.983495473861694,24176.982421875
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,14,measure,7.332508325576782,21527.515625
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,15,measure,7.902242422103882,23924.736328125
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,16,measure,6.585855722427368,21079.962890625
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,17,measure,6.987691164016724,15325.978515625
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,18,measure,6.924551963806152,24030.591796875
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,19,measure,7.3519392013549805,18090.703125
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,20,measure,6.934422016143799,21326.046875
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,21,measure,7.309181213378906,18678.521484375
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,22,measure,6.876959562301636,15175.775390625
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,23,measure,7.172356128692627,24134.19921875
+640,aqlab,AQLab PyTorch,single-node-ddp,2,2,24,measure,6.870889902114868,24069.53515625
+640,triton,AQLab Triton,single-node-ddp,2,2,0,warmup,6.942020893096924,
+640,triton,AQLab Triton,single-node-ddp,2,2,1,warmup,6.92280125617981,
+640,triton,AQLab Triton,single-node-ddp,2,2,2,warmup,7.117608070373535,
+640,triton,AQLab Triton,single-node-ddp,2,2,3,warmup,6.952075719833374,
+640,triton,AQLab Triton,single-node-ddp,2,2,4,warmup,7.206613302230835,
+640,triton,AQLab Triton,single-node-ddp,2,2,5,measure,7.253219127655029,15473.1533203125
+640,triton,AQLab Triton,single-node-ddp,2,2,6,measure,7.5251054763793945,10722.0341796875
+640,triton,AQLab Triton,single-node-ddp,2,2,7,measure,6.852590799331665,14318.8720703125
+640,triton,AQLab Triton,single-node-ddp,2,2,8,measure,7.127201080322266,10884.818359375
+640,triton,AQLab Triton,single-node-ddp,2,2,9,measure,6.998390436172485,11406.255859375
+640,triton,AQLab Triton,single-node-ddp,2,2,10,measure,7.028409719467163,14687.5673828125
+640,triton,AQLab Triton,single-node-ddp,2,2,11,measure,7.241806983947754,16142.361328125
+640,triton,AQLab Triton,single-node-ddp,2,2,12,measure,7.240857124328613,14073.193359375
+640,triton,AQLab Triton,single-node-ddp,2,2,13,measure,7.982894659042358,15910.2998046875
+640,triton,AQLab Triton,single-node-ddp,2,2,14,measure,7.332050561904907,14547.345703125
+640,triton,AQLab Triton,single-node-ddp,2,2,15,measure,7.901503562927246,15630.0380859375
+640,triton,AQLab Triton,single-node-ddp,2,2,16,measure,6.585455656051636,14086.958984375
+640,triton,AQLab Triton,single-node-ddp,2,2,17,measure,6.987215995788574,10955.3388671875
+640,triton,AQLab Triton,single-node-ddp,2,2,18,measure,6.923777341842651,15744.6982421875
+640,triton,AQLab Triton,single-node-ddp,2,2,19,measure,7.3510582447052,12408.060546875
+640,triton,AQLab Triton,single-node-ddp,2,2,20,measure,6.933820486068726,14360.89453125
+640,triton,AQLab Triton,single-node-ddp,2,2,21,measure,7.308103561401367,12952.642578125
+640,triton,AQLab Triton,single-node-ddp,2,2,22,measure,6.876138925552368,10819.3017578125
+640,triton,AQLab Triton,single-node-ddp,2,2,23,measure,7.172215223312378,15861.767578125
+640,triton,AQLab Triton,single-node-ddp,2,2,24,measure,6.870314359664917,15809.6982421875
+640,cueq,cuEq,single-node-ddp,2,2,0,warmup,6.942020893096924,
+640,cueq,cuEq,single-node-ddp,2,2,1,warmup,6.92280125617981,
+640,cueq,cuEq,single-node-ddp,2,2,2,warmup,7.117600917816162,
+640,cueq,cuEq,single-node-ddp,2,2,3,warmup,6.952054500579834,
+640,cueq,cuEq,single-node-ddp,2,2,4,warmup,7.206572532653809,
+640,cueq,cuEq,single-node-ddp,2,2,5,measure,7.253151178359985,10194.7001953125
+640,cueq,cuEq,single-node-ddp,2,2,6,measure,7.525008916854858,7455.662109375
+640,cueq,cuEq,single-node-ddp,2,2,7,measure,6.852434873580933,9663.2373046875
+640,cueq,cuEq,single-node-ddp,2,2,8,measure,7.1269850730896,7648.81103515625
+640,cueq,cuEq,single-node-ddp,2,2,9,measure,6.9980669021606445,7698.015625
+640,cueq,cuEq,single-node-ddp,2,2,10,measure,7.028026819229126,10568.556640625
+640,cueq,cuEq,single-node-ddp,2,2,11,measure,7.241381883621216,10811.978515625
+640,cueq,cuEq,single-node-ddp,2,2,12,measure,7.240156173706055,9417.1279296875
+640,cueq,cuEq,single-node-ddp,2,2,13,measure,7.981885671615601,10596.4990234375
+640,cueq,cuEq,single-node-ddp,2,2,14,measure,7.331228494644165,9892.7587890625
+640,cueq,cuEq,single-node-ddp,2,2,15,measure,7.900511264801025,10296.59375
+640,cueq,cuEq,single-node-ddp,2,2,16,measure,6.5841288566589355,9502.255859375
+640,cueq,cuEq,single-node-ddp,2,2,17,measure,6.985524654388428,7728.5830078125
+640,cueq,cuEq,single-node-ddp,2,2,18,measure,6.922080993652344,10377.33203125
+640,cueq,cuEq,single-node-ddp,2,2,19,measure,7.348626136779785,8477.3642578125
+640,cueq,cuEq,single-node-ddp,2,2,20,measure,6.931097984313965,9764.2353515625
+640,cueq,cuEq,single-node-ddp,2,2,21,measure,7.305543899536133,8561.6904296875
+640,cueq,cuEq,single-node-ddp,2,2,22,measure,6.873383522033691,7569.7802734375
+640,cueq,cuEq,single-node-ddp,2,2,23,measure,7.168871164321899,10553.0859375
+640,cueq,cuEq,single-node-ddp,2,2,24,measure,6.86657452583313,10683.7109375
+640,stablefold,StableFold,single-node-ddp,2,2,0,warmup,6.942020893096924,
+640,stablefold,StableFold,single-node-ddp,2,2,1,warmup,6.92280125617981,
+640,stablefold,StableFold,single-node-ddp,2,2,2,warmup,7.117605209350586,
+640,stablefold,StableFold,single-node-ddp,2,2,3,warmup,6.9520673751831055,
+640,stablefold,StableFold,single-node-ddp,2,2,4,warmup,7.206595420837402,
+640,stablefold,StableFold,single-node-ddp,2,2,5,measure,7.253179550170898,9514.603515625
+640,stablefold,StableFold,single-node-ddp,2,2,6,measure,7.525017976760864,6979.30712890625
+640,stablefold,StableFold,single-node-ddp,2,2,7,measure,6.852521181106567,9075.4619140625
+640,stablefold,StableFold,single-node-ddp,2,2,8,measure,7.127089262008667,7156.765625
+640,stablefold,StableFold,single-node-ddp,2,2,9,measure,6.998163223266602,7211.01025390625
+640,stablefold,StableFold,single-node-ddp,2,2,10,measure,7.028199911117554,9451.830078125
+640,stablefold,StableFold,single-node-ddp,2,2,11,measure,7.24150538444519,10954.3310546875
+640,stablefold,StableFold,single-node-ddp,2,2,12,measure,7.2405595779418945,9234.4208984375
+640,stablefold,StableFold,single-node-ddp,2,2,13,measure,7.983222484588623,9933.494140625
+640,stablefold,StableFold,single-node-ddp,2,2,14,measure,7.332148313522339,9213.6181640625
+640,stablefold,StableFold,single-node-ddp,2,2,15,measure,7.901252031326294,9677.80078125
+640,stablefold,StableFold,single-node-ddp,2,2,16,measure,6.584131956100464,8842.8515625
+640,stablefold,StableFold,single-node-ddp,2,2,17,measure,6.985829830169678,7196.69921875
+640,stablefold,StableFold,single-node-ddp,2,2,18,measure,6.922587633132935,9776.7060546875
+640,stablefold,StableFold,single-node-ddp,2,2,19,measure,7.35008978843689,7926.634765625
+640,stablefold,StableFold,single-node-ddp,2,2,20,measure,6.9318225383758545,9074.5537109375
+640,stablefold,StableFold,single-node-ddp,2,2,21,measure,7.305131435394287,8107.994140625
+640,stablefold,StableFold,single-node-ddp,2,2,22,measure,6.873377799987793,6990.89404296875
+640,stablefold,StableFold,single-node-ddp,2,2,23,measure,7.168429613113403,9883.607421875
+640,stablefold,StableFold,single-node-ddp,2,2,24,measure,6.86629319190979,10238.421875
+768,triton,AQLab Triton,single-node-ddp,2,2,0,warmup,7.002477645874023,
+768,triton,AQLab Triton,single-node-ddp,2,2,1,warmup,7.222812175750732,
+768,triton,AQLab Triton,single-node-ddp,2,2,2,warmup,7.234393119812012,
+768,triton,AQLab Triton,single-node-ddp,2,2,3,warmup,7.142856121063232,
+768,triton,AQLab Triton,single-node-ddp,2,2,4,warmup,7.175431728363037,
+768,triton,AQLab Triton,single-node-ddp,2,2,5,measure,7.484960079193115,24045.70703125
+768,triton,AQLab Triton,single-node-ddp,2,2,6,measure,7.615249156951904,16485.65234375
+768,triton,AQLab Triton,single-node-ddp,2,2,7,measure,7.211412191390991,21991.076171875
+768,triton,AQLab Triton,single-node-ddp,2,2,8,measure,7.096724033355713,16785.181640625
+768,triton,AQLab Triton,single-node-ddp,2,2,9,measure,7.219092607498169,17156.814453125
+768,triton,AQLab Triton,single-node-ddp,2,2,10,measure,7.316309690475464,22541.701171875
+768,triton,AQLab Triton,single-node-ddp,2,2,11,measure,7.487663507461548,24995.537109375
+768,triton,AQLab Triton,single-node-ddp,2,2,12,measure,7.308336973190308,22144.953125
+768,triton,AQLab Triton,single-node-ddp,2,2,13,measure,7.916833877563477,24205.50390625
+768,triton,AQLab Triton,single-node-ddp,2,2,14,measure,7.454015493392944,21889.3125
+768,triton,AQLab Triton,single-node-ddp,2,2,15,measure,7.695445537567139,24302.58203125
+768,triton,AQLab Triton,single-node-ddp,2,2,16,measure,6.806212902069092,21815.166015625
+768,triton,AQLab Triton,single-node-ddp,2,2,17,measure,7.2040114402771,16708.158203125
+768,triton,AQLab Triton,single-node-ddp,2,2,18,measure,7.043097257614136,24355.6484375
+768,triton,AQLab Triton,single-node-ddp,2,2,19,measure,7.726950407028198,19048.05859375
+768,triton,AQLab Triton,single-node-ddp,2,2,20,measure,7.042610168457031,22838.619140625
+768,triton,AQLab Triton,single-node-ddp,2,2,21,measure,7.286257028579712,19290.53515625
+768,triton,AQLab Triton,single-node-ddp,2,2,22,measure,7.172145366668701,16785.25
+768,triton,AQLab Triton,single-node-ddp,2,2,23,measure,7.1331470012664795,24340.775390625
+768,triton,AQLab Triton,single-node-ddp,2,2,24,measure,6.883007526397705,24288.66796875
+768,cueq,cuEq,single-node-ddp,2,2,0,warmup,7.002477645874023,
+768,cueq,cuEq,single-node-ddp,2,2,1,warmup,7.222812175750732,
+768,cueq,cuEq,single-node-ddp,2,2,2,warmup,7.234394073486328,
+768,cueq,cuEq,single-node-ddp,2,2,3,warmup,7.142861366271973,
+768,cueq,cuEq,single-node-ddp,2,2,4,warmup,7.175441026687622,
+768,cueq,cuEq,single-node-ddp,2,2,5,measure,7.484950542449951,14529.3076171875
+768,cueq,cuEq,single-node-ddp,2,2,6,measure,7.6152448654174805,10598.03515625
+768,cueq,cuEq,single-node-ddp,2,2,7,measure,7.211434841156006,13730.6298828125
+768,cueq,cuEq,single-node-ddp,2,2,8,measure,7.096735239028931,10817.9384765625
+768,cueq,cuEq,single-node-ddp,2,2,9,measure,7.219064712524414,11402.9462890625
+768,cueq,cuEq,single-node-ddp,2,2,10,measure,7.3163697719573975,14736.65625
+768,cueq,cuEq,single-node-ddp,2,2,11,measure,7.4876792430877686,15486.73046875
+768,cueq,cuEq,single-node-ddp,2,2,12,measure,7.3085174560546875,13805.890625
+768,cueq,cuEq,single-node-ddp,2,2,13,measure,7.917424917221069,14704.1865234375
+768,cueq,cuEq,single-node-ddp,2,2,14,measure,7.45494818687439,13591.47265625
+768,cueq,cuEq,single-node-ddp,2,2,15,measure,7.696049690246582,14790.6923828125
+768,cueq,cuEq,single-node-ddp,2,2,16,measure,6.806506633758545,13510.0205078125
+768,cueq,cuEq,single-node-ddp,2,2,17,measure,7.204314708709717,10780.9990234375
+768,cueq,cuEq,single-node-ddp,2,2,18,measure,7.0438971519470215,14847.791015625
+768,cueq,cuEq,single-node-ddp,2,2,19,measure,7.728664398193359,11916.9228515625
+768,cueq,cuEq,single-node-ddp,2,2,20,measure,7.0439674854278564,13935.6044921875
+768,cueq,cuEq,single-node-ddp,2,2,21,measure,7.286516189575195,12313.6826171875
+768,cueq,cuEq,single-node-ddp,2,2,22,measure,7.172344923019409,11062.1337890625
+768,cueq,cuEq,single-node-ddp,2,2,23,measure,7.13356876373291,14846.4794921875
+768,cueq,cuEq,single-node-ddp,2,2,24,measure,6.88441801071167,14798.6962890625
+768,stablefold,StableFold,single-node-ddp,2,2,0,warmup,7.002477645874023,
+768,stablefold,StableFold,single-node-ddp,2,2,1,warmup,7.222812175750732,
+768,stablefold,StableFold,single-node-ddp,2,2,2,warmup,7.2343854904174805,
+768,stablefold,StableFold,single-node-ddp,2,2,3,warmup,7.142828464508057,
+768,stablefold,StableFold,single-node-ddp,2,2,4,warmup,7.175391912460327,
+768,stablefold,StableFold,single-node-ddp,2,2,5,measure,7.48487401008606,13491.1611328125
+768,stablefold,StableFold,single-node-ddp,2,2,6,measure,7.615134954452515,9751.24609375
+768,stablefold,StableFold,single-node-ddp,2,2,7,measure,7.211225986480713,12737.7509765625
+768,stablefold,StableFold,single-node-ddp,2,2,8,measure,7.096482515335083,10062.3017578125
+768,stablefold,StableFold,single-node-ddp,2,2,9,measure,7.218726634979248,10029.6572265625
+768,stablefold,StableFold,single-node-ddp,2,2,10,measure,7.315845489501953,13306.7158203125
+768,stablefold,StableFold,single-node-ddp,2,2,11,measure,7.487083196640015,14749.3564453125
+768,stablefold,StableFold,single-node-ddp,2,2,12,measure,7.307648658752441,12847.0947265625
+768,stablefold,StableFold,single-node-ddp,2,2,13,measure,7.9159815311431885,13681.361328125
+768,stablefold,StableFold,single-node-ddp,2,2,14,measure,7.422009229660034,12637.2080078125
+768,stablefold,StableFold,single-node-ddp,2,2,15,measure,7.694426774978638,13746.939453125
+768,stablefold,StableFold,single-node-ddp,2,2,16,measure,6.804937362670898,12543.3955078125
+768,stablefold,StableFold,single-node-ddp,2,2,17,measure,7.202330827713013,9968.5849609375
+768,stablefold,StableFold,single-node-ddp,2,2,18,measure,7.041156053543091,13755.998046875
+768,stablefold,StableFold,single-node-ddp,2,2,19,measure,7.725535869598389,11018.2177734375
+768,stablefold,StableFold,single-node-ddp,2,2,20,measure,7.113863945007324,12970.0751953125
+768,stablefold,StableFold,single-node-ddp,2,2,21,measure,7.284024477005005,11264.1650390625
+768,stablefold,StableFold,single-node-ddp,2,2,22,measure,7.169149160385132,10600.365234375
+768,stablefold,StableFold,single-node-ddp,2,2,23,measure,7.077281475067139,13790.720703125
+768,stablefold,StableFold,single-node-ddp,2,2,24,measure,6.8797767162323,13742.552734375

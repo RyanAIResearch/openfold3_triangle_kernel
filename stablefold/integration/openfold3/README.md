@@ -86,7 +86,8 @@ clipping, EMA, checkpoints, and logging stay as they are.
   `stablefold fallback to stock` for the pair-stack shapes.
 - Multi GPU: rank 0 writes `<log_dir>/stablefold_kernel_ddp.json` with
   `"status": "PASS"` and one entry per rank.
-- Numerics: `tests/test_numerics_vs_fp64.py` in the package compares the
-  kernels against an FP64 oracle at training shapes.
+- Numerics: `tests/test_numerics_vs_fp64.py` in the package compares Triangle
+  Attention against an FP64 oracle at training shapes. That test does not cover
+  TriMul or end-to-end model accuracy.
 
 Validation performed so far is recorded in `VALIDATION.md`.

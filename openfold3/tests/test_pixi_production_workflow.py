@@ -168,6 +168,9 @@ def test_bare_metal_benchmark_prepares_compact_subset_atomically():
     assert "validate-training-data" in text
     assert "samples with replacement" in text
     assert "not model-quality or convergence" in text
+    assert "prepare-crop-benchmark-data" in text
+    assert "--crop-sizes 384 640 768" in text
+    assert "provenance.json" in text
     assert "--train-size 4000" not in text
     assert "--train-size 1000" not in text
 
@@ -178,9 +181,31 @@ def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     assert "export DEVICES=8" in text
     assert "export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7" in text
     assert "benchmark-single-node" in text
-    assert 'export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison-${DEVICES}gpu"' in text
-    assert "two-H100" not in text
+    assert "backend-comparison-1gpu/crop${CROP}" in text
+    assert "backend-comparison-2gpu/crop${CROP}" in text
+    assert "backend-comparison-8gpu/crop${CROP}" in text
+    assert text.count("BACKENDS=(aqlab triton cueq stablefold)") >= 3
+    assert text.count('for BACKEND in "${BACKENDS[@]}"') >= 3
+    assert text.count("not plotting") >= 3
+    assert text.count("if (( MATRIX_FAILED ))") >= 3
+    assert text.count("summary.json") >= 4
+    assert text.count("--num-workers 10") >= 4
+    assert text.count("--require-full-crop") >= 4
+    assert "--baseline triton" in text
+    assert "Changing the worker count can therefore change the concrete" in text
+    assert "not a per-step fingerprint" in text
+    assert "Reproduced Two-H100 Results" in text
+    assert "Reproduced One- and Two-H100 Results" not in text
+    assert "5d4c79748fa5c76ce6a69478c6f4d38395d81b2c" in text
+    assert "0.5.1.dev5860+g87ebe22da" in text
+    assert "does **not**" in text
+    assert "OOM in first backward pass" in text
+    assert "backend_loss_2gpu_crops_384_640_768.png" in text
+    assert "1.704x" in text
+    assert "partial single-H100" in text
+    assert "long-horizon convergence or unchanged model accuracy" in text
     assert "two-node H100 qualification" not in text
+    assert "TriOnce" not in text
     assert text.count("--use-tf32") >= 2
     assert "cuEquivariance" in text
     assert "0.10.0" in text

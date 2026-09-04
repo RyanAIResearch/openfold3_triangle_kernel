@@ -67,8 +67,9 @@ def install_full_crop_collator(expected_tokens: int) -> None:
 
     from openfold3.core.data.framework import data_module
 
-    original_generate_dataloader = data_module.DataModule.generate_dataloader
-    data_module.DataModule.generate_dataloader = partialmethod(
+    data_module_class: Any = data_module.DataModule
+    original_generate_dataloader = data_module_class.generate_dataloader
+    data_module_class.generate_dataloader = partialmethod(
         generate_dataloader_with_full_crop_gate,
         original_generate_dataloader=original_generate_dataloader,
         expected_tokens=expected_tokens,

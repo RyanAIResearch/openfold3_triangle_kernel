@@ -10,7 +10,8 @@ For every case the same BF16 inputs feed three paths:
 * ``stablefold``: the facade with the requested execution flags.
 
 StableFold must be finite, bitwise reproducible against itself, exactly zero
-on fully masked planes, and no less accurate than the stock path.
+on fully masked planes, and within 1.1 times the stock path's relative error
+plus 1e-6, as encoded by this test.
 """
 
 from __future__ import annotations
@@ -138,7 +139,7 @@ CASES = [
 
 
 @pytest.mark.parametrize("name,flags,shape", CASES, ids=[c[0] for c in CASES])
-def test_triangle_attention_matches_fp64_at_least_as_well_as_stock(
+def test_triangle_attention_fp64_error_stays_within_stock_envelope(
     name, flags, shape, monkeypatch
 ):
     for key, value in flags.items():

@@ -3,6 +3,10 @@
 Host: Lambda 1x H100 80 GB (driver 570.195.03), Python 3.14.7, PyTorch 2.10.0+cu12.9,
 pytorch-lightning 2.6.1. Date: 2026-09-04.
 
+The package build and clean-install result below was obtained only after
+`4098f42b` fixed source-tree shadowing in the smoke test. It must not be
+attributed to the earlier `fe78ee99` documentation commit.
+
 ## Package
 
 | Check | Result |
@@ -10,7 +14,7 @@ pytorch-lightning 2.6.1. Date: 2026-09-04.
 | `tools/build_sm90_wheel.sh` | wheel built in 9.5 min; clean-install smoke (no compiler on PATH, JIT forbidden) passed |
 | CPU tests: packaging, distributed contract, gloo preflight | 36 passed |
 | GPU tests: attention facade, workspace planner, TriMul C++ contract | 57 passed |
-| `tests/test_numerics_vs_fp64.py` | 10 passed: StableFold error at or below the stock BF16 path, bitwise replay, exact zeros on fully masked planes |
+| `tests/test_numerics_vs_fp64.py` | 10 passed for Triangle Attention: FP64-oracle relative error within the test's 1.1x stock-BF16 envelope plus 1e-6, bitwise replay, exact zeros on fully masked planes; this test does not cover TriMul |
 
 ## Host patch on upstream `aqlaboratory/openfold-3` e47adbf
 

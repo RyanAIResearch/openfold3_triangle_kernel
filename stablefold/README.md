@@ -6,12 +6,18 @@ Multiplicative Update (TriMul). StableFold is a standalone package; a host
 model adopts it the same way it adopts cuEquivariance: one pip dependency, one
 configuration flag per operator, and a stock fallback for unsupported shapes.
 
-Measured on one H100 80 GB with the OpenFold3 training step at crop 384
-(BF16 mixed precision, matched data and seeds), the two operators together
-cut the step from 6.94 s (stock PyTorch) or 5.47 s (OpenFold3 Triton route)
-to 4.47 s. Kernel outputs and gradients are bitwise reproducible against
-themselves and their error against an FP64 oracle is at or below the stock
-BF16 path.
+End-to-end performance is protocol-dependent. The host repository's bare-metal
+quickstart records the dataset receipt, worker count, warmup and measured steps,
+GPU topology, benchmark-harness commit, and imported runtime-wheel revision for
+each publishable comparison. Results produced by an integrated OpenFold3 wheel
+must not be attributed to this standalone wheel unless that exact artifact was
+installed for the run.
+
+Triangle Attention outputs and gradients are bitwise reproducible against
+themselves; across the checked shapes, their relative error against an FP64
+oracle is constrained by the test to at most 1.1 times the stock BF16 path's
+relative error plus `1e-6`. This FP64-oracle test does not cover TriMul or
+establish end-to-end model accuracy.
 
 ## Requirements
 

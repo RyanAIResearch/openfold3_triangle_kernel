@@ -26,8 +26,11 @@ try:
     from tools.benchmark_full_crop import install_full_crop_collator
     from tools.select_training_backend import BACKEND_FLAGS, configure_training_backend
 except ModuleNotFoundError:
-    from benchmark_full_crop import install_full_crop_collator
-    from select_training_backend import BACKEND_FLAGS, configure_training_backend
+    from benchmark_full_crop import install_full_crop_collator  # type: ignore[no-redef]
+    from select_training_backend import (  # type: ignore[no-redef]
+        BACKEND_FLAGS,
+        configure_training_backend,
+    )
 
 
 def configure_benchmark(

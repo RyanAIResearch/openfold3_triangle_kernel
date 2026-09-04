@@ -50,7 +50,10 @@ if [[ "${#WHEELS[@]}" -ne 1 ]]; then
   exit 3
 fi
 WHEEL="${WHEELS[0]}"
-sha256sum "$WHEEL" > "$WHEEL.sha256"
+(
+  cd dist
+  sha256sum "$(basename "$WHEEL")" > "$(basename "$WHEEL").sha256"
+)
 
 # Clean-install smoke: import the wheel from a read-only directory with no
 # compiler on PATH and no JIT permission, so a missing or ABI-mismatched

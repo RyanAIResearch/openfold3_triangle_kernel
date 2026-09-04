@@ -7,6 +7,7 @@ from __future__ import annotations
 import ast
 import json
 import tomllib
+import zipfile
 from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -109,6 +110,32 @@ def test_pyproject_ships_sources_and_manifest_as_package_data():
         assert pattern in package_data
     manifest = (REPOSITORY / "MANIFEST.in").read_text()
     assert "recursive-include stablefold *.cu *.py *.json *.md" in manifest
+
+
+def test_notice_is_self_contained():
+    notice = (REPOSITORY / "NOTICE").read_text()
+    assert "UPSTREAM.md" not in notice
+    assert "c615a7f8d0e7bb04095a35ec6dc7b30192ac19d3" in notice
+    assert "6db02ff4b31e87bfced98331b22613e96e8ced37" in notice
+
+
+def test_checked_in_wheel_contains_the_corrected_claims_and_notice():
+    wheel = (
+        REPOSITORY
+        / "release_artifacts"
+        / "stablefold-0.1.0-cp314-cp314-linux_x86_64.whl"
+    )
+    with zipfile.ZipFile(wheel) as archive:
+        metadata = archive.read("stablefold-0.1.0.dist-info/METADATA").decode()
+        notice = archive.read("stablefold-0.1.0.dist-info/licenses/NOTICE").decode()
+
+    assert "6.94 s" not in metadata
+    assert "at or below the stock" not in metadata
+    assert "relative error plus `1e-6`" in metadata
+    assert "does not cover TriMul or" in metadata
+    assert "UPSTREAM.md" not in notice
+    assert "c615a7f8d0e7bb04095a35ec6dc7b30192ac19d3" in notice
+    assert "6db02ff4b31e87bfced98331b22613e96e8ced37" in notice
 
 
 def test_source_tree_manifest_is_fail_closed():
