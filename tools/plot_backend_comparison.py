@@ -13,6 +13,7 @@ SUMMARY_COLUMNS = (
     "backend",
     "topology",
     "devices",
+    "num_nodes",
     "world_size",
     "global_batch_size",
     "fit_wall_seconds",
@@ -33,6 +34,7 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
         summary = json.loads(summary_path.read_text())
         summary.setdefault("topology", "single-gpu")
         summary.setdefault("devices", 1)
+        summary.setdefault("num_nodes", 1)
         summary.setdefault("world_size", summary["devices"])
         summary.setdefault("global_batch_size", summary["world_size"])
         backend = str(summary["backend"])
@@ -60,6 +62,12 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
             "all backends in one comparison must use the same GPU model and world size"
         )
     world_size, gpu_name = next(iter(topologies))
+    num_nodes = max(int(summary.get("num_nodes", 1)) for summary in summaries)
+    topology_label = (
+        f"{num_nodes} nodes x {world_size // num_nodes} GPUs"
+        if num_nodes > 1
+        else f"{world_size} GPU(s)"
+    )
     by_backend = {str(summary["backend"]): summary for summary in summaries}
     if baseline not in by_backend:
         raise ValueError(f"baseline backend not found: {baseline}")
@@ -80,6 +88,7 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
         "schema_version": 2,
         "baseline": baseline,
         "world_size": world_size,
+        "num_nodes": num_nodes,
         "gpu_name": gpu_name,
         "backends": summaries,
     }
@@ -98,7 +107,7 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
     figure, axis = plt.subplots(figsize=(8, 4.8))
     bars = axis.bar(names, step_seconds, color="#4472C4")
     axis.set_ylabel("Steady-state wall seconds / training step")
-    axis.set_title(f"OpenFold3 backend training time ({world_size} GPU(s))")
+    axis.set_title(f"OpenFold3 backend training time ({topology_label})")
     axis.grid(axis="y", alpha=0.25)
     for bar, seconds, speedup in zip(bars, step_seconds, speedups):
         axis.text(
@@ -125,7 +134,7 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
     axis.set_xlabel("Optimizer training step")
     axis.set_ylabel("Training loss")
     axis.set_title(
-        f"Matched-seed backend loss curves ({world_size} GPU(s), global mean)"
+        f"Matched-seed backend loss curves ({topology_label}, global mean)"
     )
     axis.grid(alpha=0.25)
     axis.legend()

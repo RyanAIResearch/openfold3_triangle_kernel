@@ -310,6 +310,15 @@ sets per-GPU batch size to one, global batch size to `DEVICES`, and
 `epoch_len = (warmup_steps + measure_steps) * DEVICES`; `max_steps` remains the
 same optimizer-step count for 1, 2, 4, and 8 GPUs.
 
+The benchmark's `--num-workers` defaults to `0`, which featurizes every sample
+in the training process while the GPU waits. On one H100 this idle time was
+about five seconds per step, and on DDP every step also waits for the slowest
+rank's data. For timing that reflects training, add `--num-workers 4` to each
+`benchmark-single-node` command above. Use the same value for every backend in
+one comparison; the recorded `steady_step_wall_seconds` includes data waiting,
+while `gpu_step_mean_ms` in `summary.json` does not, so their difference shows
+how much time the data pipeline costs.
+
 Compare backends only within the same GPU count. Changing the GPU count changes
 the global batch and therefore can change the loss trajectory even when the
 seed is held fixed. Use a separate `RESULTS_ROOT` and generate a separate
@@ -506,7 +515,240 @@ pixi run -e openfold3-cuda12 train-multinode \
 ```
 
 Use Slurm or the site's scheduler to allocate the nodes and start the per-node
-commands concurrently.
+commands concurrently. The next section provides ready-to-submit Slurm batch
+scripts.
+
+#### Multiple Nodes with Slurm
+
+Slurm can start every worker for you, on one node or on several. Submit the
+batch scripts below with `sbatch`; the shared-path requirements from the
+previous section still apply.
+
+Rules that the pinned Lightning 2.6.1 enforces:
+
+- `--nodes` must equal `num_nodes`, and `--ntasks-per-node` must equal
+  `devices`. Never use bare `--ntasks`.
+- Set `devices` and `num_nodes` in the runner YAML before submitting. If both
+  are still `1`, Lightning does not read the Slurm environment at all: every
+  task silently trains alone on its own GPU and writes into the same output
+  directory. The benchmark task avoids this because `--devices` and
+  `--num-nodes` set both values.
+- Request GPUs with `--gres=gpu:N`. Do not use `--gpus-per-task` or
+  `--gpu-bind`; every task must see all GPUs on its node.
+- Use `sbatch`, not an `salloc` shell. Lightning ignores Slurm when the job
+  name is `bash` or `interactive`.
+- Run `pixi install -e openfold3-cuda12` on the shared checkout before
+  submitting.
+
+Lightning reads ranks and world size from Slurm and uses the first node of the
+allocation as the rendezvous address, so no `MASTER_ADDR` or `NODE_RANK` is
+needed. Every `srun` below carries `--kill-on-bad-exit=1`. It is not an early
+abort: it tells Slurm to terminate the whole job step as soon as any single
+rank exits with an error. Without it, one crashed rank leaves the other
+fifteen blocked inside NCCL until the job's time limit expires. Each `srun`
+also repeats `--cpus-per-task`: since Slurm 22.05, `srun` no longer inherits
+that value from `sbatch`, and without it every task is confined to one CPU
+core, which starves the data loader workers.
+
+##### Compare Backends on Two Nodes
+
+This is the multi-node counterpart of the single-node comparison loop above.
+The `benchmark-multinode` task runs the same benchmark tool; `--num-nodes`
+makes it set `epoch_len = (warmup_steps + measure_steps) * devices * num_nodes`
+and a global batch of `devices * num_nodes`, so the optimizer-step count stays
+the same as on one node. Under `srun` the tool starts once per task, Lightning
+joins the tasks into one DDP group, and only global rank 0 writes results.
+
+Save the following as `/shared/openfold3-run/compare_2x8.sbatch` and submit it
+with `sbatch /shared/openfold3-run/compare_2x8.sbatch`:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=of3-compare-2x8
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=8
+#SBATCH --gres=gpu:8
+#SBATCH --cpus-per-task=6
+#SBATCH --time=24:00:00
+#SBATCH --output=/shared/openfold3-run/slurm-%j.out
+
+set -euo pipefail
+
+export NNODES=2
+export GPUS_PER_NODE=8
+export PATH="$HOME/.pixi/bin:$PATH"
+export OF3_RUN_CWD=/shared/openfold3-run
+export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison-${NNODES}x${GPUS_PER_NODE}gpu"
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
+
+cd /shared/openfold3_triangle_kernel
+
+for BACKEND in aqlab cueq stablefold; do
+  srun --kill-on-bad-exit=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" \
+    pixi run -e openfold3-cuda12 benchmark-multinode \
+    --runner-yaml "$PWD/datasets/train_pdb_subset.yaml" \
+    --backend "$BACKEND" \
+    --output-root "$RESULTS_ROOT" \
+    --warmup-steps 10 \
+    --measure-steps 400 \
+    --devices "$GPUS_PER_NODE" \
+    --num-nodes "$NNODES" \
+    --num-workers 4 \
+    --use-tf32 \
+    --seed 42
+done
+
+pixi run -e openfold3-cuda12 plot-backend-comparison \
+  "$RESULTS_ROOT" \
+  --baseline aqlab
+```
+
+The three backends run one after another inside the same allocation, on the
+same nodes, and the plot is produced on the batch host once the loop finishes.
+`--num-workers 4` lets each rank featurize the next sample while the GPU works
+on the current one; without it the GPU idles during featurization and every
+step waits for the slowest rank's data. Keep the value identical for every
+backend and for any single-node run you compare against, and keep
+`--cpus-per-task` at least one larger than it.
+
+The result layout matches the single-node comparison, with two additions:
+`summary.json` records `"topology": "multi-node-ddp"` and `"num_nodes": 2`,
+and the plot titles report the world size, here 16 GPUs. Compare backends only
+within the same node and GPU count; a rerun into an existing `RESULTS_ROOT`
+stops with `benchmark output already exists`, so rename or delete the directory
+first.
+
+To benchmark a single node under Slurm, submit the same script with
+`--nodes=1`, `NNODES=1`, and `benchmark-single-node`.
+
+##### Train on Two Nodes
+
+Configure `datasets/train_pdb_subset.${BACKEND}.yaml` as in the previous
+section (`epoch_len: 6400`, `devices: 8`, `num_nodes: 2`, `max_steps: 400`).
+Save this as `/shared/openfold3-run/train_2x8.sbatch` and run
+`sbatch /shared/openfold3-run/train_2x8.sbatch`:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=of3-stablefold-2x8
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=8
+#SBATCH --gres=gpu:8
+#SBATCH --cpus-per-task=6
+#SBATCH --time=12:00:00
+#SBATCH --output=/shared/openfold3-run/slurm-%j.out
+
+set -euo pipefail
+
+export BACKEND=stablefold
+export PATH="$HOME/.pixi/bin:$PATH"
+export OF3_RUN_CWD=/shared/openfold3-run
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
+# export NCCL_SOCKET_IFNAME=eth0   # only if NCCL picks the wrong interface
+
+cd /shared/openfold3_triangle_kernel
+export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"
+
+srun --kill-on-bad-exit=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" \
+  pixi run -e openfold3-cuda12 train-single-node \
+  train \
+  --runner-yaml "$RUNNER_YAML" \
+  --seed 42
+```
+
+`train-single-node` is the plain `run_openfold` launcher. Under `srun` it
+starts once per task, and Lightning joins the sixteen tasks into one DDP group.
+`--cpus-per-task=6` covers `num_workers: 4` plus the training process.
+
+##### Smoke Test Before the Full Run
+
+First check that the StableFold receipt round-trips across nodes with one GPU
+per node. Create a one-step YAML:
+
+```bash
+cd /shared/openfold3_triangle_kernel
+export BACKEND=stablefold
+
+pixi run -e openfold3-cuda12 select-training-backend \
+  datasets/train_pdb_subset.yaml \
+  --backend "$BACKEND" \
+  --single-gpu-smoke \
+  --output "datasets/two_node_smoke.${BACKEND}.yaml"
+```
+
+Set `num_nodes: 2` and `epoch_len: 2` in that YAML. Copy `train_2x8.sbatch`,
+change it to `--ntasks-per-node=1`, `--gres=gpu:1`, and
+`RUNNER_YAML="$PWD/datasets/two_node_smoke.${BACKEND}.yaml"`, and submit it.
+
+##### Verify
+
+A run passes when the job exits zero and the receipt written by rank 0 reports
+`PASS` with one hostname per rank:
+
+```bash
+grep '"status"' /shared/openfold3-run/<output_dir>/logs/stablefold_kernel_ddp.json
+grep -c '"hostname"' /shared/openfold3-run/<output_dir>/logs/stablefold_kernel_ddp.json
+```
+
+The hostname count equals the world size: `16` for the full run and `2` for
+the smoke test, whose `output_dir` is `openfold3_smoke_stablefold`. For a
+benchmark, the receipt sits under `$RESULTS_ROOT/<backend>/logs/`.
+
+##### Alternative: One `torchrun` per Node
+
+To keep the `train-multinode` task, run one task per node and let Slurm supply
+the node rank and master address:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=of3-stablefold-2x8-torchrun
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:8
+#SBATCH --cpus-per-task=40
+#SBATCH --time=12:00:00
+#SBATCH --output=/shared/openfold3-run/slurm-%j.out
+
+set -euo pipefail
+
+export BACKEND=stablefold
+export PATH="$HOME/.pixi/bin:$PATH"
+export OF3_RUN_CWD=/shared/openfold3-run
+export MASTER_ADDR="$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)"
+export MASTER_PORT=29500
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
+
+cd /shared/openfold3_triangle_kernel
+export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"
+
+srun --kill-on-bad-exit=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" bash -c '
+  pixi run -e openfold3-cuda12 train-multinode \
+    --nnodes="$SLURM_NNODES" \
+    --nproc-per-node=8 \
+    --node-rank="$SLURM_NODEID" \
+    --master-addr="$MASTER_ADDR" \
+    --master-port="$MASTER_PORT" \
+    --module openfold3.run_openfold \
+    train \
+    --runner-yaml "$RUNNER_YAML" \
+    --seed 42
+'
+```
+
+Keep the single quotes: `SLURM_NODEID` differs per task and must expand inside
+the task shell. The benchmark tool accepts this launcher too; rank 0 is taken
+from the `RANK` that `torchrun` exports.
+
+##### Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| Lightning: `devices` or `num_nodes` `does not match` | Align `--ntasks-per-node` and `--nodes` with the YAML or with `--devices` and `--num-nodes`. |
+| `multiple DDP ranks are bound to the same physical CUDA device` | Remove `--gpus-per-task` and `--gpu-bind`. |
+| Every task prints its own progress bar and no receipt appears | The runner YAML still has `devices: 1` and `num_nodes: 1`, so each task trains alone. Set both values. |
+| `benchmark output already exists` | Rename or delete `$RESULTS_ROOT/<backend>` before rerunning. |
+| `StableFold kernel receipt readback hash mismatch` | The run directory is not consistent across nodes. Mount NFS with `actimeo=0` or use Lustre or GPFS. |
+| NCCL hangs at startup | Set `NCCL_SOCKET_IFNAME` to the interface that reaches the other node. |
 
 ## Fine-tuning
 

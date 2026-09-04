@@ -524,6 +524,10 @@ benchmark-single-node.cmd = [
     "bash",
     "tools/run_backend_benchmark.sh",
 ]
+benchmark-multinode.cmd = [
+    "bash",
+    "tools/run_backend_benchmark.sh",
+]
 plot-backend-comparison.cmd = [
     "python",
     "tools/plot_backend_comparison.py",

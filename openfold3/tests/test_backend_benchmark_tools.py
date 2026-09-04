@@ -9,7 +9,10 @@ from tools.benchmark_training_backend import (
     aggregate_rank_metrics,
     configure_benchmark,
     configure_torch_backend_for_training,
+    has_benchmark_results,
     is_source_tree_import,
+    owns_benchmark_output,
+    topology_name,
 )
 from tools.plot_backend_comparison import build_report
 
@@ -68,6 +71,64 @@ def test_benchmark_config_is_matched_validation_free_training(tmp_path):
     assert train_memory["use_stable_triangle_attention"] is True
     assert train_memory["use_stable_triangle_multiplicative"] is True
     assert train_memory["use_cueq_triangle_kernels"] is False
+
+
+def test_multi_node_benchmark_config_scales_epoch_len_by_world_size(tmp_path):
+    configured = configure_benchmark(
+        {},
+        backend="stablefold",
+        output_dir=tmp_path / "stablefold",
+        warmup_steps=10,
+        measure_steps=400,
+        seed=42,
+        num_workers=4,
+        devices=8,
+        num_nodes=2,
+    )
+
+    assert configured["pl_trainer_args"]["devices"] == 8
+    assert configured["pl_trainer_args"]["num_nodes"] == 2
+    assert configured["pl_trainer_args"]["max_steps"] == 410
+    assert configured["data_module_args"]["epoch_len"] == 410 * 16
+    assert configured["data_module_args"]["num_workers"] == 4
+
+
+def test_topology_name_distinguishes_single_gpu_node_and_multi_node():
+    assert topology_name(1, 1) == "single-gpu"
+    assert topology_name(8, 1) == "single-node-ddp"
+    assert topology_name(16, 2) == "multi-node-ddp"
+
+
+def test_benchmark_output_owner_is_global_rank_zero_under_each_launcher():
+    # Single process, or the parent of Lightning's local launcher.
+    assert owns_benchmark_output({})
+    # Lightning-spawned local worker: LOCAL_RANK without RANK.
+    assert not owns_benchmark_output({"LOCAL_RANK": "1"})
+    assert not owns_benchmark_output({"LOCAL_RANK": "0"})
+    # torchrun sets RANK on every worker, including rank zero.
+    assert owns_benchmark_output({"RANK": "0", "LOCAL_RANK": "0"})
+    assert not owns_benchmark_output({"RANK": "9", "LOCAL_RANK": "1"})
+    # srun with one task per GPU sets SLURM_PROCID on every task.
+    slurm = {"SLURM_NTASKS": "16", "SLURM_PROCID": "0", "SLURM_LOCALID": "0"}
+    assert owns_benchmark_output(slurm)
+    assert not owns_benchmark_output({**slurm, "SLURM_PROCID": "8"})
+    # One srun task hosting Lightning's local launcher: the parent owns.
+    assert owns_benchmark_output({"SLURM_NTASKS": "1", "SLURM_PROCID": "0"})
+    assert not owns_benchmark_output(
+        {"SLURM_NTASKS": "1", "SLURM_PROCID": "0", "LOCAL_RANK": "3"}
+    )
+
+
+def test_result_check_ignores_directories_created_by_other_ranks(tmp_path):
+    output = tmp_path / "stablefold"
+    assert not has_benchmark_results(output)
+    # Under srun, other ranks create the log directory and the DDP receipt
+    # before rank 0 finishes importing; that must not count as a prior result.
+    (output / "logs").mkdir(parents=True)
+    (output / "logs" / "stablefold_kernel_ddp.json").write_text("{}")
+    assert not has_benchmark_results(output)
+    (output / "summary.json").write_text("{}")
+    assert has_benchmark_results(output)
 
 
 def _write_result(root: Path, backend: str, seconds: float, losses: list[float]):

@@ -36,8 +36,14 @@ def configure_benchmark(
     seed: int,
     num_workers: int,
     devices: int,
+    num_nodes: int = 1,
 ) -> dict[str, Any]:
-    """Make a validation-free, single-node, from-scratch benchmark config."""
+    """Make a validation-free, from-scratch benchmark config for one topology.
+
+    ``devices`` is the GPU count per node and ``num_nodes`` the node count;
+    ``epoch_len`` scales with the world size so every topology runs the same
+    number of optimizer steps at a per-GPU batch size of one.
+    """
 
     total_steps = warmup_steps + measure_steps
     configure_training_backend(config, backend=backend)
@@ -52,7 +58,7 @@ def configure_benchmark(
         data_seed=seed,
         num_workers=num_workers,
         num_workers_validation=0,
-        epoch_len=total_steps * devices,
+        epoch_len=total_steps * devices * num_nodes,
     )
     config.setdefault("logging_config", {}).update(
         wandb_config=None,
@@ -65,7 +71,7 @@ def configure_benchmark(
     )
     config.setdefault("pl_trainer_args", {}).update(
         devices=devices,
-        num_nodes=1,
+        num_nodes=num_nodes,
         precision="bf16-mixed",
         accumulate_grad_batches=1,
         deepspeed_config_path=None,
@@ -121,6 +127,46 @@ def aggregate_rank_metrics(
     return world_size
 
 
+def topology_name(world_size: int, num_nodes: int) -> str:
+    """Name the DDP topology recorded in ``summary.json``."""
+
+    if num_nodes > 1:
+        return "multi-node-ddp"
+    return "single-gpu" if world_size == 1 else "single-node-ddp"
+
+
+_RESULT_FILES = ("runner.yaml", "steps.csv", "summary.json")
+
+
+def has_benchmark_results(output_dir: Path) -> bool:
+    """Return whether a previous benchmark already wrote results here.
+
+    Only the result files count. Under ``srun`` every rank creates
+    ``output_dir/logs`` during setup while rank 0 may still be importing, so
+    testing for an empty directory would race against the other ranks.
+    """
+
+    return any((output_dir / name).is_file() for name in _RESULT_FILES)
+
+
+def owns_benchmark_output(environ: Mapping[str, str]) -> bool:
+    """Return whether this process checks and writes the benchmark output.
+
+    Exactly one process per benchmark may own the output directory:
+
+    * Lightning's local launcher spawns workers that carry ``LOCAL_RANK`` but
+      no ``RANK``; the parent process, global rank 0, owns the output.
+    * ``torchrun`` sets ``RANK`` on every worker, including rank 0.
+    * ``srun`` sets ``SLURM_PROCID`` on every task when it starts more than one.
+    """
+
+    if "RANK" in environ:
+        return environ["RANK"] == "0"
+    if "SLURM_PROCID" in environ and int(environ.get("SLURM_NTASKS", "1")) > 1:
+        return environ["SLURM_PROCID"] == "0"
+    return "LOCAL_RANK" not in environ
+
+
 def is_source_tree_import(module_path: Path, source_root: Path) -> bool:
     """Return whether OpenFold3 was imported from source instead of a wheel."""
 
@@ -151,6 +197,8 @@ class BackendBenchmarkCallback(pl.Callback):
         warmup_steps: int,
         measure_steps: int,
         global_batch_size: int,
+        devices_per_node: int = 1,
+        num_nodes: int = 1,
     ) -> None:
         super().__init__()
         self.backend = backend
@@ -158,6 +206,8 @@ class BackendBenchmarkCallback(pl.Callback):
         self.warmup_steps = warmup_steps
         self.measure_steps = measure_steps
         self.global_batch_size = global_batch_size
+        self.devices_per_node = devices_per_node
+        self.num_nodes = num_nodes
         self.starts: list[torch.cuda.Event] = []
         self.ends: list[torch.cuda.Event] = []
         self.recorded: list[bool] = []
@@ -268,6 +318,13 @@ class BackendBenchmarkCallback(pl.Callback):
             wall_tensor,
         )
 
+        expected_world_size = self.devices_per_node * self.num_nodes
+        if world_size != expected_world_size:
+            raise RuntimeError(
+                f"benchmark world size {world_size} does not match "
+                f"--devices {self.devices_per_node} x --num-nodes {self.num_nodes}"
+            )
+
         if not trainer.is_global_zero:
             return
 
@@ -301,9 +358,9 @@ class BackendBenchmarkCallback(pl.Callback):
         summary = {
             "schema_version": 2,
             "backend": self.backend,
-            "topology": "single-gpu" if world_size == 1 else "single-node-ddp",
-            "devices": world_size,
-            "num_nodes": 1,
+            "topology": topology_name(world_size, self.num_nodes),
+            "devices": self.devices_per_node,
+            "num_nodes": self.num_nodes,
             "world_size": world_size,
             "warmup_steps": self.warmup_steps,
             "measure_steps": self.measure_steps,
@@ -347,7 +404,16 @@ def _parser() -> argparse.ArgumentParser:
         "--devices",
         type=int,
         default=1,
-        help="GPUs on this node; Lightning launches local DDP when greater than one",
+        help="GPUs per node; Lightning launches local DDP when greater than one",
+    )
+    parser.add_argument(
+        "--num-nodes",
+        type=int,
+        default=1,
+        help=(
+            "Nodes in the job; above one, an external launcher (srun or torchrun) "
+            "must already have started --devices processes on every node"
+        ),
     )
     return parser
 
@@ -362,6 +428,8 @@ def main() -> None:
         raise ValueError("--num-workers must be non-negative")
     if args.devices < 1:
         raise ValueError("--devices must be at least 1")
+    if args.num_nodes < 1:
+        raise ValueError("--num-nodes must be at least 1")
 
     source_root = Path(__file__).resolve().parents[1]
     import openfold3
@@ -376,8 +444,8 @@ def main() -> None:
 
     runner_yaml = args.runner_yaml.resolve()
     output_dir = (args.output_root.resolve() / args.backend)
-    is_ddp_worker = "LOCAL_RANK" in os.environ
-    if output_dir.exists() and any(output_dir.iterdir()) and not is_ddp_worker:
+    output_owner = owns_benchmark_output(os.environ)
+    if output_owner and has_benchmark_results(output_dir):
         raise FileExistsError(f"benchmark output already exists: {output_dir}")
 
     runner_dict = config_utils.load_yaml(runner_yaml)
@@ -390,8 +458,9 @@ def main() -> None:
         seed=args.seed,
         num_workers=args.num_workers,
         devices=args.devices,
+        num_nodes=args.num_nodes,
     )
-    if not is_ddp_worker:
+    if output_owner:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "runner.yaml").write_text(
             yaml.safe_dump(runner_dict, sort_keys=False, default_flow_style=False)
@@ -403,7 +472,9 @@ def main() -> None:
         output_dir=output_dir,
         warmup_steps=args.warmup_steps,
         measure_steps=args.measure_steps,
-        global_batch_size=args.devices,
+        global_batch_size=args.devices * args.num_nodes,
+        devices_per_node=args.devices,
+        num_nodes=args.num_nodes,
     )
 
     class BenchmarkRunner(TrainingExperimentRunner):
