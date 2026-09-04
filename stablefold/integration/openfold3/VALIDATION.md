@@ -7,6 +7,22 @@ The package build and clean-install result below was obtained only after
 `4098f42b` fixed source-tree shadowing in the smoke test. It must not be
 attributed to the earlier `fe78ee99` documentation commit.
 
+## Audited 0.1.0 artifact refresh
+
+The checked-in wheel was rebuilt from clean source commit
+`0b85b535f7ab81ee81c66848ca7bd5c9133879d2` after correcting packaged
+README and NOTICE claims. The build directory-to-wheel interval was 8 min
+15 s. The clean-install smoke passed with no compiler on `PATH` and JIT
+forbidden; all 15 package-contract tests passed. The resulting wheel SHA256
+is `1c7d63bf5ea11276f23bed42d2d12705f1e140bcf87c33dfdf3ca62bd2ea3ecf`.
+
+No CUDA source or build flag changed in this refresh. Compared with the
+previous checked-in wheel, `cuobjdump --dump-sass` output for all five
+extensions was identical after normalizing only NVCC's generated anonymous-
+namespace hash in function symbols. TriMul SASS was identical without that
+normalization. This is an artifact-metadata refresh, not a kernel or numerical
+change.
+
 ## Package
 
 | Check | Result |
