@@ -1,7 +1,8 @@
 # Upstream provenance
 
 - Upstream repository: <https://github.com/aqlaboratory/openfold-3>
-- Upstream base commit: `c615a7f8d0e7bb04095a35ec6dc7b30192ac19d3`
+- Upstream base commit: `e47adbf95448956574603c9e8eb703cbb0c3bb0b`
+- Upstream synchronization merge: `60867fb6f0d1949cfe0ade01fb8e458cee1aeab8`
 - Source development repository: <https://github.com/RyanAIResearch/hammer_inference_engine>
 - Source production-candidate commit: `6db02ff4b31e87bfced98331b22613e96e8ced37`
 - Curated repository: <https://github.com/RyanAIResearch/openfold3_triangle_kernel>
