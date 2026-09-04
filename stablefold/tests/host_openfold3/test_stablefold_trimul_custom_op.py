@@ -24,14 +24,14 @@ from torch._subclasses.fake_tensor import FakeTensorMode
 from stablefold import stablefold_trimul as stable
 
 _FORWARD_SCHEMA = (
-    "openfold3_stablefold::_trimul_fwd_v1(Tensor z_bf, Tensor mask_f, "
+    "stablefold::_trimul_fwd_v1(Tensor z_bf, Tensor mask_f, "
     "Tensor w_ap, Tensor w_ag, Tensor w_bp, Tensor w_bg, Tensor w_g, "
     "Tensor w_z, Tensor g_in, Tensor b_in, Tensor g_out, Tensor b_out, "
     "bool outgoing, bool save_state) -> (Tensor, Tensor, Tensor, Tensor, "
     "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
 )
 _BACKWARD_SCHEMA = (
-    "openfold3_stablefold::_trimul_bwd_v1(Tensor grad_out, Tensor z_bf, "
+    "stablefold::_trimul_bwd_v1(Tensor grad_out, Tensor z_bf, "
     "Tensor mask_f, Tensor z_ln, Tensor gate, Tensor a, Tensor b, Tensor x, "
     "Tensor xlnT, Tensor mean_in, Tensor rstd_in, Tensor mean_out, "
     "Tensor rstd_out, Tensor w_ap, Tensor w_ag, Tensor w_bp, Tensor w_bg, "
@@ -151,10 +151,8 @@ def _assert_pairwise_no_alias(tensors: tuple[torch.Tensor, ...]) -> None:
 
 
 def test_schema_and_fake_kernels_are_extension_lazy():
-    assert str(torch.ops.openfold3_stablefold._trimul_fwd_v1.default._schema) == (
-        _FORWARD_SCHEMA
-    )
-    assert str(torch.ops.openfold3_stablefold._trimul_bwd_v1.default._schema) == (
+    assert str(torch.ops.stablefold._trimul_fwd_v1.default._schema) == (_FORWARD_SCHEMA)
+    assert str(torch.ops.stablefold._trimul_bwd_v1.default._schema) == (
         _BACKWARD_SCHEMA
     )
     assert "Tensor(" not in _FORWARD_SCHEMA
@@ -854,9 +852,9 @@ def test_h100_dynamic_sequence_export_save_load_preserves_versioned_target(tmp_p
     custom_targets = [
         str(node.target)
         for node in exported.graph.nodes
-        if node.op == "call_function" and "openfold3_stablefold" in str(node.target)
+        if node.op == "call_function" and "stablefold" in str(node.target)
     ]
-    assert custom_targets == ["openfold3_stablefold._trimul_fwd_v1.default"]
+    assert custom_targets == ["stablefold._trimul_fwd_v1.default"]
 
     artifact = tmp_path / "stablefold_trimul_dynamic.pt2"
     torch.export.save(exported, artifact)

@@ -9,7 +9,7 @@ pytorch-lightning 2.6.1. Date: 2026-09-04.
 | --- | --- |
 | `tools/build_sm90_wheel.sh` | wheel built in 9.5 min; clean-install smoke (no compiler on PATH, JIT forbidden) passed |
 | CPU tests: packaging, distributed contract, gloo preflight | 36 passed |
-| GPU tests: attention facade, workspace planner, TriMul C++ contract | 64 passed |
+| GPU tests: attention facade, workspace planner, TriMul C++ contract | 57 passed |
 | `tests/test_numerics_vs_fp64.py` | 10 passed: StableFold error at or below the stock BF16 path, bitwise replay, exact zeros on fully masked planes |
 
 ## Host patch on upstream `aqlaboratory/openfold-3` e47adbf
@@ -22,6 +22,7 @@ pytorch-lightning 2.6.1. Date: 2026-09-04.
 | `TriangleMultiplicationOutgoing` with `use_stable_triangle_multiplicative=True` | N=128 routed to the package; N=64 fell back to stock with one warning |
 | Model config with both flags on | accepted by the upstream config validator |
 | `run_openfold train`, one BF16 step, PDB subset, crop 384 | `max_steps=1` reached; 360 StableFold attention invocations in the step; zero fallback messages |
+| `tests/host_openfold3/` (routing, TriMul custom op, support, offload, diffusion scope) against the patched upstream | 218 passed |
 
 ## Not yet validated
 

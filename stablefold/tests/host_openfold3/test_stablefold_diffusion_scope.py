@@ -7,8 +7,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import openfold3
+
 MODEL_PATH = (
-    Path(__file__).resolve().parents[1] / "projects" / "of3_all_atom" / "model.py"
+    Path(openfold3.__file__).resolve().parent / "projects" / "of3_all_atom" / "model.py"
 )
 
 

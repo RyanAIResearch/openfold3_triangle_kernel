@@ -59,10 +59,13 @@ SMOKE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/stablefold-smoke.XXXXXX")"
 trap 'chmod -R u+w "$SMOKE_ROOT" 2>/dev/null; rm -rf "$SMOKE_ROOT"' EXIT
 "$PYTHON_BIN" -m zipfile -e "$WHEEL" "$SMOKE_ROOT/site"
 chmod -R a-w "$SMOKE_ROOT/site"
+# Run from the smoke root with -P so the checkout's own ``stablefold/`` source
+# tree (cwd) cannot shadow the extracted wheel on sys.path.
+cd "$SMOKE_ROOT"
 env -u STABLEFOLD_ALLOW_JIT -u OPENFOLD3_TRIANGLE_ALLOW_JIT \
   PATH="$SMOKE_ROOT" PYTHONPATH="$SMOKE_ROOT/site" PYTHONDONTWRITEBYTECODE=1 \
   CUDA_HOME=/nonexistent TORCH_EXTENSIONS_DIR="$SMOKE_ROOT/no-jit-cache" \
-  "$PYTHON_BIN" - <<'PY'
+  "$PYTHON_BIN" -P - <<'PY'
 import json
 import stablefold
 from stablefold._aot_runtime import distributed_aot_identity
@@ -73,4 +76,5 @@ identity = distributed_aot_identity(
 print(json.dumps({"version": stablefold.__version__, "git": identity["git"],
                   "extensions": sorted(identity["extensions"])}, indent=2))
 PY
+cd "$SOURCE_ROOT"
 echo "$SOURCE_ROOT/$WHEEL"
