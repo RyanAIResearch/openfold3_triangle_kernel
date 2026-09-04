@@ -1,10 +1,14 @@
 import csv
 import json
+import pickle
+from functools import partial
 from pathlib import Path
 
+import pytest
 import torch
 import yaml
 
+from tools.benchmark_full_crop import require_full_crop_collate
 from tools.benchmark_training_backend import (
     aggregate_rank_metrics,
     configure_benchmark,
@@ -13,6 +17,7 @@ from tools.benchmark_training_backend import (
     is_source_tree_import,
     owns_benchmark_output,
     topology_name,
+    training_crop_budget,
 )
 from tools.plot_backend_comparison import build_report
 
@@ -65,9 +70,7 @@ def test_benchmark_config_is_matched_validation_free_training(tmp_path):
     assert configured["pl_trainer_args"]["limit_val_batches"] == 0
     assert configured["pl_trainer_args"]["num_sanity_val_steps"] == 0
     assert configured["pl_trainer_args"]["enable_progress_bar"] is True
-    train_memory = configured["model_update"]["custom"]["settings"]["memory"][
-        "train"
-    ]
+    train_memory = configured["model_update"]["custom"]["settings"]["memory"]["train"]
     assert train_memory["use_stable_triangle_attention"] is True
     assert train_memory["use_stable_triangle_multiplicative"] is True
     assert train_memory["use_cueq_triangle_kernels"] is False
@@ -91,6 +94,72 @@ def test_multi_node_benchmark_config_scales_epoch_len_by_world_size(tmp_path):
     assert configured["pl_trainer_args"]["max_steps"] == 410
     assert configured["data_module_args"]["epoch_len"] == 410 * 16
     assert configured["data_module_args"]["num_workers"] == 4
+
+
+def test_triton_benchmark_uses_ten_workers_and_only_triton_route(tmp_path):
+    configured = configure_benchmark(
+        {},
+        backend="triton",
+        output_dir=tmp_path / "triton",
+        warmup_steps=5,
+        measure_steps=20,
+        seed=42,
+        num_workers=10,
+        devices=2,
+    )
+
+    assert configured["data_module_args"]["num_workers"] == 10
+    train_memory = configured["model_update"]["custom"]["settings"]["memory"]["train"]
+    assert train_memory["use_triton_triangle_kernels"] is True
+    assert train_memory["use_cueq_triangle_kernels"] is False
+    assert train_memory["use_stable_triangle_attention"] is False
+    assert train_memory["use_stable_triangle_multiplicative"] is False
+
+
+def test_full_crop_gate_accepts_real_tokens_and_rejects_padding():
+    def collator(samples):
+        return samples[0]
+
+    full = {"pdb_id": ["full"], "token_mask": torch.ones(1, 768)}
+    assert (
+        require_full_crop_collate([full], collator=collator, expected_tokens=768)
+        is full
+    )
+
+    padded = {
+        "pdb_id": ["padded"],
+        "token_mask": torch.cat((torch.ones(1, 767), torch.zeros(1, 1)), dim=-1),
+    }
+    with pytest.raises(RuntimeError, match="would use token padding"):
+        require_full_crop_collate([padded], collator=collator, expected_tokens=768)
+
+
+def test_full_crop_gate_function_is_forkserver_pickleable():
+    from openfold3.core.data.framework.data_module import openfold_batch_collator
+
+    collator = partial(
+        require_full_crop_collate,
+        collator=openfold_batch_collator,
+        expected_tokens=768,
+    )
+    restored = pickle.loads(pickle.dumps(collator))
+    assert restored.func is require_full_crop_collate
+    assert restored.keywords["collator"] is openfold_batch_collator
+
+
+def test_full_crop_gate_requires_one_enabled_training_budget():
+    config = {
+        "dataset_configs": {
+            "train": {
+                "pdb": {
+                    "config": {
+                        "crop": {"token_crop": {"enabled": True, "token_budget": 640}}
+                    }
+                }
+            }
+        }
+    }
+    assert training_crop_budget(config) == 640
 
 
 def test_topology_name_distinguishes_single_gpu_node_and_multi_node():
@@ -171,6 +240,8 @@ def _write_result(root: Path, backend: str, seconds: float, losses: list[float])
 def test_comparison_writes_tables_and_loss_timing_plots(tmp_path):
     results = tmp_path / "results"
     _write_result(results, "aqlab", 2.0, [10.0, 9.0, 8.0])
+    _write_result(results, "triton", 1.5, [10.0, 8.95, 7.95])
+    _write_result(results, "cueq", 1.25, [10.0, 8.92, 7.92])
     _write_result(results, "stablefold", 1.0, [10.0, 8.9, 7.9])
     output = results / "comparison"
 
@@ -179,6 +250,12 @@ def test_comparison_writes_tables_and_loss_timing_plots(tmp_path):
     by_backend = {row["backend"]: row for row in report["backends"]}
     assert by_backend["aqlab"]["speedup_vs_baseline"] == 1.0
     assert by_backend["stablefold"]["speedup_vs_baseline"] == 2.0
+    assert [row["backend"] for row in report["backends"]] == [
+        "aqlab",
+        "triton",
+        "cueq",
+        "stablefold",
+    ]
     assert report["world_size"] == 4
     assert report["gpu_name"] == "NVIDIA H100 80GB HBM3"
     assert (output / "backend_comparison.csv").is_file()

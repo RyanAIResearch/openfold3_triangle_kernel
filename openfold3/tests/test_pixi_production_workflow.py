@@ -101,6 +101,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         "purify-pdb-subset",
         "prepare-training-data",
         "prepare-pdb-subset",
+        "prepare-crop-benchmark-data",
         "setup-pdb-subset",
         "setup-stablefold-h100",
         "verify-aot",
@@ -122,9 +123,10 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
     assert commands["benchmark-single-node"][-1] == "tools/run_backend_benchmark.sh"
     assert commands["benchmark-multinode"][-1] == "tools/run_backend_benchmark.sh"
     assert commands["prepare-pdb-subset"][-1] == "tools/prepare_pdb_subset.py"
-    assert commands["validate-training-data"][-1] == (
-        "tools/validate_training_data.py"
+    assert commands["prepare-crop-benchmark-data"][-1] == (
+        "tools/prepare_crop_benchmark_data.py"
     )
+    assert commands["validate-training-data"][-1] == ("tools/validate_training_data.py")
     assert commands["plot-backend-comparison"][-1] == (
         "tools/plot_backend_comparison.py"
     )
@@ -150,9 +152,7 @@ def test_h100_user_docs_use_normal_pixi_commands():
 
 
 def test_multinode_quickstart_uses_existing_runner_and_shared_rw_run_dir():
-    text = (
-        REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
-    ).read_text()
+    text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
     assert "mkdir -p /shared/openfold3-run" in text
     assert "test -r /shared/openfold3-run && test -w /shared/openfold3-run" in text
     assert 'export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"' in text
@@ -162,9 +162,7 @@ def test_multinode_quickstart_uses_existing_runner_and_shared_rw_run_dir():
 
 
 def test_bare_metal_benchmark_prepares_compact_subset_atomically():
-    text = (
-        REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
-    ).read_text()
+    text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
     assert text.count("--train-size 512") == 1
     assert "prepare-pdb-subset" in text
     assert "validate-training-data" in text
@@ -175,9 +173,7 @@ def test_bare_metal_benchmark_prepares_compact_subset_atomically():
 
 
 def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
-    text = (
-        REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md"
-    ).read_text()
+    text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
     assert text.count("mkdir -p ../openfold3-run") >= 4
     assert "export DEVICES=8" in text
     assert "export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7" in text
