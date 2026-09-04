@@ -140,8 +140,7 @@ class StableFoldTriangleWorkspaceTest(unittest.TestCase):
 
     def test_cuda_source_owns_a_fixed_non_atomic_left_fold(self):
         source = (
-            Path(__file__).parents[3]
-            / "core/kernels/cuda/stablefold_triangle_dq_dbias.cu"
+            Path(__file__).parents[1] / "stablefold/stablefold_triangle_dq_dbias.cu"
         ).read_text()
         self.assertIn("root = __fadd_rn", source)
         # The final wave may contain fewer leaves than the resident capacity.
@@ -158,8 +157,7 @@ class StableFoldTriangleWorkspaceTest(unittest.TestCase):
 
     def test_sr_query_stripes_preserve_fp32_dkdv_continuation(self):
         source = (
-            Path(__file__).parents[3]
-            / "core/kernels/cuda/stablefold_triangle_dq_dbias.cu"
+            Path(__file__).parents[1] / "stablefold/stablefold_triangle_dq_dbias.cu"
         ).read_text()
         self.assertIn("float* __restrict__ dk_continuation", source)
         self.assertIn("float* __restrict__ dv_continuation", source)

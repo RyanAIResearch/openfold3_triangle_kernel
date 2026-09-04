@@ -1,6 +1,837 @@
+diff --git a/openfold3/core/model/heads/head_modules.py b/openfold3/core/model/heads/head_modules.py
+index 4db7985..069c5cb 100644
+--- a/openfold3/core/model/heads/head_modules.py
++++ b/openfold3/core/model/heads/head_modules.py
+@@ -98,6 +98,7 @@ class AuxiliaryHeadsAllAtom(nn.Module):
+         chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+@@ -208,6 +209,7 @@ class AuxiliaryHeadsAllAtom(nn.Module):
+             chunk_size=chunk_size,
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+diff --git a/openfold3/core/model/heads/prediction_heads.py b/openfold3/core/model/heads/prediction_heads.py
+index b3d4f87..94a87b5 100644
+--- a/openfold3/core/model/heads/prediction_heads.py
++++ b/openfold3/core/model/heads/prediction_heads.py
+@@ -123,6 +123,7 @@ class PairformerEmbedding(nn.Module):
+         chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+@@ -155,6 +156,7 @@ class PairformerEmbedding(nn.Module):
+                 chunk_size=chunk_size,
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+@@ -185,6 +187,7 @@ class PairformerEmbedding(nn.Module):
+         chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+@@ -215,6 +218,7 @@ class PairformerEmbedding(nn.Module):
+         use_kernels = (
+             use_deepspeed_evo_attention
+             or use_cueq_triangle_kernels
++            or use_stable_triangle_attention
+             or use_triton_triangle_kernels
+         )
+         if use_kernels and si.shape[0] > 1:
+@@ -230,6 +234,7 @@ class PairformerEmbedding(nn.Module):
+                 chunk_size=chunk_size,
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+@@ -252,6 +257,7 @@ class PairformerEmbedding(nn.Module):
+         chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+@@ -341,6 +347,7 @@ class PairformerEmbedding(nn.Module):
+                 chunk_size=chunk_size,
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+@@ -359,6 +366,7 @@ class PairformerEmbedding(nn.Module):
+                 chunk_size=chunk_size,
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+diff --git a/openfold3/core/model/latent/base_blocks.py b/openfold3/core/model/latent/base_blocks.py
+index c8e8ecf..d81242d 100644
+--- a/openfold3/core/model/latent/base_blocks.py
++++ b/openfold3/core/model/latent/base_blocks.py
+@@ -207,6 +207,7 @@ class MSABlock(nn.Module, ABC):
+         transition_ckpt_chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+@@ -312,10 +313,20 @@ class PairBlock(nn.Module):
+         pair_mask: torch.Tensor,
+         inplace_safe: bool,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+     ) -> torch.Tensor:
+         """Perform the outgoing and incoming triangular multiplicative updates."""
+-        inplace_safe = inplace_safe and (not use_cueq_triangle_kernels)
++        # StableFold owns the trimul site when enabled; cuEq keeps other sites.
++        use_cueq_triangle_kernels = (
++            use_cueq_triangle_kernels and not use_stable_triangle_multiplicative
++        )
++        inplace_safe = (
++            inplace_safe
++            and (not use_cueq_triangle_kernels)
++            and (not use_stable_triangle_multiplicative)
++        )
+         ## VS: having both inplace_safe and use_cueq_triangle_kernels set to
+         ## true causes `z = z + self.ps_dropout_row_layer(tmu_update)` below
+         ## to be skipped, as this is the expected output of tri_mult w/ inplace
+@@ -329,6 +340,7 @@ class PairBlock(nn.Module):
+             _add_with_inplace=True,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+         )
+         if not inplace_safe:
+             z = z + self.ps_dropout_row_layer(tmu_update)
+@@ -347,6 +359,7 @@ class PairBlock(nn.Module):
+             _add_with_inplace=True,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+         )
+         if not inplace_safe:
+             z = z + self.ps_dropout_row_layer(tmu_update)
+@@ -363,6 +376,7 @@ class PairBlock(nn.Module):
+         use_deepspeed_evo_attention: bool,
+         use_cueq_triangle_kernels: bool,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+     ) -> torch.Tensor:
+@@ -377,6 +391,7 @@ class PairBlock(nn.Module):
+                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                     use_triton_triangle_kernels=use_triton_triangle_kernels,
++                    use_stable_triangle_attention=use_stable_triangle_attention,
+                     use_lma=use_lma,
+                     inplace_safe=inplace_safe,
+                 )
+@@ -399,6 +414,7 @@ class PairBlock(nn.Module):
+                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                     use_triton_triangle_kernels=use_triton_triangle_kernels,
++                    use_stable_triangle_attention=use_stable_triangle_attention,
+                     use_lma=use_lma,
+                     inplace_safe=inplace_safe,
+                 )
+@@ -418,6 +434,8 @@ class PairBlock(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -462,6 +480,7 @@ class PairBlock(nn.Module):
+             inplace_safe=inplace_safe,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+         )
+ 
+         z = self.tri_att_start_end(
+@@ -471,6 +490,7 @@ class PairBlock(nn.Module):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+         )
+diff --git a/openfold3/core/model/latent/base_stacks.py b/openfold3/core/model/latent/base_stacks.py
+index 4d8e1b2..9c099bc 100644
+--- a/openfold3/core/model/latent/base_stacks.py
++++ b/openfold3/core/model/latent/base_stacks.py
+@@ -84,6 +84,8 @@ class MSAStack(nn.Module, ABC):
+         use_deepspeed_evo_attention: bool,
+         use_cueq_triangle_kernels: bool,
+         use_triton_triangle_kernels: bool,
++        use_stable_triangle_attention: bool,
++        use_stable_triangle_multiplicative: bool,
+         use_lma: bool,
+         msa_mask: torch.Tensor | None,
+         pair_mask: torch.Tensor | None,
+@@ -107,6 +109,8 @@ class MSAStack(nn.Module, ABC):
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
++                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+                 _mask_trans=_mask_trans,
+@@ -180,7 +184,9 @@ class MSAStack(nn.Module, ABC):
+         transition_ckpt_chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         _mask_trans: bool = True,
+     ):
+@@ -196,6 +202,8 @@ class MSAStack(nn.Module, ABC):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=False,
++            use_stable_triangle_multiplicative=(use_stable_triangle_multiplicative),
+             use_lma=use_lma,
+             msa_mask=msa_mask,
+             pair_mask=pair_mask,
+@@ -229,6 +237,8 @@ class MSAStack(nn.Module, ABC):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -264,6 +274,11 @@ class MSAStack(nn.Module, ABC):
+             z:
+                 [*, N_res, N_res, C_z] pair embedding
+         """
++        if use_stable_triangle_attention and chunk_size is not None:
++            raise ValueError(
++                "stable Triangle Attention does not support chunked MSA stacks"
++            )
++
+         blocks = self._prep_blocks(
+             m=m,
+             z=z,
+@@ -272,6 +287,8 @@ class MSAStack(nn.Module, ABC):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+             use_lma=use_lma,
+             msa_mask=msa_mask,
+             pair_mask=pair_mask,
+diff --git a/openfold3/core/model/latent/evoformer.py b/openfold3/core/model/latent/evoformer.py
+index 6aeec71..498e4bb 100644
+--- a/openfold3/core/model/latent/evoformer.py
++++ b/openfold3/core/model/latent/evoformer.py
+@@ -96,6 +96,7 @@ class EvoformerBlock(MSABlock):
+         transition_ckpt_chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+@@ -138,6 +139,7 @@ class EvoformerBlock(MSABlock):
+                     chunk_size=_attn_chunk_size,
+                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                    use_stable_triangle_attention=use_stable_triangle_attention,
+                     use_triton_triangle_kernels=use_triton_triangle_kernels,
+                     use_lma=use_lma,
+                 )
+@@ -167,6 +169,7 @@ class EvoformerBlock(MSABlock):
+                     chunk_size=chunk_size,
+                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                    use_stable_triangle_attention=use_stable_triangle_attention,
+                     use_triton_triangle_kernels=use_triton_triangle_kernels,
+                     use_lma=use_lma,
+                 ),
+@@ -218,6 +221,7 @@ class EvoformerBlock(MSABlock):
+             chunk_size=chunk_size,
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+diff --git a/openfold3/core/model/latent/msa_module.py b/openfold3/core/model/latent/msa_module.py
+index f9fadcc..f2692e2 100644
+--- a/openfold3/core/model/latent/msa_module.py
++++ b/openfold3/core/model/latent/msa_module.py
+@@ -157,6 +157,8 @@ class MSAModuleBlock(MSABlock):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -164,6 +166,11 @@ class MSAModuleBlock(MSABlock):
+         _offload_inference: bool = False,
+         _offloadable_inputs: Sequence[torch.Tensor] | None = None,
+     ) -> tuple[torch.Tensor, torch.Tensor]:
++        if use_stable_triangle_attention and _offload_inference:
++            raise ValueError(
++                "stable Triangle Attention does not support MSA inference offload"
++            )
++
+         msa_trans_mask = msa_mask if _mask_trans else None
+ 
+         if _attn_chunk_size is None:
+@@ -264,6 +271,8 @@ class MSAModuleBlock(MSABlock):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+             _mask_trans=_mask_trans,
+diff --git a/openfold3/core/model/latent/pairformer.py b/openfold3/core/model/latent/pairformer.py
+index 84bccb2..4531d4a 100644
+--- a/openfold3/core/model/latent/pairformer.py
++++ b/openfold3/core/model/latent/pairformer.py
+@@ -129,6 +129,8 @@ class PairFormerBlock(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -183,6 +185,8 @@ class PairFormerBlock(nn.Module):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+             _mask_trans=_mask_trans,
+@@ -196,7 +200,8 @@ class PairFormerBlock(nn.Module):
+                 a=s,
+                 z=z,
+                 mask=single_mask,
+-                use_high_precision_attention=True,
++                use_stable_triangle_attention=use_stable_triangle_attention,
++                use_high_precision_attention=not use_stable_triangle_attention,
+             ),
+             inplace=inplace_safe,
+         )
+@@ -327,6 +332,8 @@ class PairFormerStack(nn.Module):
+         use_deepspeed_evo_attention: bool,
+         use_cueq_triangle_kernels: bool,
+         use_triton_triangle_kernels: bool,
++        use_stable_triangle_attention: bool,
++        use_stable_triangle_multiplicative: bool,
+         use_lma: bool,
+         inplace_safe: bool,
+         _mask_trans: bool,
+@@ -348,6 +355,8 @@ class PairFormerStack(nn.Module):
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
++                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+                 _mask_trans=_mask_trans,
+@@ -406,6 +415,8 @@ class PairFormerStack(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -442,6 +453,11 @@ class PairFormerStack(nn.Module):
+             z:
+                 [*, N_token, N_token, C_z] Pair embedding
+         """
++        if use_stable_triangle_attention and chunk_size is not None:
++            raise ValueError(
++                "stable Triangle Attention does not support chunked Pairformer stacks"
++            )
++
+         blocks = self._prep_blocks(
+             s=s,
+             z=z,
+@@ -451,6 +467,8 @@ class PairFormerStack(nn.Module):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+             _mask_trans=_mask_trans,
+diff --git a/openfold3/core/model/latent/template_module.py b/openfold3/core/model/latent/template_module.py
+index f65049a..8a54ff4 100644
+--- a/openfold3/core/model/latent/template_module.py
++++ b/openfold3/core/model/latent/template_module.py
+@@ -116,6 +116,8 @@ class TemplatePairBlock(PairBlock):
+         use_deepspeed_evo_attention: bool,
+         use_cueq_triangle_kernels: bool,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -133,12 +135,14 @@ class TemplatePairBlock(PairBlock):
+                     pair_mask=mask,
+                     inplace_safe=inplace_safe,
+                     use_triton_triangle_kernels=use_triton_triangle_kernels,
++                    use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                 ),
+                 _attn_chunk_size=_attn_chunk_size,
+                 pair_mask=mask,
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+             )
+@@ -151,12 +155,14 @@ class TemplatePairBlock(PairBlock):
+                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                     use_triton_triangle_kernels=use_triton_triangle_kernels,
++                    use_stable_triangle_attention=use_stable_triangle_attention,
+                     use_lma=use_lma,
+                     inplace_safe=inplace_safe,
+                 ),
+                 pair_mask=mask,
+                 inplace_safe=inplace_safe,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+             )
+ 
+         t = add(
+@@ -179,6 +185,8 @@ class TemplatePairBlock(PairBlock):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -224,6 +232,8 @@ class TemplatePairBlock(PairBlock):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+             _mask_trans=_mask_trans,
+@@ -368,6 +378,8 @@ class TemplatePairStack(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -380,6 +392,8 @@ class TemplatePairStack(nn.Module):
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
++                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+                 _mask_trans=_mask_trans,
+@@ -402,6 +416,7 @@ class TemplatePairStack(nn.Module):
+                 use_cueq_triangle_kernels
+                 or use_triton_triangle_kernels
+                 or use_deepspeed_evo_attention
++                or use_stable_triangle_attention
+             )
+             tuned_chunk_size = self.chunk_size_tuner.tune_chunk_size(
+                 representative_fn=blocks[0],
+@@ -430,6 +445,8 @@ class TemplatePairStack(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         _mask_trans: bool = True,
+@@ -470,6 +487,8 @@ class TemplatePairStack(nn.Module):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+             _mask_trans=_mask_trans,
+@@ -521,6 +540,8 @@ class TemplateEmbedderAllAtom(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+     ) -> torch.Tensor:
+@@ -583,6 +604,8 @@ class TemplateEmbedderAllAtom(nn.Module):
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
++                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+                 _mask_trans=_mask_trans,
+@@ -608,6 +631,8 @@ class TemplateEmbedderAllAtom(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+     ) -> torch.Tensor:
+@@ -625,6 +650,8 @@ class TemplateEmbedderAllAtom(nn.Module):
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
++            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+             use_lma=use_lma,
+             inplace_safe=inplace_safe,
+             _mask_trans=_mask_trans,
+@@ -642,6 +669,8 @@ class TemplateEmbedderAllAtom(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+         offload_inference: bool = False,
+@@ -687,6 +716,8 @@ class TemplateEmbedderAllAtom(nn.Module):
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
++                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+             )
+@@ -700,6 +731,8 @@ class TemplateEmbedderAllAtom(nn.Module):
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
++                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                 use_lma=use_lma,
+                 inplace_safe=inplace_safe,
+             )
+diff --git a/openfold3/core/model/layers/attention_pair_bias.py b/openfold3/core/model/layers/attention_pair_bias.py
+index 8e68051..96994d5 100644
+--- a/openfold3/core/model/layers/attention_pair_bias.py
++++ b/openfold3/core/model/layers/attention_pair_bias.py
+@@ -150,6 +150,7 @@ class AttentionPairBias(nn.Module):
+         mask: torch.Tensor | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+         use_high_precision_attention: bool = False,
+@@ -185,6 +186,7 @@ class AttentionPairBias(nn.Module):
+         batch_dims = a.shape[:-2]
+         reshape_for_ds_kernel = (
+             use_deepspeed_evo_attention
++            or use_stable_triangle_attention
+             or use_cueq_triangle_kernels
+             or use_triton_triangle_kernels
+         ) and len(batch_dims) == 1
+@@ -198,6 +200,7 @@ class AttentionPairBias(nn.Module):
+             biases=biases,
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
+             use_lma=use_lma,
+             use_high_precision=use_high_precision_attention,
+diff --git a/openfold3/core/model/layers/msa.py b/openfold3/core/model/layers/msa.py
+index 5edac75..d74e2fa 100644
+--- a/openfold3/core/model/layers/msa.py
++++ b/openfold3/core/model/layers/msa.py
+@@ -110,6 +110,7 @@ class MSAAttention(nn.Module):
+         chunk_size: int,
+         use_deepspeed_evo_attention: bool,
+         use_cueq_triangle_kernels: bool,
++        use_stable_triangle_attention: bool,
+         use_triton_triangle_kernels: bool,
+         use_lma: bool,
+     ) -> torch.Tensor:
+@@ -121,6 +122,7 @@ class MSAAttention(nn.Module):
+                 biases=biases,
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                 use_lma=use_lma,
+             )
+@@ -234,6 +236,7 @@ class MSAAttention(nn.Module):
+         chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+@@ -278,6 +281,7 @@ class MSAAttention(nn.Module):
+                 chunk_size,
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                 use_lma=use_lma,
+             )
+@@ -289,6 +293,7 @@ class MSAAttention(nn.Module):
+                 biases=biases,
+                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                 use_lma=use_lma,
+             )
+@@ -389,6 +394,7 @@ class MSAColumnAttention(nn.Module):
+         chunk_size: int | None = None,
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_triton_triangle_kernels: bool = False,
+         use_lma: bool = False,
+     ) -> torch.Tensor:
+@@ -414,6 +420,7 @@ class MSAColumnAttention(nn.Module):
+             chunk_size=chunk_size,
+             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
++            use_stable_triangle_attention=use_stable_triangle_attention,
+             use_triton_triangle_kernels=use_triton_triangle_kernels,
+             use_lma=use_lma,
+         )
+diff --git a/openfold3/core/model/layers/triangular_attention.py b/openfold3/core/model/layers/triangular_attention.py
+index 65a24bb..9a449ef 100644
+--- a/openfold3/core/model/layers/triangular_attention.py
++++ b/openfold3/core/model/layers/triangular_attention.py
+@@ -111,6 +111,7 @@ class TriangleAttention(nn.Module):
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_lma: bool = False,
+         inplace_safe: bool = False,
+     ) -> torch.Tensor:
+@@ -146,6 +147,32 @@ class TriangleAttention(nn.Module):
+             [*, I, J, C_in] output tensor
+         """
+ 
++        if use_stable_triangle_attention:
++            if self.c_hidden not in (16, 32) or self.no_heads < 1:
++                raise ValueError(
++                    "stable Triangle Attention production requires c_hidden in "
++                    "(16, 32) and no_heads >= 1"
++                )
++            if chunk_size is not None:
++                raise ValueError(
++                    "stable Triangle Attention does not support chunked attention"
++                )
++            if any(
++                (
++                    use_deepspeed_evo_attention,
++                    use_triton_triangle_kernels,
++                    use_lma,
++                )
++            ):
++                raise ValueError(
++                    "stable Triangle Attention is mutually exclusive with all "
++                    "other attention backends"
++                )
++            # use_cueq_triangle_kernels composes: it keeps governing the
++            # non-attention triangle kernels (multiplicative update), while
++            # stable Triangle Attention owns the attention site.
++            use_cueq_triangle_kernels = False
++
+         if mask is None:
+             # [*, I, J]
+             mask = x.new_ones(
+@@ -193,6 +220,7 @@ class TriangleAttention(nn.Module):
+                 use_lma=use_lma,
+                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                 use_triton_triangle_kernels=use_triton_triangle_kernels,
++                use_stable_triangle_attention=use_stable_triangle_attention,
+             )
+ 
+         if not self.starting:
+diff --git a/openfold3/core/model/layers/triangular_multiplicative_update.py b/openfold3/core/model/layers/triangular_multiplicative_update.py
+index 59636b2..c99d95f 100644
+--- a/openfold3/core/model/layers/triangular_multiplicative_update.py
++++ b/openfold3/core/model/layers/triangular_multiplicative_update.py
+@@ -20,6 +20,7 @@ Triangle multiplicative update layers. Includes TriangleMultiplicativeUpdate fro
+ and FusedTriangleMultiplicativeUpdate from AF2-Multimer.
+ """
+ 
++import logging
+ import warnings
+ from abc import ABC, abstractmethod
+ from functools import partialmethod
+@@ -49,6 +50,51 @@ _TRITON_UNAVAILABLE_ERROR = (
+     "installed with Triton support."
+ )
+ 
++_STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
++
++
++def _route_stable_trimul(module, z, mask):
++    """Return ``(selected, output)`` without swallowing fast-path failures."""
++    from stablefold.policy import (
++        stablefold_distributed_strict_enabled,
++    )
++
++    # The callback freezes this policy before the first forward and audits the
++    # source environment at epoch boundaries; this hot-path getter is read-only.
++    strict = stablefold_distributed_strict_enabled()
++
++    from stablefold.stablefold_trimul_support import (
++        check_stable_trimul_support,
++    )
++
++    support = check_stable_trimul_support(module, z, mask)
++    if support:
++        from stablefold.stablefold_trimul import (
++            _run_supported_stable_trimul,
++        )
++
++        return True, _run_supported_stable_trimul(module, z, mask)
++
++    if strict and support.code != "sequence_stock_fallback":
++        raise RuntimeError(
++            "StableFold distributed strict route rejected a TriMul fallback "
++            f"for {type(module).__qualname__} at shape {tuple(z.shape)} "
++            f"[{support.code}]: {support.reason}"
++        )
++
++    key = (type(module).__qualname__, support.code)
++    if key not in _STABLEFOLD_TRIMUL_FALLBACK_LOGGED:
++        _STABLEFOLD_TRIMUL_FALLBACK_LOGGED.add(key)
++        logging.getLogger(__name__).warning(
++            "StableFold TriMul fallback to stock for %s at shape %s [%s]: %s",
++            type(module).__qualname__,
++            tuple(z.shape),
++            support.code,
++            support.reason,
++        )
++    return False, None
++
++
+ warnings.filterwarnings("once")
+ 
+ if TRITON_AVAILABLE:
+@@ -1109,6 +1155,7 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
+         inplace_safe: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         _add_with_inplace: bool = False,
+         _inplace_chunk_size: int | None = 256,
+     ) -> torch.Tensor:
+@@ -1121,6 +1168,15 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
+         Returns:
+             [*, N_res, N_res, C_z] output tensor
+         """
++        if use_stable_triangle_multiplicative:
++            stable_selected, stable_output = _route_stable_trimul(self, z, mask)
++            if stable_selected:
++                return stable_output
++            # A StableFold request owns this TriMul site. Unsupported metadata
++            # falls back specifically to stock PyTorch, never another backend.
++            use_cueq_triangle_kernels = False
++            use_triton_triangle_kernels = False
++
+         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
+             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
+ 
+@@ -1401,6 +1457,7 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
+         inplace_safe: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         _add_with_inplace: bool = False,
+         _inplace_chunk_size: int | None = 256,
+     ) -> torch.Tensor:
+@@ -1413,6 +1470,15 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
+         Returns:
+             [*, N_res, N_res, C_z] output tensor
+         """
++        if use_stable_triangle_multiplicative:
++            stable_selected, stable_output = _route_stable_trimul(self, z, mask)
++            if stable_selected:
++                return stable_output
++            # A StableFold request owns this TriMul site. Unsupported metadata
++            # falls back specifically to stock PyTorch, never another backend.
++            use_cueq_triangle_kernels = False
++            use_triton_triangle_kernels = False
++
+         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
+             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
+ 
+diff --git a/openfold3/core/model/primitives/attention.py b/openfold3/core/model/primitives/attention.py
+index b9e0ee0..2acd66c 100644
 --- a/openfold3/core/model/primitives/attention.py
 +++ b/openfold3/core/model/primitives/attention.py
-@@ -22,6 +22,7 @@
+@@ -22,6 +22,7 @@ Optimizations such as LMA and DeepSpeed EvoformerAttention are included.
  """
  
  import importlib
@@ -8,7 +839,7 @@
  import math
  import os
  import warnings
-@@ -82,6 +83,8 @@
+@@ -82,6 +83,8 @@ if cueq_is_installed:
          return False
  
  
@@ -17,7 +848,7 @@
  DEFAULT_LMA_Q_CHUNK_SIZE = 1024
  DEFAULT_LMA_KV_CHUNK_SIZE = 4096
  
-@@ -91,6 +94,17 @@
+@@ -91,6 +94,17 @@ DEFAULT_LMA_KV_CHUNK_SIZE = 4096
  _ZERO_PAIR_BIAS_CACHE: dict = {}
  
  
@@ -35,7 +866,7 @@
  def _get_zero_pair_bias(
      device: torch.device, dtype: torch.dtype, B: int, H: int, L: int
  ) -> torch.Tensor:
-@@ -346,6 +360,7 @@
+@@ -346,6 +360,7 @@ class Attention(nn.Module):
          use_deepspeed_evo_attention: bool = False,
          use_cueq_triangle_kernels: bool = False,
          use_triton_triangle_kernels: bool = False,
@@ -43,7 +874,7 @@
          use_lma: bool = False,
          lma_q_chunk_size: int = DEFAULT_LMA_Q_CHUNK_SIZE,
          lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
-@@ -369,6 +384,11 @@
+@@ -369,6 +384,11 @@ class Attention(nn.Module):
              use_triton_triangle_kernels:
                  Whether to use Triton-based memory-efficient attention kernel.
                  Mutually exclusive with other kernel options.
@@ -55,7 +886,7 @@
              use_lma:
                  Whether to use low-memory attention (Staats & Rabe 2021). If
                  none of the "use_<...>" flags are True, a stock PyTorch
-@@ -389,6 +409,20 @@
+@@ -389,6 +409,20 @@ class Attention(nn.Module):
                  "lma_kv_chunk_size must be provided"
              )
  
@@ -76,7 +907,7 @@
          if cueq_is_installed and use_cueq_triangle_kernels:
              # cuEquivariance -> Torch fallback for small sequence length and some shapes
              use_fall_back = cueq_would_fall_back(
-@@ -409,7 +443,8 @@
+@@ -409,7 +443,8 @@ class Attention(nn.Module):
          attn_options = [
              use_deepspeed_evo_attention
              or use_cueq_triangle_kernels
@@ -86,7 +917,7 @@
              use_lma,
              use_high_precision,
          ]
-@@ -419,7 +454,40 @@
+@@ -419,7 +454,40 @@ class Attention(nn.Module):
          if biases is None:
              biases = []
  
@@ -128,7 +959,7 @@
          q, k, v = self._prep_qkv(
              q_x,
              kv_x,
-@@ -427,11 +495,54 @@
+@@ -427,11 +495,54 @@ class Attention(nn.Module):
                  use_deepspeed_evo_attention
                  or use_cueq_triangle_kernels
                  or use_triton_triangle_kernels
@@ -185,145 +1016,11 @@
              if not cueq_is_installed:
                  raise ValueError(
                      "Running with `use_cueq_triangle_kernels` but package is not "
---- a/openfold3/core/model/layers/triangular_multiplicative_update.py
-+++ b/openfold3/core/model/layers/triangular_multiplicative_update.py
-@@ -20,6 +20,7 @@
- and FusedTriangleMultiplicativeUpdate from AF2-Multimer.
- """
- 
-+import logging
- import warnings
- from abc import ABC, abstractmethod
- from functools import partialmethod
-@@ -49,6 +50,51 @@
-     "installed with Triton support."
- )
- 
-+_STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
-+
-+
-+def _route_stable_trimul(module, z, mask):
-+    """Return ``(selected, output)`` without swallowing fast-path failures."""
-+    from stablefold.policy import (
-+        stablefold_distributed_strict_enabled,
-+    )
-+
-+    # The callback freezes this policy before the first forward and audits the
-+    # source environment at epoch boundaries; this hot-path getter is read-only.
-+    strict = stablefold_distributed_strict_enabled()
-+
-+    from stablefold.stablefold_trimul_support import (
-+        check_stable_trimul_support,
-+    )
-+
-+    support = check_stable_trimul_support(module, z, mask)
-+    if support:
-+        from stablefold.stablefold_trimul import (
-+            _run_supported_stable_trimul,
-+        )
-+
-+        return True, _run_supported_stable_trimul(module, z, mask)
-+
-+    if strict and support.code != "sequence_stock_fallback":
-+        raise RuntimeError(
-+            "StableFold distributed strict route rejected a TriMul fallback "
-+            f"for {type(module).__qualname__} at shape {tuple(z.shape)} "
-+            f"[{support.code}]: {support.reason}"
-+        )
-+
-+    key = (type(module).__qualname__, support.code)
-+    if key not in _STABLEFOLD_TRIMUL_FALLBACK_LOGGED:
-+        _STABLEFOLD_TRIMUL_FALLBACK_LOGGED.add(key)
-+        logging.getLogger(__name__).warning(
-+            "StableFold TriMul fallback to stock for %s at shape %s [%s]: %s",
-+            type(module).__qualname__,
-+            tuple(z.shape),
-+            support.code,
-+            support.reason,
-+        )
-+    return False, None
-+
-+
- warnings.filterwarnings("once")
- 
- if TRITON_AVAILABLE:
-@@ -1109,6 +1155,7 @@
-         inplace_safe: bool = False,
-         use_cueq_triangle_kernels: bool = False,
-         use_triton_triangle_kernels: bool = False,
-+        use_stable_triangle_multiplicative: bool = False,
-         _add_with_inplace: bool = False,
-         _inplace_chunk_size: int | None = 256,
-     ) -> torch.Tensor:
-@@ -1121,6 +1168,15 @@
-         Returns:
-             [*, N_res, N_res, C_z] output tensor
-         """
-+        if use_stable_triangle_multiplicative:
-+            stable_selected, stable_output = _route_stable_trimul(self, z, mask)
-+            if stable_selected:
-+                return stable_output
-+            # A StableFold request owns this TriMul site. Unsupported metadata
-+            # falls back specifically to stock PyTorch, never another backend.
-+            use_cueq_triangle_kernels = False
-+            use_triton_triangle_kernels = False
-+
-         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
-             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
- 
-@@ -1401,6 +1457,7 @@
-         inplace_safe: bool = False,
-         use_cueq_triangle_kernels: bool = False,
-         use_triton_triangle_kernels: bool = False,
-+        use_stable_triangle_multiplicative: bool = False,
-         _add_with_inplace: bool = False,
-         _inplace_chunk_size: int | None = 256,
-     ) -> torch.Tensor:
-@@ -1413,6 +1470,15 @@
-         Returns:
-             [*, N_res, N_res, C_z] output tensor
-         """
-+        if use_stable_triangle_multiplicative:
-+            stable_selected, stable_output = _route_stable_trimul(self, z, mask)
-+            if stable_selected:
-+                return stable_output
-+            # A StableFold request owns this TriMul site. Unsupported metadata
-+            # falls back specifically to stock PyTorch, never another backend.
-+            use_cueq_triangle_kernels = False
-+            use_triton_triangle_kernels = False
-+
-         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
-             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
- 
---- a/openfold3/projects/of3_all_atom/config/model_config.py
-+++ b/openfold3/projects/of3_all_atom/config/model_config.py
-@@ -103,6 +103,11 @@
-                     # Use Triton-based memory-efficient attention kernel. Mutually
-                     # exclusive with use_deepspeed_evo_attention and use_lma.
-                     "use_triton_triangle_kernels": False,
-+                    # StableFold: deterministic Hopper (sm_90a) Triangle Attention
-+                    # and TriMul kernels from the standalone `stablefold` package.
-+                    # Mutually exclusive with the other triangle kernel options.
-+                    "use_stable_triangle_attention": False,
-+                    "use_stable_triangle_multiplicative": False,
-                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
-                     # exclusive with use_deepspeed_evo_attention.
-                     "use_lma": False,
-@@ -117,6 +122,11 @@
-                     "use_deepspeed_evo_attention": False,
-                     "use_cueq_triangle_kernels": False,
-                     "use_triton_triangle_kernels": True,
-+                    # StableFold: deterministic Hopper (sm_90a) Triangle Attention
-+                    # and TriMul kernels from the standalone `stablefold` package.
-+                    # Mutually exclusive with the other triangle kernel options.
-+                    "use_stable_triangle_attention": False,
-+                    "use_stable_triangle_multiplicative": False,
-                     "use_lma": False,
-                     "msa_module": {
-                         "swiglu_chunk_token_cutoff": None,
+diff --git a/openfold3/entry_points/experiment_runner.py b/openfold3/entry_points/experiment_runner.py
+index 684c753..c53c651 100644
 --- a/openfold3/entry_points/experiment_runner.py
 +++ b/openfold3/entry_points/experiment_runner.py
-@@ -56,6 +56,31 @@
+@@ -56,6 +56,31 @@ from openfold3.core.utils.checkpoint_loading_utils import (
  )
  from openfold3.core.utils.precision_utils import OF3DeepSpeedPrecision
  from openfold3.core.utils.script_utils import set_ulimits
@@ -355,7 +1052,7 @@
  from openfold3.entry_points.validator import (
      ExperimentConfig,
      InferenceExperimentConfig,
-@@ -452,6 +477,20 @@
+@@ -452,6 +477,20 @@ class TrainingExperimentRunner(ExperimentRunner):
          # Currently used to sync the number of recycles across ranks
          self.model_config.update({"architecture": {"shared": {"sync_seed": self.seed}}})
  
@@ -376,7 +1073,7 @@
      @cached_property
      def data_module_config(self) -> DataModuleConfig:
          """Make a DataModuleConfig from self.dataset_paths and self.dataset_configs."""
-@@ -588,6 +627,25 @@
+@@ -588,6 +627,25 @@ class TrainingExperimentRunner(ExperimentRunner):
  
          _callbacks.append(RankSpecificSeedCallback(base_seed=self.seed))
  
@@ -402,3 +1099,140 @@
          _checkpoint = self.checkpoint_config
          if _checkpoint is not None:
              _callbacks.append(ModelCheckpoint(**_checkpoint.model_dump()))
+diff --git a/openfold3/projects/of3_all_atom/config/model_config.py b/openfold3/projects/of3_all_atom/config/model_config.py
+index dc65b2e..9c8c14b 100644
+--- a/openfold3/projects/of3_all_atom/config/model_config.py
++++ b/openfold3/projects/of3_all_atom/config/model_config.py
+@@ -103,6 +103,11 @@ model_config = mlc.ConfigDict(
+                     # Use Triton-based memory-efficient attention kernel. Mutually
+                     # exclusive with use_deepspeed_evo_attention and use_lma.
+                     "use_triton_triangle_kernels": False,
++                    # StableFold: deterministic Hopper (sm_90a) Triangle Attention
++                    # and TriMul kernels from the standalone `stablefold` package.
++                    # Mutually exclusive with the other triangle kernel options.
++                    "use_stable_triangle_attention": False,
++                    "use_stable_triangle_multiplicative": False,
+                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
+                     # exclusive with use_deepspeed_evo_attention.
+                     "use_lma": False,
+@@ -117,6 +122,11 @@ model_config = mlc.ConfigDict(
+                     "use_deepspeed_evo_attention": False,
+                     "use_cueq_triangle_kernels": False,
+                     "use_triton_triangle_kernels": True,
++                    # StableFold: deterministic Hopper (sm_90a) Triangle Attention
++                    # and TriMul kernels from the standalone `stablefold` package.
++                    # Mutually exclusive with the other triangle kernel options.
++                    "use_stable_triangle_attention": False,
++                    "use_stable_triangle_multiplicative": False,
+                     "use_lma": False,
+                     "msa_module": {
+                         "swiglu_chunk_token_cutoff": None,
+diff --git a/openfold3/projects/of3_all_atom/model.py b/openfold3/projects/of3_all_atom/model.py
+index 951e159..6109585 100644
+--- a/openfold3/projects/of3_all_atom/model.py
++++ b/openfold3/projects/of3_all_atom/model.py
+@@ -194,6 +194,35 @@ class OpenFold3(nn.Module):
+                 [*, N_token, N_token, C_z] Pair representation
+         """
+         mode_mem_settings = self._get_mode_mem_settings()
++        use_stable_triangle_attention = bool(
++            mode_mem_settings.get("use_stable_triangle_attention", False)
++        )
++        use_stable_triangle_multiplicative = bool(
++            mode_mem_settings.get("use_stable_triangle_multiplicative", False)
++        )
++
++        if use_stable_triangle_attention:
++            # use_cueq_triangle_kernels composes: it keeps accelerating the
++            # non-attention triangle kernels (multiplicative update) while
++            # stable Triangle Attention owns the attention site.
++            conflicting_backends = [
++                name
++                for name in (
++                    "use_deepspeed_evo_attention",
++                    "use_triton_triangle_kernels",
++                    "use_lma",
++                )
++                if mode_mem_settings.get(name, False)
++            ]
++            if conflicting_backends:
++                raise ValueError(
++                    "use_stable_triangle_attention is mutually exclusive with: "
++                    + ", ".join(conflicting_backends)
++                )
++            if mode_mem_settings.chunk_size is not None:
++                raise ValueError(
++                    "use_stable_triangle_attention requires chunk_size=None"
++                )
+ 
+         offload_msa_module = self._do_inference_offload(
+             seq_len=batch["token_mask"].shape[-1],
+@@ -205,6 +234,13 @@ class OpenFold3(nn.Module):
+             module_name=OffloadModules.TEMPLATE_MODULE.value,
+         )
+ 
++        if use_stable_triangle_attention and (
++            offload_msa_module or offload_template_module
++        ):
++            raise ValueError(
++                "use_stable_triangle_attention does not support inference offload"
++            )
++
+         s_input, s_init, z_init = self.input_embedder(
+             batch=batch,
+             inplace_safe=inplace_safe,
+@@ -250,6 +286,8 @@ class OpenFold3(nn.Module):
+                         use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
+                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
+                         use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
++                        use_stable_triangle_attention=use_stable_triangle_attention,
++                        use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                         use_lma=mode_mem_settings.use_lma,
+                         inplace_safe=inplace_safe,
+                         offload_inference=offload_template_module,
+@@ -282,6 +320,9 @@ class OpenFold3(nn.Module):
+                         use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
+                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
+                         use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
++                        use_stable_triangle_multiplicative=(
++                            use_stable_triangle_multiplicative
++                        ),
+                         use_lma=mode_mem_settings.use_lma,
+                         _mask_trans=True,
+                     )
+@@ -298,6 +339,8 @@ class OpenFold3(nn.Module):
+                         use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
+                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
+                         use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
++                        use_stable_triangle_attention=use_stable_triangle_attention,
++                        use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                         use_lma=mode_mem_settings.use_lma,
+                         inplace_safe=inplace_safe,
+                         _mask_trans=True,
+@@ -315,6 +358,8 @@ class OpenFold3(nn.Module):
+                     use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
+                     use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
+                     use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
++                    use_stable_triangle_attention=use_stable_triangle_attention,
++                    use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                     use_lma=mode_mem_settings.use_lma,
+                     inplace_safe=inplace_safe,
+                     _mask_trans=True,
+@@ -404,6 +449,7 @@ class OpenFold3(nn.Module):
+                 no_rollout_samples=no_rollout_samples,
+                 use_conditioning=True,
+                 chunk_size=mode_mem_settings.chunk_size,
++                # Diffusion remains on AQLab's original FP32 attention path.
+                 use_high_precision_attention=True,
+                 _mask_trans=True,
+             )
+@@ -431,6 +477,9 @@ class OpenFold3(nn.Module):
+                     use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
+                     use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
+                     use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
++                    use_stable_triangle_attention=bool(
++                        mode_mem_settings.get("use_stable_triangle_attention", False)
++                    ),
+                     use_lma=mode_mem_settings.use_lma,
+                     inplace_safe=inplace_safe,
+                     offload_inference=offload_confidence_heads,

@@ -315,8 +315,8 @@ def test_cpp_source_pins_device_and_cuda_error_contracts():
     source = (
         Path(__file__)
         .resolve()
-        .parents[3]
-        .joinpath("core/kernels/cuda/stablefold_trimul_cuda.cu")
+        .parents[1]
+        .joinpath("stablefold/stablefold_trimul_cuda.cu")
         .read_text()
     )
     assert source.count("CUDAGuard device_guard") == 8
