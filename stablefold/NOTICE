@@ -1,0 +1,12 @@
+StableFold Triangle Attention for OpenFold3
+Copyright 2026 RyanAIResearch contributors
+
+This product includes software developed by the OpenFold3 Team, the AlQuraishi
+Laboratory, the OpenFold consortium, Outpace Bio, Advanced Micro Devices,
+NVIDIA, and DeepMind contributors. The upstream source is available at:
+
+    https://github.com/aqlaboratory/openfold-3
+
+The upstream base and the source development revision used for this derivative
+are recorded in UPSTREAM.md. This NOTICE is informational and does not modify
+the terms of the Apache License, Version 2.0.

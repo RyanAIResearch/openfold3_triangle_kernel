@@ -1,0 +1,404 @@
+--- a/openfold3/core/model/primitives/attention.py
++++ b/openfold3/core/model/primitives/attention.py
+@@ -22,6 +22,7 @@
+ """
+ 
+ import importlib
++import logging
+ import math
+ import os
+ import warnings
+@@ -82,6 +83,8 @@
+         return False
+ 
+ 
++_STABLEFOLD_FALLBACK_LOGGED: set = set()
++
+ DEFAULT_LMA_Q_CHUNK_SIZE = 1024
+ DEFAULT_LMA_KV_CHUNK_SIZE = 4096
+ 
+@@ -91,6 +94,17 @@
+ _ZERO_PAIR_BIAS_CACHE: dict = {}
+ 
+ 
++def _raise_if_strict_stablefold_fallback(reason: str, shape: tuple[int, ...]) -> None:
++    """Under the StableFold DDP strict policy an attention fallback is fatal."""
++    from stablefold.policy import stablefold_distributed_strict_enabled
++
++    if stablefold_distributed_strict_enabled():
++        raise RuntimeError(
++            "StableFold distributed strict route rejected an Attention fallback "
++            f"at shape {shape}: {reason}"
++        )
++
++
+ def _get_zero_pair_bias(
+     device: torch.device, dtype: torch.dtype, B: int, H: int, L: int
+ ) -> torch.Tensor:
+@@ -346,6 +360,7 @@
+         use_deepspeed_evo_attention: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_attention: bool = False,
+         use_lma: bool = False,
+         lma_q_chunk_size: int = DEFAULT_LMA_Q_CHUNK_SIZE,
+         lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
+@@ -369,6 +384,11 @@
+             use_triton_triangle_kernels:
+                 Whether to use Triton-based memory-efficient attention kernel.
+                 Mutually exclusive with other kernel options.
++            use_stable_triangle_attention:
++                Whether to use the StableFold deterministic Hopper (sm_90a)
++                Triangle Attention kernel from the ``stablefold`` package.
++                Takes precedence over cuEq/Triton and is mutually exclusive
++                with DeepSpeed, LMA, and high-precision attention.
+             use_lma:
+                 Whether to use low-memory attention (Staats & Rabe 2021). If
+                 none of the "use_<...>" flags are True, a stock PyTorch
+@@ -389,6 +409,20 @@
+                 "lma_kv_chunk_size must be provided"
+             )
+ 
++        # StableFold owns attention whenever its flag is on; a simultaneous
++        # cuEq/Triton request is ignored rather than treated as a conflict.
++        # Genuinely incompatible modes still raise.
++        if use_stable_triangle_attention:
++            use_cueq_triangle_kernels = False
++            use_triton_triangle_kernels = False
++        if use_stable_triangle_attention and any(
++            (use_deepspeed_evo_attention, use_lma, use_high_precision)
++        ):
++            raise ValueError(
++                "use_stable_triangle_attention is mutually exclusive with "
++                "use_deepspeed_evo_attention, use_lma, and use_high_precision"
++            )
++
+         if cueq_is_installed and use_cueq_triangle_kernels:
+             # cuEquivariance -> Torch fallback for small sequence length and some shapes
+             use_fall_back = cueq_would_fall_back(
+@@ -409,7 +443,8 @@
+         attn_options = [
+             use_deepspeed_evo_attention
+             or use_cueq_triangle_kernels
+-            or use_triton_triangle_kernels,
++            or use_triton_triangle_kernels
++            or use_stable_triangle_attention,
+             use_lma,
+             use_high_precision,
+         ]
+@@ -419,7 +454,40 @@
+         if biases is None:
+             biases = []
+ 
+-        # DeepSpeed, cuequivariance, and Triton kernels apply scaling internally
++        if use_stable_triangle_attention:
++            # Blanket-coverage soft gate, mirroring the cuEq fallback contract:
++            # shapes outside the StableFold facade fall back to the stock path
++            # (identical math, never a silent wrong result). Mask-only sites
++            # (e.g. MSA column attention) get the cached zero pair bias so the
++            # two-bias facade contract holds.
++            hidden_dim = q_x.shape[-1] // self.no_heads
++            if len(biases) == 1 and q_x.ndim >= 4:
++                lead = int(biases[0].shape[0]) if biases[0].ndim >= 1 else 1
++                zero_pb = _get_zero_pair_bias(
++                    q_x.device, torch.bfloat16, lead, self.no_heads, q_x.shape[-2]
++                )
++                while zero_pb.ndim < biases[0].ndim:
++                    zero_pb = zero_pb.unsqueeze(1)
++                biases = biases + [zero_pb]
++            blanket_reasons = []
++            if len(biases) != 2:
++                blanket_reasons.append("requires exactly two biases")
++            if not q_x.is_cuda:
++                blanket_reasons.append("requires CUDA inputs")
++            if hidden_dim > 64:
++                blanket_reasons.append("head dimension exceeds 64")
++            if q_x.shape[-2] < 2:
++                blanket_reasons.append("sequence length is below 2")
++            if q_x.is_cuda and torch.cuda.get_device_capability(q_x.device) != (9, 0):
++                blanket_reasons.append("requires Hopper compute capability 9.0")
++            if blanket_reasons:
++                _raise_if_strict_stablefold_fallback(
++                    "; ".join(blanket_reasons), tuple(q_x.shape)
++                )
++                use_stable_triangle_attention = False
++
++        # DeepSpeed, cuequivariance, Triton, and StableFold kernels apply
++        # scaling internally
+         q, k, v = self._prep_qkv(
+             q_x,
+             kv_x,
+@@ -427,11 +495,54 @@
+                 use_deepspeed_evo_attention
+                 or use_cueq_triangle_kernels
+                 or use_triton_triangle_kernels
++                or use_stable_triangle_attention
+             ),
+         )
+ 
+-        # cuequivariance kernel takes precedence over use_deepspeed_evo_attention
+-        if use_cueq_triangle_kernels:
++        if use_stable_triangle_attention:
++            # Explicit selection is fail-closed inside the facade (import,
++            # support, launch, and backward failures propagate unchanged);
++            # only shapes the facade rejects fall back to stock math, logged
++            # once per (reason, shape). fp32 call sites are served by a bf16
++            # cast, mirroring the Triton path.
++            from stablefold import (
++                is_triangle_attention_supported,
++                triangle_attention,
++            )
++
++            orig_dtype = q.dtype
++            if orig_dtype != torch.bfloat16:
++                q_s, k_s, v_s = (
++                    q.to(torch.bfloat16),
++                    k.to(torch.bfloat16),
++                    v.to(torch.bfloat16),
++                )
++                bias_s = [biases[0], biases[1].to(torch.bfloat16)]
++            else:
++                q_s, k_s, v_s = q, k, v
++                bias_s = biases
++            supported, reason = is_triangle_attention_supported(
++                q_s, k_s, v_s, bias_s[0], bias_s[1]
++            )
++            if supported:
++                o = triangle_attention(q_s, k_s, v_s, bias_s[0], bias_s[1])
++                if orig_dtype != torch.bfloat16:
++                    o = o.to(orig_dtype)
++            else:
++                _raise_if_strict_stablefold_fallback(reason, tuple(q.shape))
++                key = (reason, tuple(q.shape))
++                if key not in _STABLEFOLD_FALLBACK_LOGGED:
++                    _STABLEFOLD_FALLBACK_LOGGED.add(key)
++                    logging.getLogger(__name__).warning(
++                        "stablefold fallback to stock at shape %s: %s",
++                        tuple(q.shape),
++                        reason,
++                    )
++                o = _attention(q * (1.0 / math.sqrt(self.c_hidden)), k, v, biases)
++                o = o.transpose(-2, -3)
++        # cuequivariance kernel takes precedence over use_deepspeed_evo_attention.
++        # This chain must stay exclusive with the StableFold branch above.
++        elif use_cueq_triangle_kernels:
+             if not cueq_is_installed:
+                 raise ValueError(
+                     "Running with `use_cueq_triangle_kernels` but package is not "
+--- a/openfold3/core/model/layers/triangular_multiplicative_update.py
++++ b/openfold3/core/model/layers/triangular_multiplicative_update.py
+@@ -20,6 +20,7 @@
+ and FusedTriangleMultiplicativeUpdate from AF2-Multimer.
+ """
+ 
++import logging
+ import warnings
+ from abc import ABC, abstractmethod
+ from functools import partialmethod
+@@ -49,6 +50,51 @@
+     "installed with Triton support."
+ )
+ 
++_STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
++
++
++def _route_stable_trimul(module, z, mask):
++    """Return ``(selected, output)`` without swallowing fast-path failures."""
++    from stablefold.policy import (
++        stablefold_distributed_strict_enabled,
++    )
++
++    # The callback freezes this policy before the first forward and audits the
++    # source environment at epoch boundaries; this hot-path getter is read-only.
++    strict = stablefold_distributed_strict_enabled()
++
++    from stablefold.stablefold_trimul_support import (
++        check_stable_trimul_support,
++    )
++
++    support = check_stable_trimul_support(module, z, mask)
++    if support:
++        from stablefold.stablefold_trimul import (
++            _run_supported_stable_trimul,
++        )
++
++        return True, _run_supported_stable_trimul(module, z, mask)
++
++    if strict and support.code != "sequence_stock_fallback":
++        raise RuntimeError(
++            "StableFold distributed strict route rejected a TriMul fallback "
++            f"for {type(module).__qualname__} at shape {tuple(z.shape)} "
++            f"[{support.code}]: {support.reason}"
++        )
++
++    key = (type(module).__qualname__, support.code)
++    if key not in _STABLEFOLD_TRIMUL_FALLBACK_LOGGED:
++        _STABLEFOLD_TRIMUL_FALLBACK_LOGGED.add(key)
++        logging.getLogger(__name__).warning(
++            "StableFold TriMul fallback to stock for %s at shape %s [%s]: %s",
++            type(module).__qualname__,
++            tuple(z.shape),
++            support.code,
++            support.reason,
++        )
++    return False, None
++
++
+ warnings.filterwarnings("once")
+ 
+ if TRITON_AVAILABLE:
+@@ -1109,6 +1155,7 @@
+         inplace_safe: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         _add_with_inplace: bool = False,
+         _inplace_chunk_size: int | None = 256,
+     ) -> torch.Tensor:
+@@ -1121,6 +1168,15 @@
+         Returns:
+             [*, N_res, N_res, C_z] output tensor
+         """
++        if use_stable_triangle_multiplicative:
++            stable_selected, stable_output = _route_stable_trimul(self, z, mask)
++            if stable_selected:
++                return stable_output
++            # A StableFold request owns this TriMul site. Unsupported metadata
++            # falls back specifically to stock PyTorch, never another backend.
++            use_cueq_triangle_kernels = False
++            use_triton_triangle_kernels = False
++
+         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
+             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
+ 
+@@ -1401,6 +1457,7 @@
+         inplace_safe: bool = False,
+         use_cueq_triangle_kernels: bool = False,
+         use_triton_triangle_kernels: bool = False,
++        use_stable_triangle_multiplicative: bool = False,
+         _add_with_inplace: bool = False,
+         _inplace_chunk_size: int | None = 256,
+     ) -> torch.Tensor:
+@@ -1413,6 +1470,15 @@
+         Returns:
+             [*, N_res, N_res, C_z] output tensor
+         """
++        if use_stable_triangle_multiplicative:
++            stable_selected, stable_output = _route_stable_trimul(self, z, mask)
++            if stable_selected:
++                return stable_output
++            # A StableFold request owns this TriMul site. Unsupported metadata
++            # falls back specifically to stock PyTorch, never another backend.
++            use_cueq_triangle_kernels = False
++            use_triton_triangle_kernels = False
++
+         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
+             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
+ 
+--- a/openfold3/projects/of3_all_atom/config/model_config.py
++++ b/openfold3/projects/of3_all_atom/config/model_config.py
+@@ -103,6 +103,11 @@
+                     # Use Triton-based memory-efficient attention kernel. Mutually
+                     # exclusive with use_deepspeed_evo_attention and use_lma.
+                     "use_triton_triangle_kernels": False,
++                    # StableFold: deterministic Hopper (sm_90a) Triangle Attention
++                    # and TriMul kernels from the standalone `stablefold` package.
++                    # Mutually exclusive with the other triangle kernel options.
++                    "use_stable_triangle_attention": False,
++                    "use_stable_triangle_multiplicative": False,
+                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
+                     # exclusive with use_deepspeed_evo_attention.
+                     "use_lma": False,
+@@ -117,6 +122,11 @@
+                     "use_deepspeed_evo_attention": False,
+                     "use_cueq_triangle_kernels": False,
+                     "use_triton_triangle_kernels": True,
++                    # StableFold: deterministic Hopper (sm_90a) Triangle Attention
++                    # and TriMul kernels from the standalone `stablefold` package.
++                    # Mutually exclusive with the other triangle kernel options.
++                    "use_stable_triangle_attention": False,
++                    "use_stable_triangle_multiplicative": False,
+                     "use_lma": False,
+                     "msa_module": {
+                         "swiglu_chunk_token_cutoff": None,
+--- a/openfold3/entry_points/experiment_runner.py
++++ b/openfold3/entry_points/experiment_runner.py
+@@ -56,6 +56,31 @@
+ )
+ from openfold3.core.utils.precision_utils import OF3DeepSpeedPrecision
+ from openfold3.core.utils.script_utils import set_ulimits
++
++try:
++    # StableFold is an optional dependency, adopted like cuEquivariance: the
++    # kernels live in the standalone ``stablefold`` package and are selected
++    # through the ``use_stable_triangle_*`` memory settings.
++    from stablefold.distributed import (
++        StableFoldKernelDDPCallback,
++        stablefold_aot_modules_from_config,
++    )
++except ImportError:  # pragma: no cover - exercised only without the package
++    StableFoldKernelDDPCallback = None
++    stablefold_aot_modules_from_config = None
++
++
++def _stablefold_flags_requested(model_config) -> bool:
++    """Return whether any StableFold memory flag is enabled in the config."""
++    memory = model_config.settings.memory
++    return any(
++        bool(getattr(getattr(memory, mode, None), flag, False))
++        for mode in ("train", "eval")
++        for flag in (
++            "use_stable_triangle_attention",
++            "use_stable_triangle_multiplicative",
++        )
++    )
+ from openfold3.entry_points.validator import (
+     ExperimentConfig,
+     InferenceExperimentConfig,
+@@ -452,6 +477,20 @@
+         # Currently used to sync the number of recycles across ranks
+         self.model_config.update({"architecture": {"shared": {"sync_seed": self.seed}}})
+ 
++        if _stablefold_flags_requested(self.model_config):
++            if stablefold_aot_modules_from_config is None:
++                raise ImportError(
++                    "use_stable_triangle_* is enabled but the 'stablefold' package "
++                    "is not installed; install the stablefold sm_90a wheel"
++                )
++            if self.is_distributed and self.deepspeed_config_path is not None:
++                raise ValueError(
++                    "StableFold kernel multi-GPU preflight is qualified with "
++                    "DDPStrategy, not Lightning DeepSpeedStrategy/ZeRO. The "
++                    "use_deepspeed_evo_attention operator flag is independent "
++                    "of this strategy setting."
++                )
++
+     @cached_property
+     def data_module_config(self) -> DataModuleConfig:
+         """Make a DataModuleConfig from self.dataset_paths and self.dataset_configs."""
+@@ -588,6 +627,25 @@
+ 
+         _callbacks.append(RankSpecificSeedCallback(base_seed=self.seed))
+ 
++        stablefold_modules = (
++            stablefold_aot_modules_from_config(self.model_config)
++            if stablefold_aot_modules_from_config is not None
++            else ()
++        )
++        if self.is_distributed and stablefold_modules:
++            # Kernel-only DDP preflight: every rank must load the same attested
++            # StableFold binaries on a distinct full H100 before the first
++            # forward; rank 0 writes a receipt next to the logs.
++            _callbacks.append(
++                StableFoldKernelDDPCallback(
++                    expected_world_size=self.world_size,
++                    expected_num_nodes=self.num_nodes,
++                    expected_devices_per_node=self.num_gpus,
++                    expected_aot_modules=stablefold_modules,
++                    receipt_path=self.log_dir / "stablefold_kernel_ddp.json",
++                )
++            )
++
+         _checkpoint = self.checkpoint_config
+         if _checkpoint is not None:
+             _callbacks.append(ModelCheckpoint(**_checkpoint.model_dump()))
