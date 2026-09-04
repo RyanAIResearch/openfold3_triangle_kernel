@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import importlib.metadata
 import json
 import math
 import os
 import statistics
+import subprocess
 import time
 from collections.abc import Mapping
 from functools import cached_property
@@ -21,8 +23,10 @@ import torch
 import yaml
 
 try:
+    from tools.benchmark_full_crop import install_full_crop_collator
     from tools.select_training_backend import BACKEND_FLAGS, configure_training_backend
 except ModuleNotFoundError:
+    from benchmark_full_crop import install_full_crop_collator
     from select_training_backend import BACKEND_FLAGS, configure_training_backend
 
 
@@ -184,6 +188,72 @@ def configure_torch_backend_for_training(*, use_tf32: bool = False) -> None:
     _configure_torch_backend()
     if use_tf32:
         _enable_tf32()
+
+
+def training_crop_budget(config: Mapping[str, Any]) -> int:
+    """Return the one enabled token budget shared by all training datasets."""
+
+    train_configs = config.get("dataset_configs", {}).get("train", {})
+    if not isinstance(train_configs, Mapping) or not train_configs:
+        raise ValueError("runner YAML has no training dataset configuration")
+    budgets = set()
+    for dataset_name, dataset_spec in train_configs.items():
+        try:
+            token_crop = dataset_spec["config"]["crop"]["token_crop"]
+        except (KeyError, TypeError) as error:
+            raise ValueError(
+                f"training dataset {dataset_name!r} has no token-crop configuration"
+            ) from error
+        if not token_crop.get("enabled", False):
+            raise ValueError(
+                f"training dataset {dataset_name!r} does not enable token cropping"
+            )
+        budgets.add(int(token_crop["token_budget"]))
+    if len(budgets) != 1:
+        raise ValueError(
+            "--require-full-crop needs one shared token budget across all "
+            f"training datasets, found {sorted(budgets)}"
+        )
+    budget = budgets.pop()
+    if budget < 1:
+        raise ValueError(f"training token budget must be positive, found {budget}")
+    return budget
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _checkout_identity(source_root: Path) -> tuple[str | None, bool | None]:
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "-C", str(source_root), "status", "--porcelain"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        )
+    except OSError, subprocess.CalledProcessError:
+        return None, None
+    return commit, dirty
 
 
 class BackendBenchmarkCallback(pl.Callback):
@@ -393,6 +463,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument(
+        "--require-full-crop",
+        action="store_true",
+        help=(
+            "fail in the CPU collator if any training sample contains padding "
+            "inside the configured token crop"
+        ),
+    )
+    parser.add_argument(
         "--use-tf32",
         action="store_true",
         help=(
@@ -443,7 +521,8 @@ def main() -> None:
     from openfold3.entry_points.validator import TrainingExperimentConfig
 
     runner_yaml = args.runner_yaml.resolve()
-    output_dir = (args.output_root.resolve() / args.backend)
+    runner_yaml_sha256 = _sha256(runner_yaml)
+    output_dir = args.output_root.resolve() / args.backend
     output_owner = owns_benchmark_output(os.environ)
     if output_owner and has_benchmark_results(output_dir):
         raise FileExistsError(f"benchmark output already exists: {output_dir}")
@@ -460,6 +539,10 @@ def main() -> None:
         devices=args.devices,
         num_nodes=args.num_nodes,
     )
+    expected_crop_tokens = None
+    if args.require_full_crop:
+        expected_crop_tokens = training_crop_budget(runner_dict)
+        install_full_crop_collator(expected_crop_tokens)
     if output_owner:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "runner.yaml").write_text(
@@ -490,17 +573,29 @@ def main() -> None:
     fit_wall_seconds = time.perf_counter() - fit_start
 
     if runner.trainer.is_global_zero:
+        checkout_commit, checkout_dirty = _checkout_identity(source_root)
         summary_path = output_dir / "summary.json"
         summary = json.loads(summary_path.read_text())
         summary.update(
             fit_wall_seconds=fit_wall_seconds,
             seed=args.seed,
+            num_workers_per_rank=args.num_workers,
             runner_yaml=str(runner_yaml),
+            runner_yaml_sha256=runner_yaml_sha256,
+            effective_runner_sha256=_sha256(output_dir / "runner.yaml"),
+            backend_flags=BACKEND_FLAGS[args.backend],
+            require_full_crop=args.require_full_crop,
+            full_crop_validation=("passed" if args.require_full_crop else "disabled"),
+            crop_token_budget=expected_crop_tokens,
+            checkout_commit=checkout_commit,
+            checkout_dirty=checkout_dirty,
             openfold3_module=str(installed_module),
+            openfold3_version=_package_version("openfold3"),
             torch_version=torch.__version__,
             torch_cuda=torch.version.cuda,
             gpu_name=torch.cuda.get_device_name(),
             use_tf32=args.use_tf32,
+            triton_version=_package_version("triton"),
             cuequivariance_version=importlib.metadata.version("cuequivariance"),
             cuequivariance_torch_version=importlib.metadata.version(
                 "cuequivariance-torch"

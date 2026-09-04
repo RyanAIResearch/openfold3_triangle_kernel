@@ -16,6 +16,14 @@ SUMMARY_COLUMNS = (
     "num_nodes",
     "world_size",
     "global_batch_size",
+    "seed",
+    "num_workers_per_rank",
+    "crop_token_budget",
+    "require_full_crop",
+    "full_crop_validation",
+    "use_tf32",
+    "checkout_commit",
+    "runner_yaml_sha256",
     "fit_wall_seconds",
     "steady_wall_seconds",
     "steady_step_wall_seconds",
@@ -26,11 +34,35 @@ SUMMARY_COLUMNS = (
     "speedup_vs_baseline",
 )
 
+BACKEND_ORDER = ("aqlab", "triton", "cueq", "stablefold", "deepspeed-evo")
+MATCHED_PROTOCOL_FIELDS = (
+    "seed",
+    "num_workers_per_rank",
+    "use_tf32",
+    "warmup_steps",
+    "measure_steps",
+    "crop_token_budget",
+    "runner_yaml_sha256",
+    "checkout_commit",
+    "checkout_dirty",
+    "require_full_crop",
+    "full_crop_validation",
+)
+
 
 def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[str, Any]:
     summaries = []
     losses: dict[str, list[tuple[int, float]]] = {}
-    for summary_path in sorted(results_root.glob("*/summary.json")):
+    summary_paths = list(results_root.glob("*/summary.json"))
+    summary_paths.sort(
+        key=lambda path: (
+            BACKEND_ORDER.index(path.parent.name)
+            if path.parent.name in BACKEND_ORDER
+            else len(BACKEND_ORDER),
+            path.parent.name,
+        )
+    )
+    for summary_path in summary_paths:
         summary = json.loads(summary_path.read_text())
         summary.setdefault("topology", "single-gpu")
         summary.setdefault("devices", 1)
@@ -61,6 +93,18 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
         raise ValueError(
             "all backends in one comparison must use the same GPU model and world size"
         )
+    for field in MATCHED_PROTOCOL_FIELDS:
+        values = {
+            json.dumps(summary.get(field), sort_keys=True) for summary in summaries
+        }
+        if len(values) != 1:
+            raise ValueError(
+                f"all backends in one comparison must match {field}: "
+                + ", ".join(
+                    f"{summary['backend']}={summary.get(field)!r}"
+                    for summary in summaries
+                )
+            )
     world_size, gpu_name = next(iter(topologies))
     num_nodes = max(int(summary.get("num_nodes", 1)) for summary in summaries)
     topology_label = (
@@ -73,8 +117,8 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
         raise ValueError(f"baseline backend not found: {baseline}")
     baseline_seconds = float(by_backend[baseline]["steady_step_wall_seconds"])
     for summary in summaries:
-        summary["speedup_vs_baseline"] = (
-            baseline_seconds / float(summary["steady_step_wall_seconds"])
+        summary["speedup_vs_baseline"] = baseline_seconds / float(
+            summary["steady_step_wall_seconds"]
         )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +126,7 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
         writer = csv.DictWriter(handle, fieldnames=SUMMARY_COLUMNS)
         writer.writeheader()
         for summary in summaries:
-            writer.writerow({key: summary[key] for key in SUMMARY_COLUMNS})
+            writer.writerow({key: summary.get(key) for key in SUMMARY_COLUMNS})
 
     combined = {
         "schema_version": 2,
@@ -133,9 +177,7 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
         )
     axis.set_xlabel("Optimizer training step")
     axis.set_ylabel("Training loss")
-    axis.set_title(
-        f"Matched-seed backend loss curves ({topology_label}, global mean)"
-    )
+    axis.set_title(f"Matched-seed backend loss curves ({topology_label}, global mean)")
     axis.grid(alpha=0.25)
     axis.legend()
     figure.tight_layout()

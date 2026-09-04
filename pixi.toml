@@ -471,6 +471,11 @@ prepare-pdb-subset.cmd = [
     "-u",
     "tools/prepare_pdb_subset.py",
 ]
+prepare-crop-benchmark-data.cmd = [
+    "python",
+    "-u",
+    "tools/prepare_crop_benchmark_data.py",
+]
 generate-pdb-subset.cmd = [
     "python",
     "-u",
