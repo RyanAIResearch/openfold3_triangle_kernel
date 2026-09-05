@@ -151,49 +151,56 @@ def test_h100_user_docs_use_normal_pixi_commands():
         assert "pixi run -e openfold3-cuda12" in text
 
 
-def test_multinode_quickstart_uses_existing_runner_and_shared_rw_run_dir():
+def test_multinode_quickstart_uses_slurm_only_for_multiple_nodes():
     text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
-    assert "mkdir -p /shared/openfold3-run" in text
-    assert "test -r /shared/openfold3-run" in text
-    assert "test -w /shared/openfold3-run" in text
-    assert 'export RUNNER_YAML="$PWD/datasets/train.stablefold.2x8.yaml"' in text
+    single_node = text.split("## 1 GPU", 1)[1].split("## Multi-node", 1)[0]
+    multi_node = text.split("## Multi-node", 1)[1]
+
+    assert "srun" not in single_node
+    assert "#SBATCH" not in single_node
+    assert "#SBATCH --nodes=2" in multi_node
+    assert "#SBATCH --gres=gpu:8" in multi_node
+    assert "#SBATCH --ntasks-per-node=8" in multi_node
+    assert "#SBATCH --cpus-per-task=11" in multi_node
+    assert "srun --kill-on-bad-exit=1" in multi_node
+    assert '"$RUN_OPENFOLD" train' in multi_node
+    assert "train-multinode" not in multi_node
+    assert 'export OF3_RUN_CWD="/shared/openfold3-run/$RUN_ID"' in multi_node
+    assert 'export RUNNER_YAML="$OF3_RUN_CWD/config.yaml"' in multi_node
+    assert "unset PYTHONPATH PYTHONHOME LD_PRELOAD" in multi_node
+    assert '"$CONDA_PREFIX/bin/run_openfold"' in multi_node
     assert '--runner-yaml "$RUNNER_YAML"' in text
-    assert '--runner-yaml "/shared/train_pdb_subset.${BACKEND}.yaml"' not in text
-    assert ': "${NODE_RANK:?' in text
-    assert ': "${MASTER_ADDR:?' in text
-    assert "\nexport NODE_RANK=0\n" not in text
-    assert "\nexport MASTER_ADDR=10.0.0.10\n" not in text
+    assert "sbatch submit.sbatch" in multi_node
 
 
-def test_bare_metal_benchmark_prepares_compact_subset_atomically():
+def test_bare_metal_quickstart_derives_runners_from_the_supplied_config():
     text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
-    assert text.count("--train-size 512") == 1
-    assert "prepare-pdb-subset" in text
-    assert "validate-training-data" in text
-    assert "prepare-crop-benchmark-data" in text
-    assert "--crop-sizes 384 640 768" in text
-    assert "--train-size 4000" not in text
-    assert "--train-size 1000" not in text
+    assert text.count("export SOURCE_RUNNER=/absolute/path/to/config.yaml") == 4
+    assert text.count("select-training-backend") == 3
+    assert "python -m tools.select_training_backend" in text
+    assert text.count('s/^  devices: [0-9]+$/') == 4
+    assert text.count('s/^  num_nodes: [0-9]+$/') == 4
+    assert text.count('s/^    id:.*$/') == 4
+    assert "prepare-pdb-subset" not in text
+    assert "prepare-crop-benchmark-data" not in text
 
 
-def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
+def test_bare_metal_sections_launch_each_supported_topology_directly():
     text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
-    assert text.count("mkdir -p ../openfold3-run") >= 3
-    assert "# Set DEVICES to 1, 2, or 8." in text
+    assert "## 1 GPU" in text
+    assert "## 2 GPUs" in text
+    assert "## 8 GPUs" in text
+    assert "## Multi-node" in text
+    assert "export CUDA_VISIBLE_DEVICES=0" in text
+    assert "export CUDA_VISIBLE_DEVICES=0,1" in text
     assert "export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7" in text
-    assert "benchmark-single-node" in text
-    assert 'backend-comparison-${DEVICES}gpu' in text
-    assert text.count("BACKENDS=(aqlab triton cueq stablefold)") == 1
-    assert text.count('for BACKEND in "${BACKENDS[@]}"') == 1
-    assert text.count("if (( MATRIX_FAILED ))") == 1
-    assert text.count("summary.json") == 1
-    assert text.count("--num-workers 10") >= 2
-    assert text.count("--require-full-crop") == 1
-    assert "--baseline triton" in text
-    assert "for TOPOLOGY in 1x1 1x2 1x8 2x8" in text
-    assert 'train.${BACKEND}.${NUM_NODES}x${DEVICES}.yaml' in text
+    assert text.count("train-single-gpu") == 1
+    assert text.count("train-single-node") == 2
+    assert text.count("--data-seed 42") == 4
+    assert "benchmark-single-gpu" not in text
+    assert "benchmark-single-node" not in text
+    assert "benchmark-multinode" not in text
     assert "TriOnce" not in text
-    assert text.count("--use-tf32") == 1
 
 
 def test_bare_metal_quickstart_contains_commands_not_published_results():
@@ -223,16 +230,14 @@ def test_bare_metal_quickstart_contains_commands_not_published_results():
     assert not inside_bash
 
 
-def test_bare_metal_training_commands_start_fresh_and_pin_the_checkout():
+def test_bare_metal_generated_runners_stay_outside_the_source_checkout():
     text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
-    benchmark = text.split("## Compare ", 1)[1].split("## Configure ", 1)[0]
-    assert "git pull" not in benchmark
-    assert 'test -z "$(git status --porcelain)"' in benchmark
-    assert 'git rev-parse HEAD > "$OF3_RUN_CWD/source_commit.txt"' in text
-    assert '$(<"$OF3_RUN_CWD/source_commit.txt")' in benchmark
-    assert 'output_dir=os.environ["OUTPUT_DIR"]' in text
-    assert "restart_checkpoint_path=None" in text
-    assert 'test ! -e "$OUTPUT_DIR"' in text
+    assert text.count('export RUN_ROOT="$(cd ../openfold3-run && pwd)"') == 3
+    assert text.count('export OF3_RUN_CWD="$RUN_ROOT/$RUN_ID"') == 3
+    assert text.count('export RUNNER_YAML="$OF3_RUN_CWD/config.yaml"') == 4
+    assert text.count('test ! -e "$OF3_RUN_CWD"') == 3
+    assert text.count('RUN_ID="${BACKEND}-') == 4
+    assert "datasets/config" not in text
 
 
 def test_dirty_pixi_lock_error_explains_repository_update(monkeypatch):
