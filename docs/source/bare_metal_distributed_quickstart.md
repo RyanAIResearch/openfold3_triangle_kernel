@@ -194,7 +194,8 @@ requested backend, so rerunning it cannot leave mixed backend flags. Diffusion
 stays on OpenFold3's original path. OpenFold3 continues to own the model, data
 pipeline, loss, optimizer, EMA, checkpointing, and distributed training.
 
-The production comparison below uses the first four keys exactly as written:
+The standard full-crop comparison below uses the first four keys exactly as
+written:
 `aqlab`, `triton`, `cueq`, and `stablefold`. These are configuration keys, not
 display-name aliases. In particular, selecting `triton` enables OpenFold3's
 Triton triangle-attention route; training TMU remains on its stock PyTorch path
@@ -465,7 +466,7 @@ batch size to `DEVICES`, and
 `epoch_len = (warmup_steps + measure_steps) * DEVICES`; `max_steps` remains the
 same optimizer-step count for 1, 2, 4, and 8 GPUs.
 
-The production timing protocol uses 10 DataLoader workers per rank. That means
+This benchmark protocol uses 10 DataLoader workers per rank. That means
 10 workers on one GPU, 20 on two GPUs, and 80 on eight GPUs. Use the same value
 for every backend in one comparison and reserve enough CPU cores. The recorded
 `steady_step_wall_seconds` includes data waiting, while `gpu_step_mean_ms` in
@@ -539,12 +540,30 @@ log and `runner.yaml`; the benchmark does not fabricate `steps.csv`,
 separately, and do not present a plot from the remaining arms as a complete
 four-route matrix.
 
-### Reproduced Two-H100 Results
+#### What This Standard Benchmark Represents
+
+This is an end-to-end training benchmark: it includes the unchanged OpenFold3
+data pipeline, model, loss, backward pass, per-sample gradient clipping,
+optimizer, EMA, and any distributed communication used by the selected
+topology. It therefore measures more than isolated kernel latency and is useful
+for checking backend ranking under a public, reproducible workload.
+
+It is not an exact proxy for a private production job. The commands start from
+scratch with accumulation one and explicitly enable TF32; a real fine-tuning
+job may load a checkpoint, freeze modules, accumulate gradients, use private
+data, disable TF32, or span multiple nodes. Those choices can change absolute
+throughput, memory use, and the loss trajectory. Use this benchmark to compare
+backends within one matched block, not to promise an absolute production step
+time. A separate single-H100 adaptation below retains more of one supplied
+fine-tuning configuration and is reported as a distinct experiment.
+
+### Reproduced Two-H100 Standard-Benchmark Results
 
 These results were recorded on September 4, 2026. The table below is a
-descriptive production screen, not a convergence or statistical-significance
-claim. Every requested arm was launched on the same otherwise-idle two-H100
-host. The benchmark harness and configuration tools came from clean checkout
+descriptive full-crop backend screen, not an exact production-job,
+convergence, or statistical-significance claim. Every requested arm was
+launched on the same otherwise-idle two-H100 host. The benchmark harness and
+configuration tools came from clean checkout
 `5d4c79748fa5c76ce6a69478c6f4d38395d81b2c`; that checkout hash does **not**
 identify the imported model implementation. The installed OpenFold3 runtime
 wheel is
@@ -616,10 +635,6 @@ routes consumed bit-identical stochastic features or identify the cause of
 those points. These curves support short-run numerical stability only; they do
 not establish long-horizon convergence or unchanged model accuracy.
 
-Only the complete two-H100 block is published here. A partial single-H100
-campaign was deliberately stopped and is excluded rather than presented as a
-complete matrix.
-
 The published receipt does not retain launch order, so this block cannot be used
 to quantify warm-machine or position bias. There is also only one seed/process
 block per cell, so the 20 temporally adjacent steps are not 20 independent
@@ -627,6 +642,129 @@ replicates. For paper claims, repeat complete matched blocks with independent
 seeds, rotate or randomize backend launch order, record that order, and report
 confidence intervals. The eight-H100 commands above intentionally contain no
 estimated numbers; add that table only from a completed eight-GPU run.
+
+### Single-H100 Adaptation of a Supplied Fine-Tuning Recipe
+
+Do not combine this block with the public from-scratch benchmark above. On
+September 4, 2026, we separately checked the supplied kinase fine-tuning recipe
+through the AQLab-native end-to-end training path under a thin measurement
+harness. The harness bypasses the Click command wrapper, but it instantiates the
+same `TrainingExperimentRunner`, DataModule, model, loss, per-sample gradient
+clipping, Adam optimizer, scheduler, and EMA code. It disables validation,
+checkpoint writes, and W&B during timing and changes only one mutually exclusive
+triangle-backend route per arm.
+
+This is a single-H100 adaptation, not an exact replay of the private production
+job. The supplied recipe targets two nodes with eight GPUs per node and refers to
+private kinase data and a legacy P2 checkpoint. For this check, the effective
+global batch remains 16 (`batch_size=1`, one GPU, and 16-way gradient
+accumulation), the private data is replaced by a statically filtered PDB
+fixture, and the incompatible P2 checkpoint is replaced by a compatible
+OpenBind checkpoint. A runtime collator gate requires every consumed batch to
+contain the full requested token crop; this does not claim that every cache
+entry was exercised. The legacy `freeze_modules: [confidence]` behavior is
+reproduced by disabling gradients for the same confidence-head parameter
+prefixes before `fit`.
+
+The harness and configuration come from clean checkout
+`8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec`. The imported OpenFold3 runtime is
+repository-pinned wheel `0.5.1.dev5860+g87ebe22da`, built from
+`87ebe22da13c657d36997dedb4ec398fbd62c6b7`, with SHA256
+`ad9042dcf1f301ac42edcc30566537b5b971bc9933f62a50cda8f5f45a090738`.
+A separate audit found no changed runtime paths between those commits and
+verified all 230 non-test runtime Python files in the wheel byte-for-byte
+against the checkout. Every arm uses BF16 mixed precision, TF32 disabled,
+seed/data seed 42, and 10 DataLoader workers.
+
+The supplied YAML SHA256 is
+`a3e61243c18f9375d7f55209306c3759bb80c5857dd1fec99d7a358d348cd916`;
+the compatible checkpoint SHA256 is
+`bd43301c011d5f87580d3e8b548658869433e4488399feb03035ba248f8e29e4`;
+and the filtered full-crop cache SHA256 is
+`9098567c4cc06e28c70d6b4d0c06a6c0072cc0fca5fa1620fe5e49421c3364e8`.
+The confidence freeze covers 243 parameter tensors (12,881,024 parameters),
+with parameter-name-list SHA256
+`54c867c523ee3d8c3bb3b923ee6f0c709e2fbc2bd66f0311671ec0ce4cdc8fc4`.
+
+Each cell excludes 16 warmup microbatches and measures the next 50. Wall timing
+spans the start callback of measured microbatch 16 through the synchronized end
+of microbatch 65. It includes model execution and inter-batch input waits after
+the first boundary, and contains three completed optimizer updates plus two
+subsequent microbatches. Results are reported per measured microbatch and are
+not estimates of distributed production step time. CUDA-event values are not
+used in this table or its conclusions.
+
+The supplied YAML omits `num_workers`; the tested AQLab validator defaults that
+field to 10, and this benchmark pins 10 explicitly. This value is per rank.
+Worker count does not alter the objective definition, but it can change the
+realized assignment of stochastic crop, MSA, and template feature streams. No
+bitwise-trajectory or accuracy-invariance claim is made.
+
+`Speedup vs Triton` is the AQLab Triton wall seconds divided by the row's wall
+seconds within the same crop.
+
+| Crop | Backend route | Wall s/measured microbatch | Samples/s | Speedup vs Triton | Status |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 384 | AQLab PyTorch (`aqlab`) | 6.405 | 0.15614 | 0.792x | passed |
+| 384 | AQLab Triton (`triton`) | 5.075 | 0.19704 | 1.000x | passed |
+| 384 | cuEquivariance (`cueq`) | 4.309 | 0.23206 | 1.178x | passed |
+| 384 | StableFold (`stablefold`) | **4.055** | **0.24661** | **1.252x** | passed |
+| 640 | AQLab PyTorch (`aqlab`) | 19.360 | 0.05165 | 0.684x | passed |
+| 640 | AQLab Triton (`triton`) | 13.251 | 0.07547 | 1.000x | passed |
+| 640 | cuEquivariance (`cueq`) | 9.086 | 0.11006 | 1.458x | passed |
+| 640 | StableFold (`stablefold`) | **8.343** | **0.11986** | **1.588x** | passed |
+| 768 | AQLab PyTorch (`aqlab`) | -- | -- | -- | OOM after 58/66 microbatches |
+| 768 | AQLab Triton (`triton`) | 20.343 | 0.04916 | 1.000x | passed |
+| 768 | cuEquivariance (`cueq`) | 12.895 | 0.07755 | 1.578x | passed |
+| 768 | StableFold (`stablefold`) | **11.681** | **0.08561** | **1.741x** | passed |
+
+The AQLab PyTorch crop-768 arm completed 58 of 66 planned microbatches before
+requesting another 3.38 GiB with 2.03 GiB free on the 79.19-GiB H100. Because
+the measurement callback did not finalize, it produced neither `summary.json`
+nor `steps.csv`; no time, throughput, loss curve, or speedup is imputed from the
+truncated interval.
+
+```{figure} ../imgs/backend_wall_1gpu_supplied_recipe_crops_384_640_768.png
+:alt: Single-H100 wall-clock OpenFold3 comparison for AQLab PyTorch, AQLab Triton, cuEquivariance, and StableFold at crop sizes 384, 640, and 768.
+:width: 100%
+
+Continuous wall seconds per measured microbatch for the supplied-recipe
+adaptation. Labels also show speedup against AQLab Triton within each crop. The
+PyTorch crop-768 cell is an observed OOM and has no imputed bar.
+```
+
+The short loss traces are shown only as a finite-value and gross-divergence
+screen. Because DataLoader workers own seeded stochastic streams for crop, MSA,
+and template features, separate processes are not guaranteed to consume
+bit-identical feature tensors even with matched seeds and worker counts.
+Per-microbatch input-feature identity was not recorded, so pointwise loss
+differences are not evidence of backend numerical equivalence. One short run
+per cell is not an accuracy, convergence, or statistical-significance result.
+
+```{figure} ../imgs/backend_loss_1gpu_supplied_recipe_crops_384_640_768.png
+:alt: Descriptive single-H100 OpenFold3 loss curves for available backend runs at crop sizes 384, 640, and 768.
+:width: 100%
+
+Training loss recorded by each complete run. The shaded region contains the 16
+timing-warmup microbatches. PyTorch crop 768 has no curve because that process
+did not finalize its measurement artifact after OOM.
+```
+
+The public full-crop benchmark is the copy-paste reproducibility test for new
+users: it starts from scratch, uses accumulation one, and explicitly enables
+TF32 for all arms. This supplied-recipe adaptation retains more of the provided
+fine-tuning configuration and a compatible checkpoint, so it answers a
+different question. The two protocols can support a backend-ranking sanity
+check when their trends agree, but their absolute times and loss trajectories
+must not be merged.
+
+Gradient accumulation preserves a nominal effective batch of 16, but this
+single-GPU adaptation removes DDP/all-reduce costs and amortizes optimizer and
+EMA work over 16 single-GPU microbatches. Backends were launched sequentially
+and launch order was recorded, but not randomized. With one run per cell, these
+numbers are a descriptive screen rather than uncertainty-qualified paper
+measurements. The sanitized machine-readable receipt is kept under
+`release_artifacts/backend-matrix-h100-1gpu-supplied-recipe-20260904/`.
 
 ### Scheme 1: Single-GPU Training
 
