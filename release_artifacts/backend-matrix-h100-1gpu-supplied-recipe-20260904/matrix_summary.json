@@ -302,7 +302,6 @@
     "full_crop_gate_scope": "all consumed benchmark batches",
     "gpu": "NVIDIA H100 80GB HBM3",
     "gradient_accumulation_steps": 16,
-    "harness_checkout_commit": "8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec",
     "measured_microbatches": 50,
     "nominal_effective_global_batch_size": 16,
     "num_workers_per_rank": 10,
@@ -329,7 +328,6 @@
       ]
     },
     "runtime_identity_audit": {
-      "harness_checkout_commit": "8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec",
       "runtime_source_diff": {
         "build_commit_to_harness_checkout_changed_paths": 0,
         "scope": "openfold3/** excluding openfold3/tests/**"
@@ -340,6 +338,7 @@
         "version": "0.5.1.dev5860+g87ebe22da"
       },
       "schema_version": 1,
+      "source_checkout_commit": "8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec",
       "wheel_python_file_comparison": {
         "byte_mismatches": 0,
         "files_compared": 230,
@@ -348,6 +347,7 @@
         "scope": "all .py files under openfold3 excluding */tests/*"
       }
     },
+    "source_checkout_commit": "8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec",
     "supplied_yaml_sha256": "a3e61243c18f9375d7f55209306c3759bb80c5857dd1fec99d7a358d348cd916",
     "tf32": false,
     "timing_boundary": "start callback of measured microbatch 16 through synchronized end callback of microbatch 65; includes inter-batch input waits after the first boundary",

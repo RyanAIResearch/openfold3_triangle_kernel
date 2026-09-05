@@ -56,6 +56,12 @@ def test_single_h100_receipt_has_all_cells_without_imputed_oom_timing() -> None:
         "planned": 12,
     }
     protocol = summary["protocol"]
+    assert protocol["source_checkout_commit"] == (
+        "8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec"
+    )
+    assert "harness_checkout_commit" not in protocol
+    runtime_audit = protocol["runtime_identity_audit"]
+    assert runtime_audit["source_checkout_commit"] == protocol["source_checkout_commit"]
     assert protocol["num_workers_per_rank"] == 10
     assert protocol["gradient_accumulation_steps"] == 16
     assert protocol["confidence_freeze"] == {

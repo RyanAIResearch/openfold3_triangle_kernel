@@ -274,6 +274,22 @@ disables W&B; they are not training failures.
 
 ### Compare Backend Training Time and Loss
 
+For every new published comparison, first update to the current public `main`
+and record the exact revision. `git status --short` must print nothing before
+the benchmark starts:
+
+```bash
+git pull --ff-only origin main
+git status --short
+git rev-parse HEAD
+```
+
+The copy-paste commands below resolve through this checkout's `pixi.toml` to
+`tools/run_backend_benchmark.sh`, `tools/benchmark_training_backend.py`, and
+`tools/plot_backend_comparison.py`. They do not depend on an external harness.
+Each result summary records the source-checkout identity and whether it was
+dirty, so results from different revisions must not be silently combined.
+
 Run every backend from scratch with the same full-crop data, initialization
 seed, data seed, BF16 precision, and GPU topology. The benchmark disables
 validation, W&B, and checkpoint output. The following optional single-H100
@@ -666,8 +682,12 @@ entry was exercised. The legacy `freeze_modules: [confidence]` behavior is
 reproduced by disabling gradients for the same confidence-head parameter
 prefixes before `fit`.
 
-The harness and configuration come from clean checkout
-`8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec`. The imported OpenFold3 runtime is
+The external one-off measurement harness executed against clean source checkout
+`8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec`. The private source recipe and that
+harness are not distributed in this repository; this block is a result receipt,
+not a copy-paste reproduction procedure. New measurements must use the
+repository-tracked public benchmark commands above from the then-current
+`origin/main`. The imported OpenFold3 runtime in this recorded run is
 repository-pinned wheel `0.5.1.dev5860+g87ebe22da`, built from
 `87ebe22da13c657d36997dedb4ec398fbd62c6b7`, with SHA256
 `ad9042dcf1f301ac42edcc30566537b5b971bc9933f62a50cda8f5f45a090738`.
