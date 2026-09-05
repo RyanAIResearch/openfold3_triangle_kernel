@@ -36,7 +36,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def test_single_h100_receipt_checksums_are_self_consistent():
+def test_single_h100_receipt_checksums_are_self_consistent() -> None:
     expected = {}
     for line in (RECEIPT / "SHA256SUMS").read_text().splitlines():
         digest, filename = line.split(maxsplit=1)
@@ -47,7 +47,7 @@ def test_single_h100_receipt_checksums_are_self_consistent():
     }
 
 
-def test_single_h100_receipt_has_all_cells_without_imputed_oom_timing():
+def test_single_h100_receipt_has_all_cells_without_imputed_oom_timing() -> None:
     summary = json.loads((RECEIPT / "matrix_summary.json").read_text())
 
     assert summary["cell_counts"] == {
@@ -97,7 +97,7 @@ def test_single_h100_receipt_has_all_cells_without_imputed_oom_timing():
             )
 
 
-def test_single_h100_loss_receipt_contains_only_complete_finite_runs():
+def test_single_h100_loss_receipt_contains_only_complete_finite_runs() -> None:
     with (RECEIPT / "losses.csv").open(newline="") as handle:
         rows = list(csv.DictReader(handle))
 
@@ -121,7 +121,7 @@ def test_single_h100_loss_receipt_contains_only_complete_finite_runs():
         assert phases[crop, backend, "measure"] == 50
 
 
-def test_single_h100_published_figures_match_the_receipt():
+def test_single_h100_published_figures_match_the_receipt() -> None:
     summary = json.loads((RECEIPT / "matrix_summary.json").read_text())
     figures = summary["published_figures"]
 
@@ -132,7 +132,7 @@ def test_single_h100_published_figures_match_the_receipt():
         assert figure["sha256"] == _sha256(path)
 
 
-def test_single_h100_receipt_omits_device_timing_and_host_identifiers():
+def test_single_h100_receipt_omits_device_timing_and_host_identifiers() -> None:
     with (RECEIPT / "metrics.csv").open(newline="") as handle:
         reader = csv.DictReader(handle)
         assert reader.fieldnames is not None
