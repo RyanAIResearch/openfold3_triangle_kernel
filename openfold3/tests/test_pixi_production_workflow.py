@@ -154,11 +154,15 @@ def test_h100_user_docs_use_normal_pixi_commands():
 def test_multinode_quickstart_uses_existing_runner_and_shared_rw_run_dir():
     text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
     assert "mkdir -p /shared/openfold3-run" in text
-    assert "test -r /shared/openfold3-run && test -w /shared/openfold3-run" in text
-    assert 'export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"' in text
+    assert "test -r /shared/openfold3-run" in text
+    assert "test -w /shared/openfold3-run" in text
+    assert 'export RUNNER_YAML="$PWD/datasets/train.stablefold.2x8.yaml"' in text
     assert '--runner-yaml "$RUNNER_YAML"' in text
     assert '--runner-yaml "/shared/train_pdb_subset.${BACKEND}.yaml"' not in text
-    assert "real shared, read-write filesystem" in text
+    assert ': "${NODE_RANK:?' in text
+    assert ': "${MASTER_ADDR:?' in text
+    assert "\nexport NODE_RANK=0\n" not in text
+    assert "\nexport MASTER_ADDR=10.0.0.10\n" not in text
 
 
 def test_bare_metal_benchmark_prepares_compact_subset_atomically():
@@ -166,49 +170,69 @@ def test_bare_metal_benchmark_prepares_compact_subset_atomically():
     assert text.count("--train-size 512") == 1
     assert "prepare-pdb-subset" in text
     assert "validate-training-data" in text
-    assert "samples with replacement" in text
-    assert "not model-quality or convergence" in text
     assert "prepare-crop-benchmark-data" in text
     assert "--crop-sizes 384 640 768" in text
-    assert "provenance.json" in text
     assert "--train-size 4000" not in text
     assert "--train-size 1000" not in text
 
 
 def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
-    assert text.count("mkdir -p ../openfold3-run") >= 4
-    assert "export DEVICES=8" in text
+    assert text.count("mkdir -p ../openfold3-run") >= 3
+    assert "# Set DEVICES to 1, 2, or 8." in text
     assert "export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7" in text
     assert "benchmark-single-node" in text
-    assert "backend-comparison-1gpu/crop${CROP}" in text
-    assert "backend-comparison-2gpu/crop${CROP}" in text
-    assert "backend-comparison-8gpu/crop${CROP}" in text
-    assert text.count("BACKENDS=(aqlab triton cueq stablefold)") >= 3
-    assert text.count('for BACKEND in "${BACKENDS[@]}"') >= 3
-    assert text.count("not plotting") >= 3
-    assert text.count("if (( MATRIX_FAILED ))") >= 3
-    assert text.count("summary.json") >= 4
-    assert text.count("--num-workers 10") >= 4
-    assert text.count("--require-full-crop") >= 4
+    assert 'backend-comparison-${DEVICES}gpu' in text
+    assert text.count("BACKENDS=(aqlab triton cueq stablefold)") == 1
+    assert text.count('for BACKEND in "${BACKENDS[@]}"') == 1
+    assert text.count("if (( MATRIX_FAILED ))") == 1
+    assert text.count("summary.json") == 1
+    assert text.count("--num-workers 10") >= 2
+    assert text.count("--require-full-crop") == 1
     assert "--baseline triton" in text
-    assert "Changing the worker count can therefore change the concrete" in text
-    assert "not a per-step fingerprint" in text
-    assert "Reproduced Two-H100 Results" in text
-    assert "Reproduced One- and Two-H100 Results" not in text
-    assert "5d4c79748fa5c76ce6a69478c6f4d38395d81b2c" in text
-    assert "0.5.1.dev5860+g87ebe22da" in text
-    assert "does **not**" in text
-    assert "OOM in first backward pass" in text
-    assert "backend_loss_2gpu_crops_384_640_768.png" in text
-    assert "1.704x" in text
-    assert "partial single-H100" in text
-    assert "long-horizon convergence or unchanged model accuracy" in text
-    assert "two-node H100 qualification" not in text
+    assert "for TOPOLOGY in 1x1 1x2 1x8 2x8" in text
+    assert 'train.${BACKEND}.${NUM_NODES}x${DEVICES}.yaml' in text
     assert "TriOnce" not in text
-    assert text.count("--use-tf32") >= 2
-    assert "cuEquivariance" in text
-    assert "0.10.0" in text
+    assert text.count("--use-tf32") == 1
+
+
+def test_bare_metal_quickstart_contains_commands_not_published_results():
+    text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
+    for forbidden in (
+        "Reproduced One-H100 Results",
+        "Reproduced Two-H100 Results",
+        "Benchmark Results",
+        "speedup",
+        "wall time",
+        "backend_loss_",
+        "backend_performance_",
+        "OOM in first backward pass",
+    ):
+        assert forbidden not in text
+
+    inside_bash = False
+    for line in text.splitlines():
+        if line == "```bash":
+            assert not inside_bash
+            inside_bash = True
+        elif line == "```":
+            assert inside_bash
+            inside_bash = False
+        elif not inside_bash:
+            assert not line or line.startswith("#")
+    assert not inside_bash
+
+
+def test_bare_metal_training_commands_start_fresh_and_pin_the_checkout():
+    text = (REPOSITORY / "docs/source/bare_metal_distributed_quickstart.md").read_text()
+    benchmark = text.split("## Compare ", 1)[1].split("## Configure ", 1)[0]
+    assert "git pull" not in benchmark
+    assert 'test -z "$(git status --porcelain)"' in benchmark
+    assert 'git rev-parse HEAD > "$OF3_RUN_CWD/source_commit.txt"' in text
+    assert '$(<"$OF3_RUN_CWD/source_commit.txt")' in benchmark
+    assert 'output_dir=os.environ["OUTPUT_DIR"]' in text
+    assert "restart_checkpoint_path=None" in text
+    assert 'test ! -e "$OUTPUT_DIR"' in text
 
 
 def test_dirty_pixi_lock_error_explains_repository_update(monkeypatch):
