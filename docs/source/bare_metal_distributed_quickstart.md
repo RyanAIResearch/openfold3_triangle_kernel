@@ -587,7 +587,7 @@ wheel is
 cuEquivariance 0.10.0). Each arm used batch size one per GPU, BF16 mixed
 precision, TF32 enabled for the common FP32 matmuls, seed/data seed 42, 10 data
 workers per rank, five excluded warmup steps, and 20 measured optimizer steps.
-The standalone `stablefold-0.1.0` artifact under `stablefold/release_artifacts`
+The standalone `stablefold-0.1.0` artifact under `trionce/release_artifacts`
 was not installed by this Pixi environment and is not the binary measured in
 this table.
 

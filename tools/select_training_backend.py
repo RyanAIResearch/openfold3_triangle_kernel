@@ -42,6 +42,17 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_deepspeed_evo_attention": False,
         "use_lma": False,
     },
+    # Same model flags as `stablefold`; the two differ only in which build of
+    # the identical kernels serves them, which the launcher selects through
+    # OPENFOLD3_TRIANGLE_PROVIDER (see core/kernels/cuda/provider.py).
+    "trionce": {
+        "use_triton_triangle_kernels": False,
+        "use_cueq_triangle_kernels": False,
+        "use_stable_triangle_attention": True,
+        "use_stable_triangle_multiplicative": True,
+        "use_deepspeed_evo_attention": False,
+        "use_lma": False,
+    },
     "deepspeed-evo": {
         "use_triton_triangle_kernels": False,
         "use_cueq_triangle_kernels": False,
@@ -50,6 +61,13 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_deepspeed_evo_attention": True,
         "use_lma": False,
     },
+}
+
+# Backends served by the stable triangle kernels, mapped to the provider the
+# launcher must export so the run cannot silently pick the other build.
+BACKEND_KERNEL_PROVIDER: dict[str, str] = {
+    "stablefold": "intree",
+    "trionce": "trionce",
 }
 
 
@@ -141,6 +159,12 @@ def main() -> None:
     with destination.open("w") as target:
         yaml.safe_dump(config, target, sort_keys=False, default_flow_style=False)
     print(f"Wrote {destination} with training backend {args.backend}")
+    provider = BACKEND_KERNEL_PROVIDER.get(args.backend)
+    if provider is not None:
+        print(
+            f"Export OPENFOLD3_TRIANGLE_PROVIDER={provider} before launching; "
+            f"the {args.backend} backend is served by the {provider} kernel build"
+        )
 
 
 if __name__ == "__main__":

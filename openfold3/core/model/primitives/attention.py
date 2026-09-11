@@ -96,11 +96,9 @@ _ZERO_PAIR_BIAS_CACHE: dict = {}
 
 
 def _raise_if_strict_stablefold_fallback(reason: str, shape: tuple[int, ...]) -> None:
-    from openfold3.core.utils.distributed_contract import (
-        stablefold_distributed_strict_enabled,
-    )
+    from openfold3.core.kernels.cuda.provider import strict_fallback_enabled
 
-    if stablefold_distributed_strict_enabled():
+    if strict_fallback_enabled():
         raise RuntimeError(
             "StableFold distributed strict route rejected an Attention fallback "
             f"at shape {shape}: {reason}"
@@ -521,9 +519,15 @@ class Attention(nn.Module):
             # build, support, launch, and backward failures propagate unchanged.
             # The facade validates (memoized) and raises on unsupported cases,
             # so no separate pre-check runs on this hot path.
-            from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E501
-                is_stablefold_supported,
-                stablefold_triangle_attention,
+            # The serving implementation is the `trionce` pip package when it is
+            # installed and the in-tree kernel copy otherwise; both build the
+            # same .cu sources.  See core/kernels/cuda/provider.py.
+            from openfold3.core.kernels.cuda.provider import (
+                triangle_attention_facade,
+            )
+
+            is_stablefold_supported, stablefold_triangle_attention = (
+                triangle_attention_facade()
             )
 
             # Deterministic StableFold backend: raw q, internal scaling,

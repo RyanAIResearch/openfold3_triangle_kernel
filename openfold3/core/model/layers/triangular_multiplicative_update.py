@@ -55,25 +55,22 @@ _STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
 
 def _route_stable_trimul(module, z, mask):
     """Return ``(selected, output)`` without swallowing fast-path failures."""
-    from openfold3.core.utils.distributed_contract import (
-        stablefold_distributed_strict_enabled,
+    # The serving implementation is the `trionce` pip package when it is
+    # installed and the in-tree kernel copy otherwise; both build the same .cu
+    # sources.  See core/kernels/cuda/provider.py.
+    from openfold3.core.kernels.cuda.provider import (
+        strict_fallback_enabled,
+        trimul_runner,
+        trimul_support_check,
     )
 
     # The callback freezes this policy before the first forward and audits the
     # source environment at epoch boundaries; this hot-path getter is read-only.
-    strict = stablefold_distributed_strict_enabled()
+    strict = strict_fallback_enabled()
 
-    from openfold3.core.kernels.cuda.stablefold_trimul_support import (
-        check_stable_trimul_support,
-    )
-
-    support = check_stable_trimul_support(module, z, mask)
+    support = trimul_support_check()(module, z, mask)
     if support:
-        from openfold3.core.kernels.cuda.stablefold_trimul import (
-            _run_supported_stable_trimul,
-        )
-
-        return True, _run_supported_stable_trimul(module, z, mask)
+        return True, trimul_runner()(module, z, mask)
 
     if strict and support.code != "sequence_stock_fallback":
         raise RuntimeError(
