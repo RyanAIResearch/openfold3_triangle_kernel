@@ -51,14 +51,54 @@ A technical description of the OpenFold3-preview2 model version is available
 
 ## Requirements
 
-- Linux x86-64
-- NVIDIA H100 80 GB, compute capability 9.0 (`sm_90a`)
-- CPython 3.14, PyTorch 2.10.0 built for CUDA 12.9
-- BF16 Q/K/V; BF16 or FP32 pair bias; FP16, BF16, or FP32 additive mask
-- `nvcc` 12.9 to build the package; not needed to run a prebuilt wheel
+Three hard prerequisites. Check all three before starting; each one fails the
+install rather than degrading gracefully.
 
-The extensions contain Hopper-specific SASS and no PTX fallback. An ABI or
-device mismatch is an error, not a reason to load the binary anyway.
+### 1. An NVIDIA H100 80 GB — no other GPU works
+
+Compute capability 9.0, `sm_90a`. The extensions contain **Hopper-specific SASS
+and no PTX fallback**, so they neither build for nor run on any other
+architecture. This is not a performance preference: on an A100, L40S, or
+consumer card the build produces nothing usable and the loader refuses to run.
+There is no CPU path.
+
+`tools/trionce_doctor.py` checks this first and names the device it found, so a
+wrong machine is caught in seconds rather than at the first training step.
+
+### 2. Network access, for Pixi to materialize the locked environment
+
+`pixi.lock` is committed, so every machine resolves to identical dependency
+versions — but the packages themselves are still downloaded on first install.
+Pixi shares a package cache across checkouts, so a second checkout on the same
+machine is near-instant; a first install on a fresh machine downloads several
+gigabytes.
+
+You do **not** need a system CUDA toolkit, `nvcc`, `uv`, or a compiler
+preinstalled. Pixi provides `nvcc` 12.9 and the matching conda GCC toolchain,
+and the installer falls back to `pip` when `uv` is absent.
+
+### 3. Roughly 15 minutes and 15 GB of disk
+
+Measured on one H100 for a fresh clone following
+[Install and usage](#1-install-and-usage) exactly:
+
+| Step | Time |
+| --- | --- |
+| `pixi install -e openfold3-cuda12-dev` | 4 s with a warm Pixi cache, several minutes cold |
+| `pixi run install-trionce` (compiles five `sm_90a` extensions) | 9 min 50 s |
+| `pixi run doctor-trionce` | 3 s |
+
+The resulting checkout, including its own `.pixi` environment, occupies about
+**14 GB**. Installing the prebuilt wheel instead of compiling skips the ten
+minutes but not the environment.
+
+### Software versions and tensor contract
+
+- Linux x86-64
+- CPython 3.14, PyTorch 2.10.0 built for CUDA 12.9 — pinned by `pixi.lock`
+- BF16 Q/K/V; BF16 or FP32 pair bias; FP16, BF16, or FP32 additive mask
+
+An ABI or device mismatch is an error, not a reason to load the binary anyway.
 
 ---
 
@@ -83,8 +123,9 @@ pixi run -e openfold3-cuda12-dev install-trionce
 ```
 
 `install-trionce` builds the five `sm_90a` extensions ahead of time and
-editable-installs the package, then runs the preflight. Budget about fifteen
-minutes for the compile. It is a task rather than a Pixi dependency because the
+editable-installs the package, then runs the preflight. The compile takes about
+ten minutes; see [Requirements](#requirements) for the measured timings and the
+disk it needs. It is a task rather than a Pixi dependency because the
 build needs `TRIONCE_BUILD_AOT=1`, `TORCH_CUDA_ARCH_LIST=9.0a`, and
 `--no-build-isolation`, none of which a declarative dependency can express;
 declaring one would install a source-only package whose loader refuses to run.
