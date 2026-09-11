@@ -122,7 +122,7 @@ class TriangleAttentionProviderEquivalenceTest(unittest.TestCase):
             is_stablefold_supported,
             stablefold_triangle_attention,
         )
-        from trionce.triangle_attention import (
+        from trionce import (
             is_triangle_attention_supported,
             triangle_attention,
         )

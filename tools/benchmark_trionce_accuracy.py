@@ -120,7 +120,7 @@ def _providers(names: list[str]) -> dict[str, Callable[..., Any]]:
         if name == "stock":
             resolved[name] = _stock
         elif name == "trionce":
-            from trionce.triangle_attention import triangle_attention
+            from trionce import triangle_attention
 
             resolved[name] = _kernel(triangle_attention)
         elif name == "intree":

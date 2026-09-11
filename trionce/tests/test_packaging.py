@@ -76,7 +76,7 @@ def test_jit_import_is_isolated_to_explicit_development_function():
 
 
 def test_facades_only_import_package_modules_lazily():
-    facade = PACKAGE / "triangle_attention.py"
+    facade = PACKAGE / "_triangle_attention.py"
     imports = _top_level_imports(facade)
     assert "trionce.policy" in imports
     assert not any(name.startswith("trionce.trionce_") for name in imports)
@@ -176,7 +176,7 @@ def test_source_tree_manifest_is_fail_closed():
 
 
 def test_facade_metadata_contract_is_release_bounded():
-    text = (PACKAGE / "triangle_attention.py").read_text()
+    text = (PACKAGE / "_triangle_attention.py").read_text()
     assert "_PAD_HEAD_LANES = (16, 32, 64)" in text
     assert "_MAX_BROADCAST_PREFIX_RANK = 16" in text
     assert "if bias_requires_broadcast and len(prefix) >" in text

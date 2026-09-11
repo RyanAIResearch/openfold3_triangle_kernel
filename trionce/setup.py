@@ -100,7 +100,7 @@ PACKAGED_PYTHON = (
     "triangle_delta.py",
     "triangle_dkdv.py",
     "triangle_dq_dbias.py",
-    "triangle_attention.py",
+    "_triangle_attention.py",
     "trimul.py",
     "trimul_cuda.py",
     "trimul_support.py",

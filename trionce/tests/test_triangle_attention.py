@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from trionce.triangle_attention import (
+from trionce import (
     is_triangle_attention_supported,
 )
 

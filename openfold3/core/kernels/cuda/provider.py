@@ -103,7 +103,33 @@ def _import(module_name: str) -> Any:
         ) from error
 
 
-@functools.lru_cache(maxsize=1)
+# Module import is memoized; the attribute is resolved on every call.  The
+# host used to re-run ``from ... import f`` inside each routing call, which is
+# a sys.modules lookup plus a getattr and therefore sees a patched attribute.
+# Caching the function object instead would silently defeat monkeypatching,
+# which the routing tests and any instrumentation rely on.
+@functools.lru_cache(maxsize=2)
+def _module(kind: str) -> Any:
+    trionce_serving = active_provider() == TRIONCE
+    names = {
+        "attention": (
+            # The package, not the private implementation module: the public
+            # names are what the package guarantees.
+            TRIONCE,
+            "openfold3.core.kernels.cuda.stablefold_triangle_attention",
+        ),
+        "trimul_support": (
+            "trionce.trimul_support",
+            "openfold3.core.kernels.cuda.stablefold_trimul_support",
+        ),
+        "trimul_runner": (
+            "trionce.trimul",
+            "openfold3.core.kernels.cuda.stablefold_trimul",
+        ),
+    }[kind]
+    return _import(names[0] if trionce_serving else names[1])
+
+
 def triangle_attention_facade() -> tuple[Callable[..., Any], Callable[..., Any]]:
     """Return ``(is_supported, triangle_attention)`` from the active provider.
 
@@ -112,40 +138,34 @@ def triangle_attention_facade() -> tuple[Callable[..., Any], Callable[..., Any]]
     both consume raw (unscaled) ``q`` and apply ``1/sqrt(d)`` internally.
     """
 
+    module = _module("attention")
     if active_provider() == TRIONCE:
-        module = _import("trionce.triangle_attention")
         return module.is_triangle_attention_supported, module.triangle_attention
-
-    module = _import("openfold3.core.kernels.cuda.stablefold_triangle_attention")
     return module.is_stablefold_supported, module.stablefold_triangle_attention
 
 
-@functools.lru_cache(maxsize=1)
 def trimul_support_check() -> Callable[..., Any]:
     """Return ``check_support(module, z, mask)`` from the active provider."""
 
+    module = _module("trimul_support")
     if active_provider() == TRIONCE:
-        return _import("trionce.trimul_support").check_trimul_support
-    return _import(
-        "openfold3.core.kernels.cuda.stablefold_trimul_support"
-    ).check_stable_trimul_support
+        return module.check_trimul_support
+    return module.check_stable_trimul_support
 
 
-@functools.lru_cache(maxsize=1)
 def trimul_runner() -> Callable[..., Any]:
     """Return ``run_supported(module, z, mask)`` from the active provider.
 
-    Kept separate from the support check so the fused runner, and with it the
-    ``torch.library`` registration its module performs at import, still loads
-    only once a shape has actually passed support -- the ordering the host had
-    before the routes moved behind this provider.
+    Resolved separately from the support check so the fused runner, and with it
+    the ``torch.library`` registration its module performs at import, still
+    loads only once a shape has actually passed support -- the ordering the
+    host had before the routes moved behind this provider.
     """
 
+    module = _module("trimul_runner")
     if active_provider() == TRIONCE:
-        return _import("trionce.trimul")._run_supported_trimul
-    return _import(
-        "openfold3.core.kernels.cuda.stablefold_trimul"
-    )._run_supported_stable_trimul
+        return module._run_supported_trimul
+    return module._run_supported_stable_trimul
 
 
 def strict_fallback_enabled() -> bool:
@@ -182,9 +202,7 @@ def _reset_for_tests() -> None:
     """Clear the memoized resolution; tests switch providers in-process."""
 
     active_provider.cache_clear()
-    triangle_attention_facade.cache_clear()
-    trimul_support_check.cache_clear()
-    trimul_runner.cache_clear()
+    _module.cache_clear()
 
 
 __all__ = [

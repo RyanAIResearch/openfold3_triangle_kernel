@@ -41,15 +41,15 @@ from trionce.trimul_support import (
 # for a support check without loading the CUDA extensions.
 _LAZY_ATTRIBUTES: dict[str, tuple[str, str]] = {
     "triangle_attention": (
-        "trionce.triangle_attention",
+        "trionce._triangle_attention",
         "triangle_attention",
     ),
     "is_triangle_attention_supported": (
-        "trionce.triangle_attention",
+        "trionce._triangle_attention",
         "is_triangle_attention_supported",
     ),
     "triangle_attention_invocation_count": (
-        "trionce.triangle_attention",
+        "trionce._triangle_attention",
         "invocation_count",
     ),
     "run_trimul": ("trionce.trimul", "run_trimul"),

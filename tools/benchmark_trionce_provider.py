@@ -81,7 +81,7 @@ def _stock_attention(q, k, v, mask, bias):
 
 def _load_provider(name: str) -> Callable[..., Any]:
     if name == "trionce":
-        from trionce.triangle_attention import triangle_attention
+        from trionce import triangle_attention
 
         return triangle_attention
     if name == "intree":
