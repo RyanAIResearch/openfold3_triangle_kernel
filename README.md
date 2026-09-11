@@ -14,6 +14,20 @@ gradients. A fixed-order `dBias` reduction replaces floating-point atomics, and
 an optional forward rounding residual improves the row-scalar used by the
 backward without changing the public BF16 output.
 
+```python
+import trionce
+
+# q/k/v: [*, O, H, N, D] BF16 (raw, unscaled); mask: [*, O, 1, 1, N] additive;
+# pair_bias: [*, 1, H, N, N] BF16 or FP32. Returns [*, O, N, H, D].
+supported, reason = trionce.is_triangle_attention_supported(q, k, v, mask, bias)
+out = trionce.triangle_attention(q, k, v, mask, bias)
+```
+
+That is the whole public surface for Triangle Attention; `trionce.run_trimul`
+is its TriMul counterpart. See [Usage from Python](#usage-from-python) for the
+fail-closed contract and the execution flags, and
+[Install and usage](#1-install-and-usage) to get there.
+
 Measured on one H100 80 GB against OpenFold3's stock attention, forward plus
 backward at the pair-stack layouts a training run issues:
 
@@ -183,11 +197,29 @@ python tools/benchmark_trionce_accuracy.py              # FP64-oracle error
 ```python
 import trionce
 
-# q/k/v: [*, O, H, N, D] BF16, raw and unscaled -- the kernel applies 1/sqrt(D)
-# mask:  [*, O, 1, 1, N] additive
-# bias:  [*, 1, H, N, N] BF16 or FP32
+# q/k/v: [*, O, H, N, D] BF16 (raw, unscaled); mask: [*, O, 1, 1, N] additive;
+# pair_bias: [*, 1, H, N, N] BF16 or FP32. Returns [*, O, N, H, D].
 supported, reason = trionce.is_triangle_attention_supported(q, k, v, mask, bias)
-out = trionce.triangle_attention(q, k, v, mask, bias)   # -> [*, O, N, H, D]
+out = trionce.triangle_attention(q, k, v, mask, bias)
+```
+
+`q` is raw and unscaled: the kernel applies `1/sqrt(D)` internally, so do not
+pre-scale it. The support check is memoized and cheap, and is what a host model
+uses to decide between the kernel and its own fallback:
+
+```python
+if supported:
+    out = trionce.triangle_attention(q, k, v, mask, bias)
+else:
+    out = your_stock_attention(q, k, v, mask, bias)   # `reason` says why
+```
+
+The fused TriMul is reached the same way:
+
+```python
+support = trionce.check_trimul_support(module, z, mask)
+if support:
+    out = trionce.run_trimul(module, z, mask)
 ```
 
 The facade fails closed: an unsupported shape raises rather than quietly
