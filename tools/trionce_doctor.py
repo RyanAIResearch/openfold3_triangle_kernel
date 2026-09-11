@@ -70,7 +70,7 @@ def _check_package() -> dict[str, Any]:
     except ImportError as error:
         raise DoctorError(
             "the 'trionce' package is not importable; install it with "
-            "'uv pip install --no-build-isolation -e trionce'"
+            "'uv pip install --no-build-isolation -e packages/trionce'"
         ) from error
     path = getattr(package, "__file__", None)
     if path is None:

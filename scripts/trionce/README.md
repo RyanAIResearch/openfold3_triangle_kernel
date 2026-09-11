@@ -36,7 +36,7 @@ pixi install -e openfold3-cuda12-dev
 
 ENVP="$PWD/.pixi/envs/openfold3-cuda12-dev"
 CUDA_HOME="$ENVP" TORCH_CUDA_ARCH_LIST=9.0a TRIONCE_BUILD_AOT=1 \
-  uv pip install --python "$ENVP/bin/python" --no-build-isolation -e trionce
+  uv pip install --python "$ENVP/bin/python" --no-build-isolation -e packages/trionce
 ```
 
 The build compiles five `sm_90a` extensions and takes roughly fifteen minutes.

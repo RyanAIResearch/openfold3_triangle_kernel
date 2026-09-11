@@ -5,7 +5,7 @@ stable triangle routes: Triangle Attention and the Triangle Multiplicative
 Update. This page covers installing it as a standalone pip package and running
 OpenFold3 against it on one GPU, several GPUs of one node, and several nodes.
 
-The package lives in [`trionce/`](../../trionce) and is installed separately
+The package lives in [`packages/trionce/`](../../packages/trionce) and is installed separately
 from OpenFold3, the same way a host model adopts cuEquivariance: one pip
 dependency, one backend key, and a stock fallback for unsupported shapes.
 
@@ -46,11 +46,11 @@ ENVP="$PWD/.pixi/envs/openfold3-cuda12-dev"
 CUDA_HOME="$ENVP" \
 TORCH_CUDA_ARCH_LIST=9.0a \
 TRIONCE_BUILD_AOT=1 \
-uv pip install --python "$ENVP/bin/python" --no-build-isolation -e trionce
+uv pip install --python "$ENVP/bin/python" --no-build-isolation -e packages/trionce
 ```
 
 `TRIONCE_BUILD_AOT=1` is what compiles the five `sm_90a` extensions ahead of
-time and writes `trionce/_build_manifest.json`, the receipt the loader checks
+time and writes the package's `_build_manifest.json`, the receipt the loader checks
 at import. Expect the build to take tens of minutes; the WGMMA/TMA kernels are
 large. Without that variable `pip install` produces a source-only package whose
 loader deliberately refuses to run.
@@ -67,10 +67,9 @@ cd /tmp && "$PWD/../<repo>/.pixi/envs/openfold3-cuda12-dev/bin/python" \
 ```
 
 Run it by path from outside the checkout. An interpreter started in the
-repository root puts the root on `sys.path`, where the package's own `trionce/`
-project folder shadows the install as an empty namespace package — setuptools
-appends its editable finder *after* the standard path finder, so the namespace
-wins and the doctor reports a broken install that is in fact fine.
+repository root puts the root on `sys.path`, so that a directory named `trionce` in the working directory cannot shadow
+the install. The package project lives at `packages/trionce/` precisely so the
+repository root carries no such directory.
 
 The doctor checks the GPU is `sm_90a`, the package imports from where you think
 it does, all five AOT extensions load and match their recorded hashes, and the
@@ -223,10 +222,10 @@ stock, every provider replaying bitwise.
 The package ships its own suite, which needs an H100:
 
 ```bash
-.pixi/envs/openfold3-cuda12-dev/bin/python -m pytest trionce/tests -v
+.pixi/envs/openfold3-cuda12-dev/bin/python -m pytest packages/trionce/tests -v
 ```
 
-`trionce/tests/host_openfold3/` additionally needs an OpenFold3 installation
+`packages/trionce/tests/host_openfold3/` additionally needs an OpenFold3 installation
 and is skipped otherwise.
 
 ## Execution flags

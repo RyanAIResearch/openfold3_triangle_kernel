@@ -5,8 +5,8 @@
 Two providers expose the same facade:
 
 ``trionce``
-    the installed ``trionce`` pip package, built from ``trionce/`` in this
-    repository (``pip install -e trionce``).
+    the installed ``trionce`` pip package, built from ``packages/trionce``
+    in this repository (``pip install -e packages/trionce``).
 ``intree``
     the kernel copy vendored under ``openfold3/core/kernels/cuda``.
 
@@ -88,7 +88,7 @@ def active_provider() -> str:
     if requested == TRIONCE and not _trionce_available():
         raise ProviderError(
             f"{PROVIDER_ENV}=trionce was requested but the 'trionce' package is "
-            "not importable; install it with 'pip install -e trionce'"
+            "not importable; install it with 'pip install -e packages/trionce'"
         )
     _logger.info("serving stable triangle kernels from the %s provider", requested)
     return requested

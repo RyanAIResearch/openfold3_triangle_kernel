@@ -10,7 +10,7 @@ not to have moved either:
 
 * **accuracy** -- L2 relative error against an FP64 oracle, for the forward
   output and every gradient, alongside the stock BF16 path measured the same
-  way. The methodology mirrors ``trionce/tests/test_numerics_vs_fp64.py``,
+  way. The methodology mirrors ``packages/trionce/tests/test_numerics_vs_fp64.py``,
   whose bound is that the kernel stays within ``1.1 * stock + 1e-6``.
 * **determinism** -- whether a second identical call returns bitwise-identical
   results. The kernels use no floating-point atomics, so they replay exactly;
