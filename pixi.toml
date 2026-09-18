@@ -166,6 +166,12 @@ openfold3-rocm7 = { no-default-feature = true, features = [
     "openfold3-editable",
     "tests",
 ] }
+openfold3-turbopairformer = { no-default-feature = true, features = [
+    "python",
+    "turbopairformer",
+    "openfold3-editable",
+    "tests"
+] }
 openfold3-msa = { no-default-feature = true, features = [
     "openfold3-msa",
 ] }
@@ -427,6 +433,26 @@ cuequivariance-ops-torch-cu13 = ">=0.8"
 #   https://github.com/aqlaboratory/openfold-3/blob/main/scripts
 # This mirrors aln_env.yml but unpins everything (note that then we do not need the pypi pinning)
 #   https://github.com/aqlaboratory/openfold-3/blob/main/scripts/snakemake_msa/aln_env.yml
+# --- TurboPairFormer triangle kernels (PyPI wheel: Python 3.14, PyTorch 2.10.0 / CUDA 12.8, Linux x86-64)
+[feature.turbopairformer]
+platforms = ["linux-64"]
+
+[feature.turbopairformer.dependencies]
+python = "3.14.*"
+
+[feature.turbopairformer.pypi-dependencies]
+turbopairformer = "==0.1.1.post1"
+matplotlib = "*"
+pytest = "*"
+pytest-xdist = "*"
+pytest-cov = "*"
+pytest-benchmark = "*"
+pytest-regressions = "*"
+pytest-vcr = "*"
+
+[feature.turbopairformer.tasks]
+compare-triangle-kernels = "python -u scripts/compare_triangle_kernels.py"
+
 [feature.openfold3-msa.dependencies]
 python = "*"    # 3.10
 biopython = "*"

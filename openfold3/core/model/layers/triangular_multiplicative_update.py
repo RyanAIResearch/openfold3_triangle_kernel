@@ -20,6 +20,7 @@ Triangle multiplicative update layers. Includes TriangleMultiplicativeUpdate fro
 and FusedTriangleMultiplicativeUpdate from AF2-Multimer.
 """
 
+import importlib
 import warnings
 from abc import ABC, abstractmethod
 from functools import partialmethod
@@ -34,6 +35,13 @@ from openfold3.core.utils.tensor_utils import permute_final_dims
 
 if is_cuequivariance_available():
     from cuequivariance_torch import triangle_multiplicative_update
+
+turbopairformer_is_installed = (
+    importlib.util.find_spec("turbopairformer") is not None
+    and torch.cuda.is_available()
+)
+if turbopairformer_is_installed:
+    from turbopairformer import check_trimul_support, turbo_trimul
 
 try:
     import triton
@@ -1109,6 +1117,7 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         inplace_safe: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         _add_with_inplace: bool = False,
         _inplace_chunk_size: int | None = 256,
     ) -> torch.Tensor:
@@ -1121,6 +1130,11 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         Returns:
             [*, N_res, N_res, C_z] output tensor
         """
+        if use_turbopairformer_triangle_kernels and _turbopairformer_supported(
+            self, z, mask
+        ):
+            return turbo_trimul(self, z, mask)
+
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
 
@@ -1401,6 +1415,7 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         inplace_safe: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         _add_with_inplace: bool = False,
         _inplace_chunk_size: int | None = 256,
     ) -> torch.Tensor:
@@ -1413,6 +1428,11 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         Returns:
             [*, N_res, N_res, C_z] output tensor
         """
+        if use_turbopairformer_triangle_kernels and _turbopairformer_supported(
+            self, z, mask
+        ):
+            return turbo_trimul(self, z, mask)
+
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
 
@@ -1540,3 +1560,12 @@ def _cueq_triangle_mult(
     if is_batched_input:
         x = x.view(batch, n_tmpl, *x.shape[1:])
     return x
+
+
+def _turbopairformer_supported(module, z, mask) -> bool:
+    if not turbopairformer_is_installed:
+        raise ValueError(
+            "Running with `use_turbopairformer_triangle_kernels` but package is not "
+            "installed. See documentation for installation instructions."
+        )
+    return bool(check_trimul_support(module, z, mask))

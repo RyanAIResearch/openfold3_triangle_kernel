@@ -103,6 +103,7 @@ model_config = mlc.ConfigDict(
                     # Use Triton-based memory-efficient attention kernel. Mutually
                     # exclusive with use_deepspeed_evo_attention and use_lma.
                     "use_triton_triangle_kernels": False,
+                    "use_turbopairformer_triangle_kernels": False,
                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
                     # exclusive with use_deepspeed_evo_attention.
                     "use_lma": False,
@@ -117,6 +118,7 @@ model_config = mlc.ConfigDict(
                     "use_deepspeed_evo_attention": False,
                     "use_cueq_triangle_kernels": False,
                     "use_triton_triangle_kernels": True,
+                    "use_turbopairformer_triangle_kernels": False,
                     "use_lma": False,
                     "msa_module": {
                         "swiglu_chunk_token_cutoff": None,

@@ -82,6 +82,13 @@ if cueq_is_installed:
         return False
 
 
+turbopairformer_is_installed = (
+    importlib.util.find_spec("turbopairformer") is not None
+    and torch.cuda.is_available()
+)
+if turbopairformer_is_installed:
+    from turbopairformer import is_triangle_attention_supported, turbo_attention
+
 DEFAULT_LMA_Q_CHUNK_SIZE = 1024
 DEFAULT_LMA_KV_CHUNK_SIZE = 4096
 
@@ -346,6 +353,7 @@ class Attention(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         lma_q_chunk_size: int = DEFAULT_LMA_Q_CHUNK_SIZE,
         lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
@@ -369,6 +377,8 @@ class Attention(nn.Module):
             use_triton_triangle_kernels:
                 Whether to use Triton-based memory-efficient attention kernel.
                 Mutually exclusive with other kernel options.
+            use_turbopairformer_triangle_kernels:
+                Whether to use the TurboPairFormer triangle attention kernel.
             use_lma:
                 Whether to use low-memory attention (Staats & Rabe 2021). If
                 none of the "use_<...>" flags are True, a stock PyTorch
@@ -409,7 +419,8 @@ class Attention(nn.Module):
         attn_options = [
             use_deepspeed_evo_attention
             or use_cueq_triangle_kernels
-            or use_triton_triangle_kernels,
+            or use_triton_triangle_kernels
+            or use_turbopairformer_triangle_kernels,
             use_lma,
             use_high_precision,
         ]
@@ -419,7 +430,7 @@ class Attention(nn.Module):
         if biases is None:
             biases = []
 
-        # DeepSpeed, cuequivariance, and Triton kernels apply scaling internally
+        # DeepSpeed, cuEq, Triton and TurboPairFormer apply scaling internally
         q, k, v = self._prep_qkv(
             q_x,
             kv_x,
@@ -427,11 +438,20 @@ class Attention(nn.Module):
                 use_deepspeed_evo_attention
                 or use_cueq_triangle_kernels
                 or use_triton_triangle_kernels
+                or use_turbopairformer_triangle_kernels
             ),
         )
 
+        if use_turbopairformer_triangle_kernels:
+            if not turbopairformer_is_installed:
+                raise ValueError(
+                    "Running with `use_turbopairformer_triangle_kernels` but package "
+                    "is not installed. See documentation for installation instructions."
+                )
+            scale = 1.0 / math.sqrt(self.c_hidden)
+            o = _turbopairformer_triangle_attn(q, k, v, biases, scale=scale)
         # cuequivariance kernel takes precedence over use_deepspeed_evo_attention
-        if use_cueq_triangle_kernels:
+        elif use_cueq_triangle_kernels:
             if not cueq_is_installed:
                 raise ValueError(
                     "Running with `use_cueq_triangle_kernels` but package is not "
@@ -820,3 +840,20 @@ def _cueq_triangle_attn(q, k, v, biases, scale):
     o = o.transpose(-2, -3)
 
     return o
+
+
+@torch.compiler.disable
+def _turbopairformer_triangle_attn(q, k, v, biases, scale):
+    assert len(biases) == 2, (
+        "TurboPairFormer triangle attention kernel requires two bias terms: "
+        "mask_bias and triangle_bias"
+    )
+    mask_bias, triangle_bias = biases
+
+    supported, _ = is_triangle_attention_supported(q, k, v, mask_bias, triangle_bias)
+    if not supported:
+        # Stock attention expects q scaled by _prep_qkv
+        return _attention(q * scale, k, v, biases).transpose(-2, -3)
+
+    # Output is already [*, Q, H, C_hidden]
+    return turbo_attention(q, k, v, mask_bias, triangle_bias)

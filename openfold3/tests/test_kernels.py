@@ -53,6 +53,7 @@ class TestKernels:
         use_deepspeed_evo_attention=False,
         use_cueq_triangle_kernels=False,
         use_triton_triangle_kernels=False,
+        use_turbopairformer_triangle_kernels=False,
         dtype=torch.float32,
     ):
         """Compare attention with and without using DeepSpeed Evoformer kernel."""
@@ -95,6 +96,7 @@ class TestKernels:
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
             ).cpu()
 
         err = torch.max(torch.abs(kernel_out - real_out))
@@ -151,6 +153,7 @@ class TestKernels:
         use_deepspeed_evo_attention=False,
         use_cueq_triangle_kernels=False,
         use_triton_triangle_kernels=False,
+        use_turbopairformer_triangle_kernels=False,
         dtype=torch.float32,
     ):
         """
@@ -218,6 +221,7 @@ class TestKernels:
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
         )
         loss_repro = torch.mean(out_repro)
         loss_repro.backward()
@@ -289,6 +293,20 @@ class TestKernels:
     def test_triton_backward_bf16(self):
         self._compare_attn_kernel_backward(
             use_triton_triangle_kernels=True,
+            dtype=torch.bfloat16,
+        )
+
+    @compare_utils.skip_unless_turbopairformer_installed()
+    def test_turbopairformer_forward_bf16(self):
+        self._compare_attn_kernel_forward(
+            use_turbopairformer_triangle_kernels=True,
+            dtype=torch.bfloat16,
+        )
+
+    @compare_utils.skip_unless_turbopairformer_installed()
+    def test_turbopairformer_backward_bf16(self):
+        self._compare_attn_kernel_backward(
+            use_turbopairformer_triangle_kernels=True,
             dtype=torch.bfloat16,
         )
 
@@ -406,6 +424,74 @@ class TestKernels:
             err = torch.max(torch.abs(t_repro.grad.cpu() - t_gt.grad.cpu()))
             assert err < eps, f"Error item {name}: {err}"
 
+    def _init_tri_mult(self, c_z, c_hidden, outgoing=True):
+        tm = TriangleMultiplicativeUpdate(
+            c_z=c_z,
+            c_hidden=c_hidden,
+            _outgoing=outgoing,
+        ).to("cuda")
+        with torch.no_grad():
+            for name in (
+                "linear_g",
+                "linear_z",
+                "linear_a_p",
+                "linear_a_g",
+                "linear_b_p",
+                "linear_b_g",
+            ):
+                lecun_normal_init_(getattr(tm, name).weight)
+        return tm
+
+    @compare_utils.skip_unless_turbopairformer_installed()
+    def test_turbopairformer_tri_mult_fwd(self):
+        batch = consts.batch_size
+        n_tmpl = 20
+        seq_len = 84
+        c_z = 128
+        tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z)
+        z = torch.randn(batch, n_tmpl, seq_len, seq_len, c_z, dtype=torch.bfloat16)
+        z = z.to("cuda")
+        mask = torch.ones(batch, n_tmpl, seq_len, seq_len).to("cuda")
+        with torch.no_grad():
+            fwd_reg = tm(z=z, mask=mask)
+            fwd_tpf = tm(z=z, mask=mask, use_turbopairformer_triangle_kernels=True)
+        err = torch.max(torch.abs(fwd_reg.float() - fwd_tpf.float()))
+        eps = 2e-2
+        assert err < eps, f"Error: {err}"
+
+    @compare_utils.skip_unless_turbopairformer_installed()
+    def test_turbopairformer_tri_mult_bwd(self):
+        batch = consts.batch_size
+        n_tmpl = 20
+        seq_len = 84
+        c_z = 128
+        eps = consts.eps
+        tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z)
+        z = torch.randn(batch, n_tmpl, seq_len, seq_len, c_z, dtype=torch.bfloat16)
+        mask = torch.ones(batch, n_tmpl, seq_len, seq_len).to("cuda")
+
+        def run(use_turbopairformer_triangle_kernels):
+            tm_run = self._init_tri_mult(c_z=c_z, c_hidden=c_z)
+            tm_run.load_state_dict(tm.state_dict())
+            z_run = z.clone().to("cuda").requires_grad_(True)
+            out = tm_run(
+                z=z_run,
+                mask=mask,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
+            )
+            torch.mean(out).backward()
+            return z_run, dict(tm_run.named_parameters())
+
+        z_repro, params_repro = run(True)
+        z_gt, params_gt = run(False)
+
+        err = torch.max(torch.abs(z_repro.grad.float() - z_gt.grad.float()))
+        assert err < eps, f"Error z.grad: {err}"
+        for name in params_gt:
+            t_repro, t_gt = params_repro[name], params_gt[name]
+            err = torch.max(torch.abs(t_repro.grad.float() - t_gt.grad.float()))
+            assert err < eps, f"Error item {name}: {err}"
+
     def _initialize_model_weights(self, model):
         for module in model.modules():
             if isinstance(module, torch.nn.Linear):
@@ -417,6 +503,7 @@ class TestKernels:
         use_deepspeed_evo_attention=False,
         use_cueq_triangle_kernels=False,
         use_triton_triangle_kernels=False,
+        use_turbopairformer_triangle_kernels=False,
         dtype=torch.float32,
         chunk_size=None,
         eps=2e-2,
@@ -508,6 +595,7 @@ class TestKernels:
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                 chunk_size=chunk_size,
             )
             out_repro_single_ds = F.layer_norm(out_repro_single_ds, (consts.c_s,)).cpu()
@@ -581,6 +669,13 @@ class TestKernels:
             dtype=torch.float32,
             chunk_size=4,
             eps=4e-2,
+        )
+
+    @compare_utils.skip_unless_turbopairformer_installed()
+    def test_compare_pairformer_turbopairformer_bf16(self):
+        self._compare_pairformer(
+            use_turbopairformer_triangle_kernels=True,
+            dtype=torch.bfloat16,
         )
 
     @compare_utils.skip_unless_triton_installed()
@@ -711,6 +806,7 @@ class TestKernels:
         use_deepspeed_evo_attention=False,
         use_cueq_triangle_kernels=False,
         use_triton_triangle_kernels=False,
+        use_turbopairformer_triangle_kernels=False,
         dtype=torch.float32,
         chunk_size=None,
         eps=2e-2,
@@ -784,6 +880,7 @@ class TestKernels:
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
             )
 
             compare_utils.assert_max_abs_diff_small(out_repro, out_repro_ds, eps)
@@ -831,6 +928,14 @@ class TestKernels:
             use_cueq_triangle_kernels=True,
             dtype=torch.float32,
             chunk_size=4,
+        )
+
+    @compare_utils.skip_unless_turbopairformer_installed()
+    def test_compare_template_stack_turbopairformer_bf16(self):
+        self._compare_template_stack(
+            use_turbopairformer_triangle_kernels=True,
+            dtype=torch.bfloat16,
+            eps=4e-2,
         )
 
     @compare_utils.skip_unless_triton_installed()

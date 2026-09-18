@@ -78,6 +78,7 @@ class TriangleAttention(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
@@ -94,6 +95,7 @@ class TriangleAttention(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                 use_lma=use_lma,
             ),
             mha_inputs,
@@ -111,6 +113,7 @@ class TriangleAttention(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
@@ -137,6 +140,8 @@ class TriangleAttention(nn.Module):
                 update kernel and attention kernel. When both this and
                 use_deepspeed_evo_attention are True, the cuEquivariance
                 kernel is only used for triangle attention
+            use_turbopairformer_triangle_kernels:
+                Whether to use the TurboPairFormer triangle attention kernel
             use_lma:
                 Whether to use low-memory attention during inference.
                 Mutually exclusive with use_deepspeed_evo_attention.
@@ -182,6 +187,7 @@ class TriangleAttention(nn.Module):
                 use_lma=use_lma,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                 inplace_safe=inplace_safe,
             )
         else:
@@ -193,6 +199,7 @@ class TriangleAttention(nn.Module):
                 use_lma=use_lma,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
             )
 
         if not self.starting:

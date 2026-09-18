@@ -38,7 +38,7 @@ A summary of our supported features includes:
 - Structure prediction of standard and non-canonical protein, RNA, and DNA chains, and small molecules
 - Pipelines for generating MSAs using the [ColabFold server](https://github.com/sokrypton/ColabFold) or using JackHMMER / hhblits following the AlphaFold3 protocol
 - [Structure templates](https://openfold-3.readthedocs.io/en/latest/template_how_to.html) for protein monomers
-- Kernel acceleration through [cuEquivariance](https://docs.nvidia.com/cuda/cuequivariance) and [DeepSpeed4Science](https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/) kernels - more details [here](https://openfold-3.readthedocs.io/en/latest/kernels.html)
+- Kernel acceleration through [cuEquivariance](https://docs.nvidia.com/cuda/cuequivariance), [DeepSpeed4Science](https://www.deepspeed.ai/tutorials/ds4sci_evoformerattention/) and [TurboPairFormer](https://pypi.org/project/turbopairformer/) kernels - more details [here](https://openfold-3.readthedocs.io/en/latest/kernels.html)
 - Support for [multi-query jobs](https://openfold-3.readthedocs.io/en/latest/input_format.html) with [distributed predictions across multiple GPUs](https://openfold-3.readthedocs.io/en/latest/inference.html#inference-run-on-multiple-gpus)
 - Custom settings for [memory constrained GPU resources](https://openfold-3.readthedocs.io/en/latest/inference.html#inference-low-memory-mode)
 - [Training data processing](https://openfold-3.readthedocs.io/en/latest/data_pipeline_reference.html) and [model training](https://openfold-3.readthedocs.io/en/latest/training.html)

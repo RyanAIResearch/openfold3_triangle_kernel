@@ -112,6 +112,21 @@ def skip_unless_cueq_installed():
     return pytest.mark.skipif(not is_cuequivariance_available(), reason=reason)
 
 
+def skip_unless_turbopairformer_installed():
+    turbopairformer_is_installed = (
+        importlib.util.find_spec("turbopairformer") is not None
+    )
+    if not turbopairformer_is_installed:
+        reason = "Requires turbopairformer to be installed"
+    elif not torch.cuda.is_available():
+        reason = "Requires CUDA (turbopairformer is installed but no GPU available)"
+    else:
+        reason = "turbopairformer not available"
+    return pytest.mark.skipif(
+        not (turbopairformer_is_installed and torch.cuda.is_available()), reason=reason
+    )
+
+
 def skip_unless_triton_installed():
     triton_is_installed = importlib.util.find_spec("triton") is not None
     return pytest.mark.skipif(not triton_is_installed, reason="Requires Triton")

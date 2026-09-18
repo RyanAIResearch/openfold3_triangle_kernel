@@ -52,6 +52,7 @@ Available pixi environments:
 | `openfold3-cuda12` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 12.                                |
 | `openfold3-cuda13` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 13.                                |
 | `openfold3-rocm7`  | `linux-64`                                         | AMD GPU environment using ROCm 7.                                    |
+| `openfold3-turbopairformer` | `linux-64`                                | NVIDIA Hopper GPU environment for training with the {doc}`TurboPairFormer triangle kernels <turbopairformer>` (Python 3.14, PyTorch 2.10.0 / CUDA 12.8). |
 
 Choose the environment that matches your system. For example, use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12` or `openfold3-cuda13` for NVIDIA GPU systems, and `openfold3-rocm7` for AMD ROCm systems.
 
@@ -95,6 +96,9 @@ To install GPU accelerated {doc}`cuEquivariance attention kernels <kernels>`, us
 ```bash
 pip install openfold3[cuequivariance]
 ```
+
+**TurboPairFormer**
+To use the {doc}`TurboPairFormer triangle kernels <turbopairformer>` for training on Hopper GPUs, use the `openfold3-turbopairformer` pixi environment or install the `turbopairformer` wheel in a Python 3.14 environment as described on that page.
 
 **Triton** To use AMD ROCm-compatible Triton kernels, first install the ROCm PyTorch wheel (which bundles ROCm Triton), then install openfold3:
 

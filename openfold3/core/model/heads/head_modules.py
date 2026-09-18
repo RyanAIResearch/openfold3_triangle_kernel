@@ -99,6 +99,7 @@ class AuxiliaryHeadsAllAtom(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         offload_inference: bool = False,
@@ -132,6 +133,9 @@ class AuxiliaryHeadsAllAtom(nn.Module):
                 Mutually exclusive with use_lma
             use_triton_triangle_kernels:
                 Whether to use Triton triangle attention kernel.
+            use_turbopairformer_triangle_kernels:
+                Whether to use the TurboPairFormer triangle multiplicative update
+                and attention kernels.
             use_lma:
                 Whether to use low-memory attention during inference.
                 Mutually exclusive with use_deepspeed_evo_attention.
@@ -209,6 +213,7 @@ class AuxiliaryHeadsAllAtom(nn.Module):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
             offload_inference=offload_inference,

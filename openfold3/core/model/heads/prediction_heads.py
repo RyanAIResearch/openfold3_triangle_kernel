@@ -124,6 +124,7 @@ class PairformerEmbedding(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         offload_inference: bool = False,
@@ -156,6 +157,7 @@ class PairformerEmbedding(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
                 _mask_trans=_mask_trans,
@@ -186,6 +188,7 @@ class PairformerEmbedding(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -216,6 +219,7 @@ class PairformerEmbedding(nn.Module):
             use_deepspeed_evo_attention
             or use_cueq_triangle_kernels
             or use_triton_triangle_kernels
+            or use_turbopairformer_triangle_kernels
         )
         if use_kernels and si.shape[0] > 1:
             chunk_size = None
@@ -231,6 +235,7 @@ class PairformerEmbedding(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
                 _mask_trans=_mask_trans,
@@ -253,6 +258,7 @@ class PairformerEmbedding(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         offload_inference: bool = False,
@@ -282,6 +288,9 @@ class PairformerEmbedding(nn.Module):
                 Mutually exclusive with use_lma.
             use_cueq_triangle_kernels:
                 Whether to use CuEquivariance kernels.
+            use_turbopairformer_triangle_kernels:
+                Whether to use the TurboPairFormer triangle multiplicative update
+                and attention kernels.
             use_lma:
                 Whether to use low-memory attention during inference.
                 Mutually exclusive with use_deepspeed_evo_attention.
@@ -342,6 +351,7 @@ class PairformerEmbedding(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
                 offload_inference=offload_inference,
@@ -360,6 +370,7 @@ class PairformerEmbedding(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
                 _mask_trans=_mask_trans,

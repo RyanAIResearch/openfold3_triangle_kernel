@@ -208,6 +208,7 @@ class MSABlock(nn.Module, ABC):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -313,9 +314,12 @@ class PairBlock(nn.Module):
         inplace_safe: bool,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
     ) -> torch.Tensor:
         """Perform the outgoing and incoming triangular multiplicative updates."""
-        inplace_safe = inplace_safe and (not use_cueq_triangle_kernels)
+        inplace_safe = inplace_safe and not (
+            use_cueq_triangle_kernels or use_turbopairformer_triangle_kernels
+        )
         ## VS: having both inplace_safe and use_cueq_triangle_kernels set to
         ## true causes `z = z + self.ps_dropout_row_layer(tmu_update)` below
         ## to be skipped, as this is the expected output of tri_mult w/ inplace
@@ -329,6 +333,7 @@ class PairBlock(nn.Module):
             _add_with_inplace=True,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
         )
         if not inplace_safe:
             z = z + self.ps_dropout_row_layer(tmu_update)
@@ -347,6 +352,7 @@ class PairBlock(nn.Module):
             _add_with_inplace=True,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
         )
         if not inplace_safe:
             z = z + self.ps_dropout_row_layer(tmu_update)
@@ -363,6 +369,7 @@ class PairBlock(nn.Module):
         use_deepspeed_evo_attention: bool,
         use_cueq_triangle_kernels: bool,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
@@ -377,6 +384,7 @@ class PairBlock(nn.Module):
                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                     use_triton_triangle_kernels=use_triton_triangle_kernels,
+                    use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                     use_lma=use_lma,
                     inplace_safe=inplace_safe,
                 )
@@ -399,6 +407,7 @@ class PairBlock(nn.Module):
                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                     use_triton_triangle_kernels=use_triton_triangle_kernels,
+                    use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
                     use_lma=use_lma,
                     inplace_safe=inplace_safe,
                 )
@@ -418,6 +427,7 @@ class PairBlock(nn.Module):
         use_deepspeed_evo_attention: bool = False,
         use_cueq_triangle_kernels: bool = False,
         use_triton_triangle_kernels: bool = False,
+        use_turbopairformer_triangle_kernels: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
@@ -462,6 +472,7 @@ class PairBlock(nn.Module):
             inplace_safe=inplace_safe,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
         )
 
         z = self.tri_att_start_end(
@@ -471,6 +482,7 @@ class PairBlock(nn.Module):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
+            use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
         )
