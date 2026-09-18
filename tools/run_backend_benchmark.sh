@@ -25,6 +25,8 @@ case "$run_cwd/" in
 esac
 
 runner_yaml=
+devices=1
+num_nodes=1
 arguments=("$@")
 for ((index = 0; index < ${#arguments[@]}; index++)); do
   case "${arguments[$index]}" in
@@ -36,8 +38,26 @@ for ((index = 0; index < ${#arguments[@]}; index++)); do
       runner_yaml=${arguments[$((index + 1))]}
       ;;
     --runner-yaml=*) runner_yaml=${arguments[$index]#--runner-yaml=} ;;
+    --devices|--num-nodes)
+      if ((index + 1 >= ${#arguments[@]})); then
+        echo "${arguments[$index]} requires a count" >&2
+        exit 2
+      fi
+      if [[ ${arguments[$index]} == --devices ]]; then
+        devices=${arguments[$((index + 1))]}
+      else
+        num_nodes=${arguments[$((index + 1))]}
+      fi
+      ;;
+    --devices=*) devices=${arguments[$index]#--devices=} ;;
+    --num-nodes=*) num_nodes=${arguments[$index]#--num-nodes=} ;;
   esac
 done
+if [[ ${OPENFOLD3_TRIANGLE_PROVIDER:-intree} == turbopairformer ]] && \
+   [[ "$devices" != 1 || "$num_nodes" != 1 ]]; then
+  echo "standalone TurboPairFormer benchmarks currently require --devices 1 --num-nodes 1; multi-GPU validation is pending" >&2
+  exit 2
+fi
 if [[ -n "$runner_yaml" ]]; then
   case "$runner_yaml" in
     /*) ;;
@@ -47,10 +67,25 @@ if [[ -n "$runner_yaml" ]]; then
     "$runner_yaml" --base-dir "$run_cwd"
 fi
 
-(
-  cd "$source_root"
-  "$prefix/bin/python" -m tools.manage_attested_sm90_wheel verify-prebuilt
-)
+case "${OPENFOLD3_TRIANGLE_PROVIDER:-intree}" in
+  turbopairformer)
+    (
+      cd "$run_cwd"
+      "$prefix/bin/python" "$source_root/tools/turbopairformer_doctor.py" \
+        --expect-provider turbopairformer
+    )
+    ;;
+  intree)
+    (
+      cd "$source_root"
+      "$prefix/bin/python" -m tools.manage_attested_sm90_wheel verify-prebuilt
+    )
+    ;;
+  *)
+    echo "unknown OPENFOLD3_TRIANGLE_PROVIDER: $OPENFOLD3_TRIANGLE_PROVIDER" >&2
+    exit 2
+    ;;
+esac
 
 cd "$run_cwd"
 exec "$prefix/bin/python" "$source_root/tools/benchmark_training_backend.py" "$@"

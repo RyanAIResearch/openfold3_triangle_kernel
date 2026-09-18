@@ -185,6 +185,56 @@ host DDP preflight has not been integrated and validated for this package. The
 existing in-tree distributed workflow retains its separate certification and
 artifact requirements.
 
+## Compare four backends on one H100
+
+Start with crop 384, using an already prepared full-crop dataset. From this
+feature-branch checkout, run the following in Bash. Each backend starts from
+scratch with seed 42, five warmup steps, and 20 measured training steps.
+
+```bash
+set -euo pipefail
+mkdir -p ../openfold3-run
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
+export CROP_DATA_ROOT="$OF3_RUN_CWD/pdb-full-crop-384-640-768"
+export CUDA_VISIBLE_DEVICES=0
+export RESULTS_ROOT="$OF3_RUN_CWD/backend-comparison-1gpu/crop384-$(date -u +%Y%m%dT%H%M%SZ)"
+unset PYTHONPATH PYTHONHOME LD_PRELOAD
+
+test -f "$CROP_DATA_ROOT/runner_crop_384.yaml"
+test ! -e "$RESULTS_ROOT"
+mkdir -p "$RESULTS_ROOT/logs"
+FAILED_BACKENDS=()
+for BACKEND in aqlab triton cueq turbopairformer; do
+  if ! pixi run -e openfold3-cuda12 benchmark-single-node \
+      --runner-yaml "$CROP_DATA_ROOT/runner_crop_384.yaml" \
+      --backend "$BACKEND" \
+      --output-root "$RESULTS_ROOT" \
+      --warmup-steps 5 --measure-steps 20 \
+      --devices 1 --num-workers 10 \
+      --require-full-crop --use-tf32 --seed 42 \
+      2>&1 | tee "$RESULTS_ROOT/logs/${BACKEND}.log"; then
+    FAILED_BACKENDS+=("$BACKEND")
+    continue
+  fi
+  if [[ ! -f "$RESULTS_ROOT/$BACKEND/summary.json" ]]; then
+    FAILED_BACKENDS+=("$BACKEND")
+  fi
+done
+if (( ${#FAILED_BACKENDS[@]} )); then
+  echo "Incomplete: ${FAILED_BACKENDS[*]}; not plotting" >&2
+  exit 1
+fi
+pixi run -e openfold3-cuda12 plot-backend-comparison \
+  "$RESULTS_ROOT" --baseline triton
+```
+
+Set `CROP_DATA_ROOT` to the existing fixture directory if it lives elsewhere.
+All four runs use BF16 mixed precision and the same explicit `--use-tf32`
+setting for host FP32 matrix operations. This setting does not change the
+arithmetic of TurboPairFormer's custom CUDA kernels. A completed short run is
+an integration and timing check; it does not establish long-run convergence
+or reproduce a historical speedup by itself.
+
 ## Verify changes
 
 ```bash

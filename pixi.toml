@@ -505,6 +505,9 @@ purify-pdb-subset.cmd = ["python", "-u", "scripts/datasets/purify_subset.py"]
 setup-pdb-subset.depends-on = ["generate-pdb-subset", "download-pdb-subset"]
 validate-training-data.cmd = ["python", "tools/validate_training_data.py"]
 train-single-gpu.cmd = ["bash", "scripts/turbopairformer/run_single_gpu.sh"]
+benchmark-single-gpu.cmd = ["bash", "tools/run_backend_benchmark.sh"]
+benchmark-single-node.cmd = ["bash", "tools/run_backend_benchmark.sh"]
+plot-backend-comparison.cmd = ["python", "tools/plot_backend_comparison.py"]
 
 
 # --- StableFold H100 production-candidate workflow

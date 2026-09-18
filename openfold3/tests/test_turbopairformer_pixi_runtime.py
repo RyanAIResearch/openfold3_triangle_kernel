@@ -2,9 +2,13 @@
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -51,6 +55,128 @@ def test_package_environment_uses_pypi_torch_and_current_noneditable_host():
     ]
     assert "train-multinode" not in tasks
     assert "train-single-node" not in tasks
+
+
+def test_package_environment_exposes_installed_runtime_benchmark_tasks():
+    manifest = tomllib.loads((ROOT / "pixi.toml").read_text())
+    tasks = manifest["feature"]["turbopairformer-hopper"]["tasks"]
+    for task in ("benchmark-single-gpu", "benchmark-single-node"):
+        assert tasks[task]["cmd"] == ["bash", "tools/run_backend_benchmark.sh"]
+    assert tasks["plot-backend-comparison"]["cmd"] == [
+        "python",
+        "tools/plot_backend_comparison.py",
+    ]
+
+
+@pytest.mark.parametrize("provider", ["turbopairformer", "intree"])
+@pytest.mark.parametrize("preflight_fails", [False, True])
+def test_benchmark_wrapper_checks_selected_install_before_launch(
+    tmp_path, provider, preflight_fails
+):
+    source = tmp_path / "source"
+    run_dir = tmp_path / "run"
+    prefix = tmp_path / "env"
+    source.mkdir()
+    run_dir.mkdir()
+    (prefix / "bin").mkdir(parents=True)
+    call_log = tmp_path / "calls.jsonl"
+    interpreter = prefix / "bin/python"
+    interpreter.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "with open(os.environ['BENCHMARK_CALL_LOG'], 'a') as log:\n"
+        "    log.write(json.dumps({'args': sys.argv[1:], 'cwd': os.getcwd()}) + '\\n')\n"
+        "is_preflight = any('turbopairformer_doctor' in arg or "
+        "'manage_attested_sm90_wheel' in arg for arg in sys.argv[1:])\n"
+        "if is_preflight and os.environ['BENCHMARK_PREFLIGHT_FAILS'] == '1':\n"
+        "    sys.exit(7)\n"
+    )
+    interpreter.chmod(0o755)
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in ("PYTHONPATH", "PYTHONHOME", "LD_PRELOAD")
+    }
+    environment.update(
+        CONDA_PREFIX=str(prefix),
+        PIXI_PROJECT_ROOT=str(source),
+        OF3_RUN_CWD=str(run_dir),
+        OPENFOLD3_TRIANGLE_PROVIDER=provider,
+        BENCHMARK_CALL_LOG=str(call_log),
+        BENCHMARK_PREFLIGHT_FAILS=str(int(preflight_fails)),
+    )
+    backend = "turbopairformer" if provider == "turbopairformer" else "stablefold"
+    arguments = ["--runner-yaml", "runner.yaml", "--backend", backend]
+    result = subprocess.run(
+        ["bash", str(ROOT / "tools/run_backend_benchmark.sh"), *arguments],
+        cwd=source,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == (7 if preflight_fails else 0), result.stderr
+    calls = [json.loads(line) for line in call_log.read_text().splitlines()]
+    assert calls[0]["args"] == [
+        str(source / "tools/validate_training_data.py"),
+        str(source / "runner.yaml"),
+        "--base-dir",
+        str(run_dir),
+    ]
+    if provider == "turbopairformer":
+        assert calls[1] == {
+            "args": [
+                str(source / "tools/turbopairformer_doctor.py"),
+                "--expect-provider",
+                "turbopairformer",
+            ],
+            "cwd": str(run_dir),
+        }
+    else:
+        assert calls[1] == {
+            "args": ["-m", "tools.manage_attested_sm90_wheel", "verify-prebuilt"],
+            "cwd": str(source),
+        }
+    if preflight_fails:
+        assert len(calls) == 2
+    else:
+        assert calls[2] == {
+            "args": [str(source / "tools/benchmark_training_backend.py"), *arguments],
+            "cwd": str(run_dir),
+        }
+        assert len(calls) == 3
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [["--devices", "2"], ["--devices=2"], ["--num-nodes", "2"], ["--num-nodes=2"]],
+)
+def test_package_benchmark_rejects_unqualified_distributed_launch(tmp_path, arguments):
+    source = tmp_path / "source"
+    run_dir = tmp_path / "run"
+    prefix = tmp_path / "env"
+    for directory in (source, run_dir, prefix):
+        directory.mkdir()
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in ("PYTHONPATH", "PYTHONHOME", "LD_PRELOAD")
+    }
+    environment.update(
+        CONDA_PREFIX=str(prefix),
+        PIXI_PROJECT_ROOT=str(source),
+        OF3_RUN_CWD=str(run_dir),
+        OPENFOLD3_TRIANGLE_PROVIDER="turbopairformer",
+    )
+    result = subprocess.run(
+        ["bash", str(ROOT / "tools/run_backend_benchmark.sh"), *arguments],
+        cwd=source,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 2
+    assert "require --devices 1 --num-nodes 1" in result.stderr
+    assert "multi-GPU validation is pending" in result.stderr
 
 
 def test_package_lock_pins_bundled_candidate_and_pypi_torch():
