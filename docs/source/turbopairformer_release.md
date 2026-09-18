@@ -12,10 +12,16 @@ is `pip install TurboPairFormer`; Python imports use `turbopairformer`.
 
 ## Build and validate the final wheel
 
-Use a clean committed checkout and the package's documented CUDA build
-environment. Build the manylinux wheel with
-`packages/turbopairformer/tools/build_sm90_wheel.sh --pypi`. On the GPU validation
-host with its matching runtime image, run:
+Use a clean committed checkout on a Linux/Hopper host with Docker and NVIDIA
+Container Toolkit. The container builder produces the manylinux wheel and its
+matching runtime image without changing the host's Python environment:
+
+```bash
+bash packages/turbopairformer/tools/build_manylinux_wheel.sh \
+  /absolute/path/to/new-wheel-directory
+```
+
+On the same host, validate the final wheel using that runtime image:
 
 ```bash
 bash scripts/turbopairformer/validate_release_gpu.sh \
@@ -24,8 +30,9 @@ bash scripts/turbopairformer/validate_release_gpu.sh \
 
 The driver installs the **final repaired wheel** into an isolated environment,
 runs outside the source checkout, disables JIT, and checks that OpenFold3 is not
-required. It includes the installed smoke test, doctor, standalone GPU tests,
-and release bundle creation. Retain its logs and environment information.
+required. It records the installed smoke test, doctor, standalone GPU tests,
+and environment information in the validation directory. After it succeeds,
+create the release bundle using the separate command below.
 
 For a manual equivalent, run outside the source checkout with `PYTHONPATH`
 unset, JIT disabled and no compiler available. Produce these two machine-readable
@@ -97,14 +104,18 @@ draft release, then publish it. **Publishing this stable GitHub release starts
 the PyPI upload.** The workflow never rebuilds the wheel. Keep the version and
 assets unchanged during a retry; do not replace an already published PyPI file.
 
-After a successful upload, verify on the supported Linux/Hopper environment:
+After a successful upload, verify in a new environment on a supported
+Linux/Hopper host:
 
 ```bash
-python -m pip install --only-binary=:all: TurboPairFormer==0.1.0
-python -m pip check
+python3.14 -m venv /absolute/path/to/new-pypi-validation-venv
+/absolute/path/to/new-pypi-validation-venv/bin/python -m pip install \
+  --only-binary=:all: TurboPairFormer==0.1.0
+/absolute/path/to/new-pypi-validation-venv/bin/python -m pip check
 ```
 
-Run the installed doctor and smoke test again against that PyPI download.
+Use that environment's Python to run the installed doctor and smoke test again
+against the PyPI download.
 
 References: [GitHub release events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#release),
 [PyPI pending publishers](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).

@@ -5,8 +5,9 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；TurboP
 显式启用。公开 facade 对不支持的输入直接报错；模型级 blanket-coverage 路由会对
 不满足 facade 契约的站点记录一次原因并回退官方 PyTorch attention。
 
-当前名称迁移尚未生成新的 TurboPairFormer AOT wheel 或 GPU 验证回执。
-以下算法契约和历史验证来自前身 StableFold；旧产物身份和结果不随改名转移。
+每个 TurboPairFormer 发布 wheel 都必须附带自身的安装与 GPU 验证回执。
+以下算法契约沿用前身 StableFold；旧产物身份和历史结果不随改名转移。
+PyPI 可安装的算子包与完整模型生产训练认证是不同范围；后者仍受下述门禁约束。
 
 ## 当前发布状态
 
