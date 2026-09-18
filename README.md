@@ -13,9 +13,10 @@ module names, extension identities, artifact paths and kernel receipts use the
 TurboPairFormer name.
 
 This `main` branch provides the integrated OpenFold3 production workflow. The
-standalone **TurboPairFormer** Python package is being prepared on
-[`feat/turbopairformer-pip-package`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/feat/turbopairformer-pip-package)
-and has not yet been published to PyPI.
+standalone **TurboPairFormer 0.1.0** Python package is available on
+[PyPI](https://pypi.org/project/turbopairformer/0.1.0/). Package development and
+its OpenFold3 integration live on
+[`feat/turbopairformer-pip-package`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/feat/turbopairformer-pip-package).
 
 The central optimization is a single-reconstruction Triangle Attention
 backward. A flash-style two-pass implementation reconstructs the attention
@@ -257,11 +258,34 @@ been relabeled as measurements of this renamed release.
 The standalone `turbopairformer` package exposes both operators directly:
 
 ```python
+import torch
 from turbopairformer import turbo_attention, turbo_trimul
 
+B, N, H, D = 1, 128, 4, 32
+# q/k/v: [batch, outer, heads, sequence, head_dim]; here outer = N.
+q, k, v = [
+    torch.randn(B, N, H, N, D, device="cuda", dtype=torch.bfloat16,
+                requires_grad=True)
+    for _ in range(3)
+]
+# Pair bias is shared across the outer dimension.
+pair_bias = torch.randn(B, 1, H, N, N, device="cuda", dtype=torch.bfloat16,
+                        requires_grad=True)
+
 attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
+attention_output.float().square().mean().backward()
+print(attention_output.shape)  # torch.Size([1, 128, 128, 4, 32])
+```
+
+For TriMul, use your model's existing weights as `module` and its BF16 pair
+representation as `z`:
+
+```python
 trimul_output = turbo_trimul(module, z)
 ```
+
+The standalone package enables single-reconstruction backward and saves the
+forward rounding residual by default; no environment switches are needed.
 
 Masks default to `None` (all positions valid, noncausal); supply explicit masks
 for padded inputs. `pair_bias` remains required. Both calls validate supported
@@ -270,8 +294,17 @@ inputs and provide PyTorch autograd integration.
 [standalone package examples](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/README.md)
 for input shapes and the weight interface.
 
-PyPI publication is pending. Install the candidate package in its dedicated
-environment using the
+Install the package into a fresh CPython 3.14 environment on Linux x86-64
+(glibc 2.28 or newer) with an NVIDIA H100:
+
+```bash
+python3.14 -m venv .venv-turbopairformer
+source .venv-turbopairformer/bin/activate
+python -m pip install turbopairformer
+```
+
+The dedicated environment keeps the package's dependencies separate from your
+existing training environments. See the
 [package installation guide](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/docs/source/turbopairformer_pip_quickstart.md).
 This package uses PyPI Torch / CUDA 12.8; the integrated production environment
 on `main` uses Conda Torch / CUDA 12.9.
