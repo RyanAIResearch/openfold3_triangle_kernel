@@ -230,8 +230,10 @@ pixi run -e openfold3-cuda12 plot-backend-comparison \
 
 Set `CROP_DATA_ROOT` to the existing fixture directory if it lives elsewhere.
 All four runs use BF16 mixed precision and the same explicit `--use-tf32`
-setting for host FP32 matrix operations. This setting does not change the
-arithmetic of TurboPairFormer's custom CUDA kernels. A completed short run is
+setting for host FP32 matrix operations. The pinned cuEq 0.10.0 requires TF32
+for its FP32 Q/K/V Triangle Attention backward; its BF16 path does not require
+TF32. This setting does not change the arithmetic of TurboPairFormer's custom
+CUDA kernels. A completed short run is
 an integration and timing check; it does not establish long-run convergence
 or reproduce a historical speedup by itself.
 
