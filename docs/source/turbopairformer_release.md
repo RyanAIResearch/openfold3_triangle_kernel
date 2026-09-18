@@ -50,7 +50,8 @@ TURBOPAIRFORMER_TEST_WHEEL="$WHEEL" python -m pytest \
 
 Run each command successfully before continuing. The bundle checker requires
 successful, non-skipped attention support, attention FP64 accuracy, TriMul
-execution and TriMul numerical tests. The doctor must load all five extensions
+execution, TriMul numerical tests, and the public API import-order checks.
+The doctor must load all five extensions
 from site-packages, with a manifest digest matching the wheel. Keep host-provider
 and pixi integration results alongside the release notes; these are separate
 from standalone kernel validation.

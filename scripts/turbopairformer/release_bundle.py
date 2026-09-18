@@ -25,6 +25,7 @@ REQUIRED_GPU_CASES = {
     "attention FP64": "test_triangle_attention_fp64_error_stays_within_stock_envelope",
     "TriMul execution": "test_all_eight_production_symbols_accept_valid_inputs",
     "TriMul numerics": "test_wgrad_fold_matches_strict_ascending_reference",
+    "public API": "test_public_functions_survive_internal_import_order",
 }
 EXTENSIONS = {
     "stablefold_forward",

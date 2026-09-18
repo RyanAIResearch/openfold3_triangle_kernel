@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
-  "source_commit": "d77e8d06cba4918fa551ce1f4ec41cbb21d055af",
+  "source_commit": "cdc731270c6e8a0752bc774c8ea6fb4b7f9d6687",
   "wheel": {
     "filename": "turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl",
-    "sha256": "dd7da8690ae89be29a789825ac6c5796c7aa96b7eb129a481e9eef0ab1e626fe"
+    "sha256": "1a47c9c0dee79ad41a135d2a6b5061c163a72c865d9bbe521538180ec83cdd02"
   },
   "checks": [
     {
       "name": "installed_aot",
       "exit_code": 0,
-      "command": "PATH=/nonexistent /tmp/validation/bin/python /source/tools/turbopairformer_doctor.py --expect-provider turbopairformer --json",
+      "command": "env PATH=/nonexistent /tmp/validation/bin/python /source/tools/turbopairformer_doctor.py --expect-provider turbopairformer --json",
       "evidence": "installed-aot.json",
-      "sha256": "a9a7170374fc5084533fa70c3114b3e70707f63c1eb90554c62d4749ab5eb04d"
+      "sha256": "31f042d198d284bb3477dc400b19bc7df2752facf1fbe27d40654308d509e782"
     },
     {
       "name": "standalone_gpu",
       "exit_code": 0,
       "command": "TURBOPAIRFORMER_TEST_WHEEL=/wheel/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl /tmp/validation/bin/python -m pytest /source/packages/turbopairformer/tests --ignore=/source/packages/turbopairformer/tests/host_openfold3 --import-mode=prepend -o cache_dir=/tmp/pytest-cache --junitxml=/evidence/standalone-gpu.xml -ra",
       "evidence": "standalone-gpu.xml",
-      "sha256": "bc2bb1af1050878b162e1fa1e60ab421d8ca898f672ef5c0ec037e0438a2012f"
+      "sha256": "3e1746051a2eeebce2f19eb4e8781d91db356dce512f3de3021df9e4dac19afe"
     }
   ]
 }

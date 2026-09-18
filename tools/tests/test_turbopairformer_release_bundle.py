@@ -99,13 +99,16 @@ def test_changed_gpu_evidence_is_rejected(bundle):
         release.validate_receipt(output, info, COMMIT)
 
 
-def test_gpu_tests_must_execute_each_required_scope(bundle):
+@pytest.mark.parametrize("scope", ("attention support", "public API"))
+def test_gpu_tests_must_execute_each_required_scope(bundle, scope):
     output, _, _ = bundle
     path = output / "standalone-gpu.xml"
     tree = ET.parse(path)
-    ET.SubElement(tree.getroot().find("testcase"), "skipped")
+    case_name = release.REQUIRED_GPU_CASES[scope] + "[case]"
+    case = tree.getroot().find(f"testcase[@name='{case_name}']")
+    ET.SubElement(case, "skipped")
     tree.write(path)
-    with pytest.raises(ValueError, match="no executed attention support"):
+    with pytest.raises(ValueError, match=f"no executed {scope}"):
         release.validate_junit(path)
 
 

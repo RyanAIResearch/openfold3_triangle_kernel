@@ -15,11 +15,11 @@
       "stablefold_trimul": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/_ext/_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so"
     },
     "git": {
-      "commit": "d77e8d06cba4918fa551ce1f4ec41cbb21d055af",
+      "commit": "cdc731270c6e8a0752bc774c8ea6fb4b7f9d6687",
       "dirty": false
     },
     "manifest": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/_build_manifest.json",
-    "manifest_sha256": "2d2fc449b8eedb3738cf272d74882221bb532e3807889b83b0386126f055840f"
+    "manifest_sha256": "ce38f1f1fed21e1587650c47545212ebbb4d2b82718572f98133305a6a33fd13"
   },
   "gpu": {
     "available": true,
