@@ -49,6 +49,8 @@ def validate_wheel(path: Path, commit: str) -> dict:
         "turbopairformer_wheel_validator",
         ROOT / "packages/turbopairformer/tools/validate_wheel.py",
     )
+    if spec is None or spec.loader is None:
+        raise ValueError("cannot load the TurboPairFormer wheel validator")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.validate_wheel(path, require_pypi=True, expected_commit=commit)
