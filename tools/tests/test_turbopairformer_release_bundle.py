@@ -106,6 +106,8 @@ def test_changed_gpu_evidence_is_rejected(bundle):
         "public API",
         "default attention mask",
         "default TriMul mask",
+        "default residual execution",
+        "explicit classic execution",
     ),
 )
 def test_gpu_tests_must_execute_each_required_scope(bundle, scope):

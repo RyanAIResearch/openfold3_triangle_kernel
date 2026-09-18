@@ -26,6 +26,8 @@ print(attention_output.shape)  # torch.Size([1, 128, 128, 4, 32])
 ```
 
 All positions in this synthetic example are valid, so the mask is omitted.
+Single-reconstruction backward and the saved forward rounding residual are
+enabled by default; no environment switches are needed for this example.
 For TriMul, pass your existing triangle-multiplication module and pair tensor:
 
 ```python
@@ -168,8 +170,9 @@ Source-only development requires the explicit `TURBOPAIRFORMER_SOURCE_ONLY=1` bu
 opt-in and `TURBOPAIRFORMER_ALLOW_JIT=1` runtime opt-in. Editable AOT builds write an
 ignored `_build_manifest.local.json`; wheels embed `_build_manifest.json`.
 
-The runtime execution flags use `TURBOPAIRFORMER_SR_BACKWARD`,
-`TURBOPAIRFORMER_SR_SHADOW`, and `TURBOPAIRFORMER_ALLOW_JIT`. The old
+The defaults are `TURBOPAIRFORMER_SR_BACKWARD=1` (single-reconstruction backward),
+`TURBOPAIRFORMER_SR_SHADOW=1` (save and use the forward rounding residual), and
+`TURBOPAIRFORMER_ALLOW_JIT=0`. Advanced users may explicitly override them. The old
 `STABLEFOLD_*` execution flags and corresponding `OPENFOLD3_*` aliases remain
 accepted. Precedence is `TURBOPAIRFORMER_*`, then `STABLEFOLD_*`, then
 `OPENFOLD3_*`; an explicit canonical `0` overrides a legacy `1`. Build and

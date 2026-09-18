@@ -14,8 +14,10 @@ import os
 from pathlib import Path
 
 os.environ["TURBOPAIRFORMER_ALLOW_JIT"] = "0"
-os.environ["TURBOPAIRFORMER_SR_BACKWARD"] = "1"
-os.environ["TURBOPAIRFORMER_SR_SHADOW"] = "1"
+# Exercise the package defaults, independent of the caller's training launcher.
+for prefix in ("TURBOPAIRFORMER", "STABLEFOLD", "OPENFOLD3"):
+    for suffix in ("SR_BACKWARD", "SR_SHADOW"):
+        os.environ.pop(f"{prefix}_{suffix}", None)
 
 import torch  # noqa: E402
 
@@ -88,6 +90,12 @@ def trimul_run(outgoing):
 
 
 def main():
+    from turbopairformer.policy import execution_environment
+
+    effective_flags = execution_environment()
+    assert effective_flags["TURBOPAIRFORMER_SR_BACKWARD"] == "1"
+    assert effective_flags["TURBOPAIRFORMER_SR_SHADOW"] == "1"
+    assert effective_flags["TURBOPAIRFORMER_ALLOW_JIT"] == "0"
     package_root = Path(turbopairformer.__file__).resolve().parent
     extension_paths = []
     for name in (
@@ -127,6 +135,7 @@ def main():
         json.dumps(
             {
                 "turbopairformer": turbopairformer.__version__,
+                "effective_execution_flags": effective_flags,
                 "package": str(package_root),
                 "torch": torch.__version__,
                 "cuda": torch.version.cuda,

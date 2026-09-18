@@ -24,6 +24,7 @@ LEGACY_ENV_NAMES: dict[str, tuple[str, ...]] = {
     SR_SHADOW: ("STABLEFOLD_SR_SHADOW", "OPENFOLD3_SR_SHADOW"),
     ALLOW_JIT: ("STABLEFOLD_ALLOW_JIT", "OPENFOLD3_TRIANGLE_ALLOW_JIT"),
 }
+_DEFAULT_EXECUTION_FLAGS = {SR_BACKWARD: "1", SR_SHADOW: "1", ALLOW_JIT: "0"}
 _CANONICAL_BY_ANY_NAME: dict[str, str] = {
     **{name: name for name in EXECUTION_ENV_KEYS},
     **{
@@ -51,7 +52,12 @@ def canonical_flag_name(name: str) -> str:
 
 
 def read_execution_flag(name: str) -> str | None:
-    """Return the raw environment value of a flag, honouring legacy names."""
+    """Resolve overrides or the production default without changing the environment.
+
+    Single-reconstruction backward and its forward rounding residual are on by
+    default. JIT stays off. Explicit canonical or legacy values take precedence.
+    The same effective values are recorded and frozen by DDP preflight.
+    """
 
     canonical = canonical_flag_name(name)
     value = os.environ.get(canonical)
@@ -61,11 +67,11 @@ def read_execution_flag(name: str) -> str | None:
         value = os.environ.get(legacy)
         if value is not None:
             return value
-    return None
+    return _DEFAULT_EXECUTION_FLAGS[canonical]
 
 
 def execution_environment() -> dict[str, str | None]:
-    """Snapshot every TurboPairFormer execution flag keyed by canonical name."""
+    """Snapshot effective flags, including defaults, keyed by canonical name."""
 
     return {name: read_execution_flag(name) for name in EXECUTION_ENV_KEYS}
 

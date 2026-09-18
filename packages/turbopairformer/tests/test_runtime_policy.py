@@ -1,6 +1,7 @@
 """Runtime policy and receipt checks that do not need a CUDA device."""
 
 import json
+import os
 import subprocess
 import sys
 
@@ -18,6 +19,87 @@ def isolated_policy(monkeypatch):
     policy._set_distributed_strict(False)
     yield
     policy._set_distributed_strict(False)
+
+
+def test_default_policy_stores_residual_without_mutating_environment():
+    environment = dict(os.environ)
+
+    assert policy.execution_environment() == {
+        policy.SR_BACKWARD: "1",
+        policy.SR_SHADOW: "1",
+        policy.ALLOW_JIT: "0",
+    }
+    assert policy.distributed_execution_flag(policy.SR_BACKWARD)
+    assert policy.distributed_execution_flag(policy.SR_SHADOW)
+    assert not policy.distributed_execution_flag(policy.ALLOW_JIT)
+    assert not runtime._development_jit_enabled()
+    assert dict(os.environ) == environment
+
+
+@pytest.mark.parametrize(
+    ("canonical", "explicit_name"),
+    [
+        (canonical, name)
+        for canonical, aliases in policy.LEGACY_ENV_NAMES.items()
+        for name in (canonical, *aliases)
+    ],
+)
+def test_explicit_zero_overrides_default_for_every_flag_spelling(
+    canonical, explicit_name, monkeypatch
+):
+    monkeypatch.setenv(explicit_name, "0")
+
+    assert policy.execution_environment()[canonical] == "0"
+    for name in (canonical, *policy.LEGACY_ENV_NAMES[canonical]):
+        assert policy.read_execution_flag(name) == "0"
+        assert not policy.distributed_execution_flag(name)
+    if canonical == policy.ALLOW_JIT:
+        assert not runtime._development_jit_enabled()
+
+
+@pytest.mark.parametrize("spelling_index", (0, 1, 2))
+def test_strict_default_snapshot_matches_explicit_residual_enablement(
+    spelling_index, monkeypatch
+):
+    snapshot = policy.execution_environment()
+    assert snapshot[policy.SR_BACKWARD] == snapshot[policy.SR_SHADOW] == "1"
+    policy._set_distributed_strict(True, snapshot)
+    names = [
+        (canonical, *policy.LEGACY_ENV_NAMES[canonical])[spelling_index]
+        for canonical in (policy.SR_BACKWARD, policy.SR_SHADOW)
+    ]
+
+    for name in names:
+        monkeypatch.setenv(name, "1")
+    assert policy.execution_environment() == snapshot
+    policy.validate_distributed_environment()
+    assert policy.distributed_execution_flag(policy.SR_BACKWARD)
+    assert policy.distributed_execution_flag(policy.SR_SHADOW)
+
+    for name in names:
+        monkeypatch.delenv(name)
+    assert policy.execution_environment() == snapshot
+    policy.validate_distributed_environment()
+
+
+@pytest.mark.parametrize(
+    ("canonical", "explicit_name"),
+    [
+        (canonical, name)
+        for canonical in (policy.SR_BACKWARD, policy.SR_SHADOW)
+        for name in (canonical, *policy.LEGACY_ENV_NAMES[canonical])
+    ],
+)
+def test_strict_policy_rejects_default_residual_disablement(
+    canonical, explicit_name, monkeypatch
+):
+    policy._set_distributed_strict(True, policy.execution_environment())
+    monkeypatch.setenv(explicit_name, "0")
+
+    assert policy.read_execution_flag(canonical) == "0"
+    assert policy.distributed_execution_flag(canonical)
+    with pytest.raises(policy.DistributedContractError, match="environment changed"):
+        policy.validate_distributed_environment()
 
 
 @pytest.mark.parametrize(

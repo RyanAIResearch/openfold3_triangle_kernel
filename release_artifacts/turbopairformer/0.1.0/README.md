@@ -1,7 +1,7 @@
 # TurboPairFormer 0.1.0 release wheel
 
 This is the tested standalone wheel built from commit
-`702443296b88cc4237da35c5fc3f5ad1f695b502`, retained in this repository so
+`59439005a05c638b53377b18d07269232008ace8`, retained in this repository so
 `pixi install -e openfold3-cuda12` does not need a second download authenticated
 to private GitHub Releases. The same wheel is distributed on PyPI.
 

@@ -32,6 +32,12 @@ REQUIRED_GPU_CASES = {
     "default TriMul mask": (
         "test_trimul_omitted_mask_matches_ones_outputs_and_gradients"
     ),
+    "default residual execution": (
+        "test_default_attention_executes_shadow_and_sr_like_explicit_flags"
+    ),
+    "explicit classic execution": (
+        "test_explicit_classic_attention_bypasses_shadow_and_sr"
+    ),
 }
 EXTENSIONS = {
     "stablefold_forward",

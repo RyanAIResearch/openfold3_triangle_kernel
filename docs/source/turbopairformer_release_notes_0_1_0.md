@@ -28,6 +28,8 @@ print(attention_output.shape)  # torch.Size([1, 128, 128, 4, 32])
 ```
 
 All positions in this synthetic example are valid, so the mask is omitted.
+Single-reconstruction backward and the saved forward rounding residual are
+enabled by default; no environment switches are needed for this example.
 For TriMul, pass your existing triangle-multiplication module and pair tensor:
 
 ```python
@@ -70,7 +72,7 @@ pixi install -e openfold3-cuda12
 
 ## Validation
 
-The attached release wheel passed **194 H100 tests with zero skips**. All five installed CUDA extensions were checked, including forward/backward execution, numerical checks and repeatability checks. Wheel portability and package metadata checks passed. A fresh isolated Pixi environment passed installation, installed-wheel identity checks, doctor, and public-operator GPU smoke tests with this same wheel. A separate single-H100 crop-384 training check of the same operator and host code completed all four configured backends (five warmup plus 20 measured steps each), with all 100 recorded losses finite and TF32 enabled consistently. These short runs validate integration; their backend routing differs and they do not establish convergence or reproduce a historical performance claim.
+The attached release wheel passed **194 H100 tests with zero skips**. All five installed CUDA extensions were checked, including forward/backward execution, numerical checks and repeatability checks. Wheel portability and package metadata checks passed. A fresh isolated Pixi environment passed installation, installed-wheel identity checks, doctor, and public-operator GPU smoke tests with this same wheel. A separate single-H100 crop-384 training check with single-reconstruction backward and rounding residual explicitly enabled completed all four configured backends (five warmup plus 20 measured steps each), with all 100 recorded losses finite and TF32 enabled consistently. These short runs validate integration; their backend routing differs and they do not establish convergence or reproduce a historical performance claim.
 
 The attached wheel, `release-validation.json`, `installed-aot.json` and `standalone-gpu.xml` identify the exact tested artifact. These checks do not establish a new performance result or qualify H200 and full multi-GPU host training.
 

@@ -34,6 +34,8 @@ print(attention_output.shape)  # torch.Size([1, 128, 128, 4, 32])
 ```
 
 All positions in this synthetic example are valid, so the mask is omitted.
+Single-reconstruction backward and the saved forward rounding residual are
+enabled by default; no environment switches are needed for this example.
 For TriMul, pass your existing triangle-multiplication module and pair tensor:
 
 ```python

@@ -5,8 +5,11 @@
 ``openfold3/core/kernels/cuda/provider.py`` lets the stable triangle routes be
 served either by the installed ``turbopairformer`` package or by the kernel copy
 vendored under ``openfold3/core/kernels/cuda``.  Both providers build the same
-``.cu`` sources, so switching between them must not move a single bit: these
-tests compare the raw bytes of forward outputs and every input gradient.
+``.cu`` sources, so switching between them with the same execution policy must
+not move a single bit: these tests compare the raw bytes of forward outputs and
+every input gradient. Attention comparisons retain the classic backward policy
+(SR backward and rounding residual both disabled) explicitly for both providers,
+independent of each provider's defaults and the invoking shell's environment.
 
 The two implementations register their ``torch.library`` ops in different
 namespaces (``turbopairformer::`` and ``openfold3_stablefold::``), so a single process
@@ -125,6 +128,19 @@ def _run_attention(attention, inputs, weight):
 @requires_both
 class TriangleAttentionProviderEquivalenceTest(unittest.TestCase):
     """Forward and backward must agree bitwise across the two providers."""
+
+    def setUp(self):
+        # Pin the existing classic comparison scope for both providers. Override
+        # every canonical/legacy spelling so ambient flags cannot select a
+        # different policy for the package and the in-tree implementation.
+        execution_flags = {
+            f"{prefix}_{flag}": "0"
+            for prefix in ("TURBOPAIRFORMER", "STABLEFOLD", "OPENFOLD3")
+            for flag in ("SR_BACKWARD", "SR_SHADOW")
+        }
+        execution_policy = mock.patch.dict("os.environ", execution_flags)
+        execution_policy.start()
+        self.addCleanup(execution_policy.stop)
 
     @classmethod
     def setUpClass(cls):
