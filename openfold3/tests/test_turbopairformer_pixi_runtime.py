@@ -16,7 +16,7 @@ WHEEL_PATH = (
     "release_artifacts/turbopairformer/0.1.0/"
     "turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl"
 )
-WHEEL_SHA256 = "9bd26adf183dc508ffbf41e7c553574279b3a0690158d40e41e0194bd6550c53"
+WHEEL_SHA256 = "54a4ab1879a0029770c1f72bb7a718bc720431393f74b89fe3ebe2e4e5b57a8a"
 
 
 def test_package_environment_uses_pypi_torch_and_current_noneditable_host():
@@ -212,7 +212,7 @@ def test_bundled_wheel_matches_release_digest_and_numerical_receipts():
     expected_sidecar = f"{WHEEL_SHA256}  {wheel.name}\n"
     assert (wheel.parent / "SHA256SUMS").read_text() == expected_sidecar
     receipt = json.loads((wheel.parent / "release-validation.json").read_text())
-    assert receipt["source_commit"] == "5e887d4e391077a42e002deb2b72f38838ebf8b0"
+    assert receipt["source_commit"] == "97d2292ca7eebd09c99936feb6f40d13af93caac"
     assert receipt["wheel"] == {"filename": wheel.name, "sha256": WHEEL_SHA256}
     for check in receipt["checks"]:
         assert check["exit_code"] == 0
