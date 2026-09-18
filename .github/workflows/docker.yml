@@ -17,6 +17,8 @@ on:
 
 jobs:
   start-aws-runner:
+    # Standalone kernel releases have their own wheel publishing workflow.
+    if: ${{ !startsWith(github.event.release.tag_name, 'turbopairformer-') }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -126,7 +128,7 @@ jobs:
     needs:
       - start-aws-runner
       - push-to-registry
-    if: ${{ always() }}
+    if: ${{ always() && !startsWith(github.event.release.tag_name, 'turbopairformer-') }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6

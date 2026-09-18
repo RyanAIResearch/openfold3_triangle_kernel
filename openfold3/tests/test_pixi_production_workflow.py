@@ -19,11 +19,11 @@ def _manifest() -> dict:
     return tomllib.loads((REPOSITORY / "pixi.toml").read_text())
 
 
-def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
+def test_historical_intree_pixi_environment_is_non_editable_and_exactly_pinned():
     manifest = _manifest()
     environments = manifest["environments"]
     assert "openfold3-h100" not in environments
-    features = environments["openfold3-cuda12"]["features"]
+    features = environments["openfold3-cuda12-intree"]["features"]
     assert "stablefold-h100" in features
     assert "openfold3-editable" not in features
     assert "openfold3-editable-full" not in features
@@ -48,7 +48,7 @@ def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     lock = yaml.safe_load((REPOSITORY / "pixi.lock").read_text())
     locked_environments = lock["environments"]
     assert "openfold3-h100" not in locked_environments
-    locked = locked_environments["openfold3-cuda12"]
+    locked = locked_environments["openfold3-cuda12-intree"]
     production_wheel = (
         "./release_artifacts/stablefold-h100-87ebe22d/"
         "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
@@ -147,8 +147,8 @@ def test_h100_user_docs_use_normal_pixi_commands():
         assert "--locked" not in text
         assert "openfold3-h100" not in text
         assert "--frozen" not in text
-        assert "pixi install -e openfold3-cuda12" in text
-        assert "pixi run -e openfold3-cuda12" in text
+        assert "pixi install -e openfold3-cuda12-intree" in text
+        assert "pixi run -e openfold3-cuda12-intree" in text
 
 
 def test_multinode_quickstart_uses_existing_runner_and_shared_rw_run_dir():
@@ -194,7 +194,7 @@ def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     assert "--baseline triton" in text
     assert "Changing the worker count can therefore change the concrete" in text
     assert "not a per-step fingerprint" in text
-    assert "Reproduced Two-H100 Results" in text
+    assert "Reproduced Two-H100 Standard-Benchmark Results" in text
     assert "Reproduced One- and Two-H100 Results" not in text
     assert "5d4c79748fa5c76ce6a69478c6f4d38395d81b2c" in text
     assert "0.5.1.dev5860+g87ebe22da" in text
@@ -202,7 +202,7 @@ def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     assert "OOM in first backward pass" in text
     assert "backend_loss_2gpu_crops_384_640_768.png" in text
     assert "1.704x" in text
-    assert "partial single-H100" in text
+    assert "This is a single-H100 adaptation, not an exact replay" in text
     assert "long-horizon convergence or unchanged model accuracy" in text
     assert "two-node H100 qualification" not in text
     assert "TriOnce" not in text

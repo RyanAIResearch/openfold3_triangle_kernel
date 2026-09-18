@@ -19,7 +19,8 @@
 #   - openfold3-base: base environment without CUDA or ROCm, to enable developing without GPU.
 #                     On Apple Silicon the same conda-forge pytorch always ships Metal (MPS)
 #                     support, so this environment is not CPU-only there.
-#   - openfold3-cuda12: pinned, non-editable StableFold H100 runtime and training workflow
+#   - openfold3-cuda12: TurboPairFormer package + current non-editable OpenFold3 host
+#   - openfold3-cuda12-intree: historical pinned H100 in-tree runtime
 #   - openfold3-cuda12-dev and openfold3-cuda13: editable development environments with cuda,
 #                                              deepspeed and cuequivariance
 #   - openfold3-cuda12-pypi and openfold3-cuda13-pypi: environments with python and cuda from conda,
@@ -32,7 +33,8 @@
 # The editable development environments pass all inference tests available in each platform.
 # (aarch64 and osx-64 are untested at the moment).
 # The table below describes those development environments; the non-editable
-# openfold3-cuda12 production environment is H100-only and checked at runtime.
+# openfold3-cuda12 package environment requires Hopper CC 9.0 (H100/H200);
+# openfold3-cuda12-intree retains the historical H100-only runtime.
 # The development GPU versions work at least from NVIDIA Ampere to Blackwell microarchitectures
 # +---------------+------------+------------+------------+------------+
 # | Linux         | x64        | x64        | aarch64    | aarch64    |
@@ -131,7 +133,15 @@ openfold3-cuda12-dev = { no-default-feature = true, features = [
     "openfold3-editable",
     "tests"
 ] }
+# The package runtime uses the same PyPI Torch ABI as the standalone wheel.
 openfold3-cuda12 = { no-default-feature = true, features = [
+    "python",
+    "openfold3-base",
+    "cuequivariance-cuda12",
+    "turbopairformer-hopper",
+] }
+# Retained only for the historical in-tree H100 distributed-training receipts.
+openfold3-cuda12-intree = { no-default-feature = true, features = [
     "python",
     "openfold3-base",
     "cuda12",
@@ -445,6 +455,58 @@ cuequivariance-torch = "==0.10.0"
 cuequivariance-ops-torch-cu13 = "==0.10.0"
 
 
+# --- TurboPairFormer package runtime
+# The AOT wheel is linked against PyPI Torch 2.10.0 / CUDA 12.8. Do not add
+# pytorch-conda-cuda or Conda DeepSpeed here: they bring a different Torch ABI.
+
+[feature.turbopairformer-hopper]
+platforms = ["linux-64-cuda12"]
+
+[feature.turbopairformer-hopper.dependencies]
+python = "3.14.*"
+# 5.3.0's Conda build omits the required py-cpuinfo2 distribution metadata.
+pytest-benchmark = "==5.2.3"
+
+[feature.turbopairformer-hopper.pypi-dependencies]
+torch = "==2.10.0"
+pytorch-lightning = "==2.6.1"
+turbopairformer = { path = "release_artifacts/turbopairformer/0.1.0/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl" }
+# The host adapter comes from this checkout; its kernels come from the wheel.
+openfold3 = { path = ".", editable = false }
+
+[feature.turbopairformer-hopper.pypi-options]
+# Release installs consume the tested AOT wheel; never build an sdist silently.
+no-build = ["turbopairformer"]
+
+[feature.turbopairformer-hopper.activation]
+# Load this environment's C++ runtime for both PyPI Torch and Conda gemmi.
+env.LD_LIBRARY_PATH = "$CONDA_PREFIX/lib"
+env.OPENFOLD3_BUILD_AOT = "0"
+env.OPENFOLD3_TRIANGLE_PROVIDER = "turbopairformer"
+env.TURBOPAIRFORMER_PROVIDER = "turbopairformer"
+env.TURBOPAIRFORMER_PYTHON = "$CONDA_PREFIX/bin/python"
+env.PYTHONNOUSERSITE = "1"
+env.PYTHONDONTWRITEBYTECODE = "1"
+env.OPENFOLD3_TRIANGLE_ALLOW_JIT = "0"
+env.TURBOPAIRFORMER_ALLOW_JIT = "0"
+env.OPENFOLD3_SR_BACKWARD = "1"
+env.OPENFOLD3_SR_SHADOW = "1"
+
+[feature.turbopairformer-hopper.tasks]
+doctor-turbopairformer.cmd = ["bash", "scripts/turbopairformer/doctor_turbopairformer.sh", "--expect-provider", "turbopairformer"]
+verify-aot.depends-on = ["doctor-turbopairformer"]
+select-training-backend.cmd = ["python", "-m", "tools.select_training_backend"]
+prepare-training-data.cmd = ["python", "-m", "tools.production_training", "prepare-training-data"]
+prepare-pdb-subset.cmd = ["python", "-u", "tools/prepare_pdb_subset.py"]
+prepare-crop-benchmark-data.cmd = ["python", "-u", "tools/prepare_crop_benchmark_data.py"]
+generate-pdb-subset.cmd = ["python", "-u", "scripts/datasets/generate_subset_cache.py"]
+download-pdb-subset.cmd = ["python", "-u", "scripts/datasets/download_subset.py"]
+purify-pdb-subset.cmd = ["python", "-u", "scripts/datasets/purify_subset.py"]
+setup-pdb-subset.depends-on = ["generate-pdb-subset", "download-pdb-subset"]
+validate-training-data.cmd = ["python", "tools/validate_training_data.py"]
+train-single-gpu.cmd = ["bash", "scripts/turbopairformer/run_single_gpu.sh"]
+
+
 # --- StableFold H100 production-candidate workflow
 
 [feature.stablefold-h100]
@@ -463,6 +525,7 @@ wheel = "*"
 openfold3 = { path = "release_artifacts/stablefold-h100-87ebe22d/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl" }
 
 [feature.stablefold-h100.activation]
+env.OPENFOLD3_TRIANGLE_PROVIDER = "intree"
 env.PYTHONNOUSERSITE = "1"
 env.PYTHONDONTWRITEBYTECODE = "1"
 env.OPENFOLD3_TRIANGLE_ALLOW_JIT = "0"

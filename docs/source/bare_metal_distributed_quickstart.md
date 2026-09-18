@@ -1,5 +1,10 @@
 # OpenFold3 + StableFold Training Quick Start
 
+This is the historical in-tree workflow, available on this branch as
+`openfold3-cuda12-intree`. For the TurboPairFormer package and its single-GPU
+workflow, use the [TurboPairFormer guide](turbopairformer_pip_quickstart.md).
+The `main` branch retains its original `openfold3-cuda12` environment name.
+
 This guide follows the Lambda OpenFold3 quick-start flow: set up the
 environment, prepare a small PDB dataset, remove samples affected by unavailable
 files, and launch training on one or more GPUs.
@@ -21,7 +26,7 @@ Restart the shell if the `pixi` command is not immediately available.
 ### Clone the Repository
 
 ```bash
-git clone --branch main --single-branch \
+git clone --branch feat/turbopairformer-pip-package --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git
 cd openfold3_triangle_kernel
 ```
@@ -29,7 +34,7 @@ cd openfold3_triangle_kernel
 ### Set Up OpenFold3 and StableFold
 
 ```bash
-pixi install -e openfold3-cuda12
+pixi install -e openfold3-cuda12-intree
 ```
 
 This one command creates the environment and installs the repository-pinned
@@ -39,8 +44,8 @@ or local kernel build is required.
 To optionally check the GPU, environment, and all five AOT kernel modules, run:
 
 ```bash
-pixi run -e openfold3-cuda12 doctor-h100
-pixi run -e openfold3-cuda12 verify-aot
+pixi run -e openfold3-cuda12-intree doctor-h100
+pixi run -e openfold3-cuda12-intree verify-aot
 ```
 
 If verification reports `StableFold AOT artifacts require a clean Git checkout`, first
@@ -55,9 +60,9 @@ lockfile. Update it without reinstalling the repository:
 
 ```bash
 git restore --source=HEAD -- pixi.lock
-git pull --ff-only origin main
-pixi install -e openfold3-cuda12
-pixi run -e openfold3-cuda12 verify-aot
+git pull --ff-only origin feat/turbopairformer-pip-package
+pixi install -e openfold3-cuda12-intree
+pixi run -e openfold3-cuda12-intree verify-aot
 ```
 
 Do not restore `pixi.lock` when you intentionally edited dependencies, and do
@@ -75,7 +80,7 @@ for functional and performance validation, not model-quality or convergence
 claims:
 
 ```bash
-pixi run -e openfold3-cuda12 prepare-pdb-subset -- \
+pixi run -e openfold3-cuda12-intree prepare-pdb-subset -- \
   --train-size 512 \
   --seed 42 \
   --workers 24
@@ -107,7 +112,7 @@ path is invalid, the command exits nonzero and does not claim the data is ready.
 To check the prepared YAML without starting training, run:
 
 ```bash
-pixi run -e openfold3-cuda12 validate-training-data \
+pixi run -e openfold3-cuda12-intree validate-training-data \
   datasets/train_pdb_subset.yaml
 ```
 
@@ -130,14 +135,14 @@ mkdir -p ../openfold3-run
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CROP_DATA_ROOT="$OF3_RUN_CWD/pdb-full-crop-384-640-768"
 
-pixi run -e openfold3-cuda12 prepare-crop-benchmark-data -- \
+pixi run -e openfold3-cuda12-intree prepare-crop-benchmark-data -- \
   "$PWD/datasets/train_pdb_subset.yaml" \
   "$CROP_DATA_ROOT" \
   --crop-sizes 384 640 768 \
   --num-workers 10
 
 for CROP in 384 640 768; do
-  pixi run -e openfold3-cuda12 validate-training-data \
+  pixi run -e openfold3-cuda12-intree validate-training-data \
     "$CROP_DATA_ROOT/runner_crop_${CROP}.yaml"
 done
 ```
@@ -162,7 +167,7 @@ independent processes selected identical token, MSA, and template features.
 Use StableFold by default:
 
 ```bash
-pixi run -e openfold3-cuda12 select-training-backend \
+pixi run -e openfold3-cuda12-intree select-training-backend \
   datasets/train_pdb_subset.yaml \
   --backend stablefold \
   --output datasets/train_pdb_subset.stablefold.yaml
@@ -175,7 +180,7 @@ To select another implementation, change `BACKEND` and use the generic form:
 ```bash
 export BACKEND=cueq
 
-pixi run -e openfold3-cuda12 select-training-backend \
+pixi run -e openfold3-cuda12-intree select-training-backend \
   datasets/train_pdb_subset.yaml \
   --backend "$BACKEND" \
   --output "datasets/train_pdb_subset.${BACKEND}.yaml"
@@ -212,7 +217,7 @@ and checkpoint output disabled:
 ```bash
 export BACKEND=stablefold
 
-pixi run -e openfold3-cuda12 select-training-backend \
+pixi run -e openfold3-cuda12-intree select-training-backend \
   datasets/train_pdb_subset.yaml \
   --backend "$BACKEND" \
   --single-gpu-smoke \
@@ -255,7 +260,7 @@ export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-cuda12 train-single-gpu \
+pixi run -e openfold3-cuda12-intree train-single-gpu \
   train \
   --runner-yaml "$PWD/datasets/single_gpu_smoke.${BACKEND}.yaml" \
   --seed 42
@@ -274,12 +279,12 @@ disables W&B; they are not training failures.
 
 ### Compare Backend Training Time and Loss
 
-For every new published comparison, first update to the current public `main`
+For every new published comparison, first update this feature-branch checkout
 and record the exact revision. `git status --short` must print nothing before
 the benchmark starts:
 
 ```bash
-git pull --ff-only origin main
+git pull --ff-only origin feat/turbopairformer-pip-package
 git status --short
 git rev-parse HEAD
 ```
@@ -315,7 +320,7 @@ for CROP in 384 640 768; do
   mkdir -p "$RESULTS_ROOT/logs"
   FAILED_BACKENDS=()
   for BACKEND in "${BACKENDS[@]}"; do
-    if ! pixi run -e openfold3-cuda12 benchmark-single-gpu \
+    if ! pixi run -e openfold3-cuda12-intree benchmark-single-gpu \
         --runner-yaml "$CROP_DATA_ROOT/runner_crop_${CROP}.yaml" \
         --backend "$BACKEND" \
         --output-root "$RESULTS_ROOT" \
@@ -339,7 +344,7 @@ for CROP in 384 640 768; do
     MATRIX_FAILED=1
     continue
   fi
-  pixi run -e openfold3-cuda12 plot-backend-comparison \
+  pixi run -e openfold3-cuda12-intree plot-backend-comparison \
     "$RESULTS_ROOT" \
     --baseline triton
 done
@@ -386,7 +391,7 @@ for CROP in 384 640 768; do
   mkdir -p "$RESULTS_ROOT/logs"
   FAILED_BACKENDS=()
   for BACKEND in "${BACKENDS[@]}"; do
-    if ! pixi run -e openfold3-cuda12 benchmark-single-node \
+    if ! pixi run -e openfold3-cuda12-intree benchmark-single-node \
         --runner-yaml "$CROP_DATA_ROOT/runner_crop_${CROP}.yaml" \
         --backend "$BACKEND" \
         --output-root "$RESULTS_ROOT" \
@@ -410,7 +415,7 @@ for CROP in 384 640 768; do
     MATRIX_FAILED=1
     continue
   fi
-  pixi run -e openfold3-cuda12 plot-backend-comparison \
+  pixi run -e openfold3-cuda12-intree plot-backend-comparison \
     "$RESULTS_ROOT" \
     --baseline triton
 done
@@ -443,7 +448,7 @@ for CROP in 384 640 768; do
   mkdir -p "$RESULTS_ROOT/logs"
   FAILED_BACKENDS=()
   for BACKEND in "${BACKENDS[@]}"; do
-    if ! pixi run -e openfold3-cuda12 benchmark-single-node \
+    if ! pixi run -e openfold3-cuda12-intree benchmark-single-node \
         --runner-yaml "$CROP_DATA_ROOT/runner_crop_${CROP}.yaml" \
         --backend "$BACKEND" \
         --output-root "$RESULTS_ROOT" \
@@ -467,7 +472,7 @@ for CROP in 384 640 768; do
     MATRIX_FAILED=1
     continue
   fi
-  pixi run -e openfold3-cuda12 plot-backend-comparison \
+  pixi run -e openfold3-cuda12-intree plot-backend-comparison \
     "$RESULTS_ROOT" \
     --baseline triton
 done
@@ -838,7 +843,7 @@ export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-cuda12 train-single-gpu \
+pixi run -e openfold3-cuda12-intree train-single-gpu \
   train \
   --runner-yaml "$PWD/datasets/train_pdb_subset.${BACKEND}.yaml" \
   --seed 42
@@ -870,7 +875,7 @@ export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-cuda12 train-single-node \
+pixi run -e openfold3-cuda12-intree train-single-node \
   train \
   --runner-yaml "$PWD/datasets/train_pdb_subset.${BACKEND}.yaml" \
   --seed 42
@@ -913,7 +918,7 @@ create and verify the shared run directory once before launching workers:
 
 ```bash
 cd /shared/openfold3_triangle_kernel
-pixi install -e openfold3-cuda12
+pixi install -e openfold3-cuda12-intree
 
 mkdir -p /shared/openfold3-run
 test -r /shared/openfold3-run && test -w /shared/openfold3-run
@@ -935,7 +940,7 @@ export MASTER_ADDR=10.0.0.10
 export MASTER_PORT=29500
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
-pixi run -e openfold3-cuda12 train-multinode \
+pixi run -e openfold3-cuda12-intree train-multinode \
   --nnodes="$NNODES" \
   --nproc-per-node="$GPUS_PER_NODE" \
   --node-rank="$NODE_RANK" \
@@ -970,7 +975,7 @@ Rules that the pinned Lightning 2.6.1 enforces:
   `--gpu-bind`; every task must see all GPUs on its node.
 - Use `sbatch`, not an `salloc` shell. Lightning ignores Slurm when the job
   name is `bash` or `interactive`.
-- Run `pixi install -e openfold3-cuda12` on the shared checkout before
+- Run `pixi install -e openfold3-cuda12-intree` on the shared checkout before
   submitting.
 
 Lightning reads ranks and world size from Slurm and uses the first node of the
@@ -1020,7 +1025,7 @@ cd /shared/openfold3_triangle_kernel
 
 for BACKEND in aqlab triton cueq stablefold; do
   srun --kill-on-bad-exit=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" \
-    pixi run -e openfold3-cuda12 benchmark-multinode \
+    pixi run -e openfold3-cuda12-intree benchmark-multinode \
     --runner-yaml "$CROP_DATA_ROOT/runner_crop_${CROP}.yaml" \
     --backend "$BACKEND" \
     --output-root "$RESULTS_ROOT" \
@@ -1034,7 +1039,7 @@ for BACKEND in aqlab triton cueq stablefold; do
     --seed 42
 done
 
-pixi run -e openfold3-cuda12 plot-backend-comparison \
+pixi run -e openfold3-cuda12-intree plot-backend-comparison \
   "$RESULTS_ROOT" \
   --baseline triton
 ```
@@ -1090,7 +1095,7 @@ cd /shared/openfold3_triangle_kernel
 export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"
 
 srun --kill-on-bad-exit=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" \
-  pixi run -e openfold3-cuda12 train-single-node \
+  pixi run -e openfold3-cuda12-intree train-single-node \
   train \
   --runner-yaml "$RUNNER_YAML" \
   --seed 42
@@ -1109,7 +1114,7 @@ per node. Create a one-step YAML:
 cd /shared/openfold3_triangle_kernel
 export BACKEND=stablefold
 
-pixi run -e openfold3-cuda12 select-training-backend \
+pixi run -e openfold3-cuda12-intree select-training-backend \
   datasets/train_pdb_subset.yaml \
   --backend "$BACKEND" \
   --single-gpu-smoke \
@@ -1162,7 +1167,7 @@ cd /shared/openfold3_triangle_kernel
 export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"
 
 srun --kill-on-bad-exit=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" bash -c '
-  pixi run -e openfold3-cuda12 train-multinode \
+  pixi run -e openfold3-cuda12-intree train-multinode \
     --nnodes="$SLURM_NNODES" \
     --nproc-per-node=8 \
     --node-rank="$SLURM_NODEID" \

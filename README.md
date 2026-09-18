@@ -1,17 +1,20 @@
 # TurboPairFormer for OpenFold3
 
-## Standalone pip package (work in progress)
+## Install TurboPairFormer
 
-The independent package is **TurboPairFormer**, with Python distribution and
-import name **`turbopairformer`**. Its source is in
-[`packages/turbopairformer`](packages/turbopairformer/README.md). This branch
-prepares the eventual `pip install turbopairformer` release; the renamed package
-has not been published to PyPI.
+PyPI publication is pending. The tested 0.1.0 candidate wheel is bundled in
+this repository, which currently requires repository access. From a checkout,
+install it into a dedicated environment with the command below. After the
+PyPI upload, `pip install TurboPairFormer` will be available directly.
 
-Development continues on `feat/turbopairformer-pip-package`. The original
-`feat/trionce-pip-package` branch is retained. [`main`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/main/openfold3/core/kernels/cuda)
-remains the production code line. This branch includes the subsequent pip and
-Hopper compatibility fixes from `9354b966`.
+The standalone package provides Triangle Attention and Triangle Multiplicative
+Update without requiring an OpenFold3 installation:
+
+```bash
+python3.14 -m venv .venv-turbopairformer
+source .venv-turbopairformer/bin/activate
+python -m pip install release_artifacts/turbopairformer/0.1.0/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl
+```
 
 ```python
 from turbopairformer import triangle_attention, run_trimul
@@ -19,32 +22,46 @@ from turbopairformer import triangle_attention, run_trimul
 output = triangle_attention(q, k, v, mask, pair_bias)
 ```
 
-The package name, public imports, provider selection, scripts, and release
-workflow use the new name. CUDA source and internal `stablefold_*` export
-symbols retain their existing identity.
+For the complete OpenFold3 environment, create a separate checkout:
 
-The standalone wheel targets Linux x86-64, CPython 3.14, H100/H200, and
-**PyPI Torch 2.10.0 with CUDA runtime 12.8**. Building uses CUDA toolkit 12.9;
-users of a prebuilt wheel do not need nvcc or OpenFold3. The older production
-OpenFold3 environment documented below uses a different, pinned Conda ABI.
+```bash
+git clone --branch feat/turbopairformer-pip-package --single-branch \
+  https://github.com/RyanAIResearch/openfold3_triangle_kernel.git openfold3-turbopairformer
+cd openfold3-turbopairformer
+pixi install -e openfold3-cuda12
+pixi run -e openfold3-cuda12 doctor-turbopairformer
+```
 
-Follow the [package installation and Python examples](packages/turbopairformer/README.md)
-and [single-GPU host integration guide](docs/source/turbopairformer_pip_quickstart.md).
-The host defaults to `OPENFOLD3_TRIANGLE_PROVIDER=intree`. Select
-`OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer` explicitly to use the independent package.
-Its full OpenFold3 DDP integration is not qualified and fails early rather than
-writing a receipt for a different implementation.
+The virtual environment and the new checkout's `.pixi/envs/openfold3-cuda12`
+keep these dependencies separate from existing training environments.
 
-The production results and historical receipts below keep their original
-artifact and H100 hardware scope; they do not establish H200 measurements
-or performance claims for the new pip wheel.
+Both installation paths use the same bundled **TurboPairFormer 0.1.0** wheel and
+**PyPI Torch 2.10.0 / CUDA runtime 12.8**. The target is Linux x86-64 with
+glibc 2.28 or newer, CPython 3.14, and Hopper compute capability 9.0
+(H100/H200). Installing the prebuilt kernels requires no nvcc.
+
+Pixi installs this checkout's OpenFold3 host non-editably and selects
+`OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer` for commands in
+`openfold3-cuda12`. Installing the standalone pip package alone does not change
+provider selection in an existing OpenFold3 environment. The host integration
+supports single-GPU launches; multi-GPU package integration is not yet qualified.
+See the [installation and training guide](docs/source/turbopairformer_pip_quickstart.md)
+and [standalone API examples](packages/turbopairformer/README.md).
+
+Development continues on `feat/turbopairformer-pip-package`.
+[`main`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/main)
+remains the production code line. CUDA source and internal `stablefold_*`
+symbols retain their identity. Historical results below belong to their
+recorded in-tree artifacts and hardware; they are not performance measurements
+of the new package or H200 measurements.
 
 ## Existing main production workflow (StableFold)
 
 The following production instructions and measurements describe the existing
 `main` implementation and its historical artifacts. Their StableFold names,
-configuration flags, and binary identities are preserved. The renamed pip
-package requires its own wheel build and validation before deployment.
+configuration flags, and binary identities are preserved. On this branch, that historical runtime is available as
+`openfold3-cuda12-intree`. It has its own Conda Torch / CUDA 12.9 ABI.
+The TurboPairFormer environment above uses a separate package and runtime.
 
 StableFold is a Hopper-optimized Triangle Attention and Triangle
 Multiplicative Update backend integrated directly into OpenFold3. It keeps the
@@ -98,11 +115,11 @@ GPU qualification of the newly merged host code.
 
 ## Pixi production workflow
 
-Clone the current `main` branch into a clean checkout:
+To reproduce the historical in-tree workflow from this branch, use a clean checkout:
 
 ```bash
 mkdir -p /mnt/shared/openfold3
-git clone --branch main --single-branch \
+git clone --branch feat/turbopairformer-pip-package --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git \
   /mnt/shared/openfold3/src
 cd /mnt/shared/openfold3/src
@@ -121,9 +138,9 @@ run them independently on every host because Pixi does not synchronize nodes.
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
-pixi install -e openfold3-cuda12
-pixi run -e openfold3-cuda12 doctor-h100
-pixi run -e openfold3-cuda12 verify-aot
+pixi install -e openfold3-cuda12-intree
+pixi run -e openfold3-cuda12-intree doctor-h100
+pixi run -e openfold3-cuda12-intree verify-aot
 ```
 
 The production Pixi environment deliberately contains no editable OpenFold3
@@ -139,7 +156,7 @@ Ninja, or JIT. It then directly executes AQLab `run_openfold` or standard
 behavior, and the selector changes only the training kernel-route flags.
 
 The integration checkout and the binary artifact intentionally have separate
-identities: the `main` checkout contains the installer and guide, while the
+identities: the checkout contains the installer and guide, while the
 wheel records the qualified source commit `87ebe22da13c657d36997dedb4ec398fbd62c6b7`.
 That wheel keeps Diffusion on AQLab's original attention path and runs
 StableFold only for non-Diffusion triangle Attention and TMU outside the source

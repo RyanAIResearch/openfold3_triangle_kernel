@@ -5,12 +5,71 @@ The standalone package lives in `packages/turbopairformer`. Its public API is
 `turbopairformer.run_trimul`, and `turbopairformer.check_trimul_support`. It does not
 require an OpenFold3 installation for direct operator calls.
 
-The current name is **TurboPairFormer**. Public index publication is a later release
-step; these instructions build and install a local wheel. After publication,
-`pip install turbopairformer` will download the published package. The retained `feat/trionce-pip-package` branch records the earlier package work;
-new changes belong to `feat/turbopairformer-pip-package`.
+## Install the standalone package
 
-## Build and install
+PyPI publication is pending. The tested candidate is bundled in this private
+repository; from a checkout with repository access, install it into a dedicated
+environment below. After publication, use `python -m pip install TurboPairFormer`.
+
+On Linux x86-64 with glibc 2.28+, CPython 3.14, and a Hopper GPU (H100/H200):
+
+```bash
+python3.14 -m venv .venv-turbopairformer
+source .venv-turbopairformer/bin/activate
+python -m pip install release_artifacts/turbopairformer/0.1.0/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl
+```
+
+The dedicated virtual environment keeps the pinned Torch dependency separate
+from your other projects. The distribution name is case-insensitive; import it as `turbopairformer`.
+The wheel pins PyPI Torch 2.10.0 with CUDA runtime 12.8. No CUDA compiler or
+OpenFold3 installation is needed for direct operator calls.
+
+## Install OpenFold3 and TurboPairFormer with Pixi
+
+With Pixi 0.80 or newer, use a separate checkout so an existing project's
+training environment is not updated:
+
+```bash
+git clone --branch feat/turbopairformer-pip-package --single-branch \
+  https://github.com/RyanAIResearch/openfold3_triangle_kernel.git openfold3-turbopairformer
+cd openfold3-turbopairformer
+pixi install -e openfold3-cuda12
+pixi run -e openfold3-cuda12 doctor-turbopairformer
+```
+
+Pixi installs into this checkout's `.pixi/envs/openfold3-cuda12`.
+This installs the same repository-bundled TurboPairFormer wheel, its exact
+PyPI Torch ABI,
+Lightning 2.6.1, and the current OpenFold3 host as a non-editable package. It does
+not compile the CUDA kernels. Every command in this Pixi environment explicitly
+selects `OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer` and disables runtime JIT.
+The doctor's success means that the installed package, manifest, GPU, ABI, and
+five AOT modules load correctly; numerical execution is a separate release check.
+
+For a prepared dataset YAML, run a single-GPU training smoke test:
+
+```bash
+pixi run -e openfold3-cuda12 select-training-backend \
+  datasets/train_pdb_subset.yaml \
+  --backend turbopairformer --provider turbopairformer --single-gpu-smoke \
+  --output datasets/train_pdb_subset.turbopairformer.yaml
+mkdir -p ../openfold3-run
+export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
+pixi run -e openfold3-cuda12 train-single-gpu \
+  --runner-yaml "$PWD/datasets/train_pdb_subset.turbopairformer.yaml" --seed 42
+```
+
+Use `pixi run -e openfold3-cuda12 prepare-pdb-subset -- --train-size 512 --seed 42`
+if a small dataset has not been prepared. Downloading data and pretrained model
+parameters is separate from package installation.
+
+The package's host integration is limited to single-GPU launches for this
+release. The historical in-tree distributed workflow is retained under
+`openfold3-cuda12-intree`; see the
+[bare-metal guide](bare_metal_distributed_quickstart.md). That environment has a
+different Conda Torch / CUDA 12.9 ABI and does not use the standalone wheel.
+
+## Build from source
 
 The initial target is Linux x86_64, CPython 3.14, and Hopper compute capability
 9.0 on H100 or H200 (the same `sm_90a` wheel), with PyTorch 2.10.0 and its
@@ -36,7 +95,7 @@ It uses `TURBOPAIRFORMER_BUILD_AOT=1`, `TORCH_CUDA_ARCH_LIST=9.0a`, and no build
 isolation so it links against the selected Torch. It then checks the installed
 package from a temporary working directory with JIT disabled. The build helper
 requires `TURBOPAIRFORMER_PYTHON` explicitly and checks its runtime before building.
-It does not use or upgrade an older shared Pixi CUDA 12.9 runtime environment.
+It does not use or upgrade the historical `openfold3-cuda12-intree` runtime.
 
 To install an already built wheel into a matching environment:
 
@@ -77,6 +136,7 @@ explicit and memoized on first use:
 | unset or `OPENFOLD3_TRIANGLE_PROVIDER=intree` | Vendored OpenFold3 kernels |
 | `OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer` | Installed standalone package |
 
+The `openfold3-cuda12` Pixi environment sets the package provider automatically.
 Installing TurboPairFormer alone does not change an existing OpenFold3 run. An
 explicit package selection fails if the package is unavailable. The production
 OpenFold3 wheel must include `openfold3/core/kernels/cuda/provider.py` to use

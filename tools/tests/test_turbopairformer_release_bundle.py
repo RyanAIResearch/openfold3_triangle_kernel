@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
 from argparse import Namespace
@@ -147,3 +148,110 @@ def test_wheel_digest_mismatch_is_rejected(bundle):
     output, info, _ = bundle
     with pytest.raises(ValueError, match="another wheel or digest"):
         release.validate_receipt(output, {**info, "sha256": "b" * 64}, COMMIT)
+
+
+@pytest.fixture
+def source_history(tmp_path):
+    repository = tmp_path / "source-history"
+    repository.mkdir()
+
+    def git(*arguments):
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "-c",
+                "user.name=Release test",
+                "-c",
+                "user.email=release-test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                *arguments,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def commit(filename, contents):
+        path = repository / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+        git("add", ".")
+        git("commit", "-qm", filename)
+        return git("rev-parse", "HEAD")
+
+    git("init", "--quiet")
+    base = commit("packages/turbopairformer/setup.py", "package source\n")
+    build = commit("BUILD-NOTES", "wheel built\n")
+    descendant = commit("pixi.toml", "host dependency update\n")
+    return repository, git, commit, base, build, descendant
+
+
+def test_descendant_with_identical_complete_package_tree_is_allowed(source_history):
+    repository, git, _, _, build, descendant = source_history
+    result = release.validate_release_source(repository, build, descendant)
+    assert result == {
+        "wheel_build_commit": build,
+        "release_commit": descendant,
+        "package_path": "packages/turbopairformer",
+        "package_tree": git("rev-parse", f"{build}:packages/turbopairformer"),
+    }
+
+
+def test_changed_package_source_requires_new_wheel(source_history):
+    repository, _, commit, _, build, _ = source_history
+    changed = commit("packages/turbopairformer/setup.py", "changed package source\n")
+    with pytest.raises(ValueError, match="package source changed"):
+        release.validate_release_source(repository, build, changed)
+
+
+def test_nonancestor_with_identical_package_tree_is_rejected(source_history):
+    repository, git, commit, base, build, _ = source_history
+    git("checkout", "--quiet", "--detach", base)
+    unrelated = commit("other-host-change", "sibling commit\n")
+    with pytest.raises(ValueError, match="not an ancestor"):
+        release.validate_release_source(repository, build, unrelated)
+
+
+def test_release_commit_is_separate_from_original_wheel_provenance(bundle, monkeypatch):
+    output, _, _ = bundle
+    release_commit = "b" * 40
+    before = {path.name: path.read_bytes() for path in output.iterdir()}
+    checked = []
+
+    def verify(repository, build, tagged):
+        checked.append((build, tagged))
+        return {
+            "wheel_build_commit": build,
+            "release_commit": tagged,
+            "package_tree": "c" * 40,
+        }
+
+    monkeypatch.setattr(release, "validate_release_source", verify)
+    result = release.validate_bundle(
+        output,
+        None,
+        "turbopairformer-v0.1.0",
+        False,
+        release_commit=release_commit,
+    )
+    assert checked == [(COMMIT, release_commit)]
+    assert result["wheel_build_commit"] == COMMIT
+    assert result["release_commit"] == release_commit
+    assert before == {path.name: path.read_bytes() for path in output.iterdir()}
+
+
+def test_receipt_source_is_not_accepted_as_arbitrary_git_argument(bundle):
+    output, _, _ = bundle
+    path = output / "release-validation.json"
+    receipt = json.loads(path.read_text())
+    receipt["source_commit"] = "--help"
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="full wheel build commit SHA"):
+        release.validate_bundle(
+            output, None, "turbopairformer-v0.1.0", False, release_commit="b" * 40
+        )

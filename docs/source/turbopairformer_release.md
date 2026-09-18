@@ -65,18 +65,30 @@ python scripts/turbopairformer/release_bundle.py create release-bundle \
   --gpu-command 'python -m pytest packages/turbopairformer/tests --ignore=packages/turbopairformer/tests/host_openfold3 --junitxml=standalone-gpu.xml'
 ```
 
-`COMMIT` is the full source commit embedded in the wheel; both release tags below
-must point to it. `release-bundle` is a new directory containing the wheel,
+`COMMIT` is the full source commit embedded in the wheel. Preserve that build
+commit in the wheel, doctor report and release receipt. A release tag may point
+to that commit or a descendant whose complete tracked `packages/turbopairformer`
+Git tree is identical. This allows later host, pixi or workflow changes without
+rebuilding unchanged package code. Any package-tree change requires a new build
+and GPU validation. The workflow checks ancestry and tree identity with full
+Git history and reports both build and release commits.
+
+`release-bundle` is a new directory containing the wheel,
 `release-validation.json`, `installed-aot.json`, and `standalone-gpu.xml`.
 
 ## Validate a GitHub prerelease
 
 For a version `0.1.0` wheel, create candidate tag `turbopairformer-v0.1.0-rc.1`
-at `COMMIT`. Attach all four bundle files to a **draft** prerelease, then publish
-the prerelease. Uploading assets before publication prevents workflow races.
+at a qualifying release commit described above. Attach all four bundle files to
+a **draft** prerelease, then publish the prerelease. Uploading assets before
+publication prevents workflow races.
 The workflow verifies source identity, wheel and receipt digests, GPU test
 results, wheel metadata, and the actual ELF portability audit. It stores a
 validated wheel artifact. Its PyPI job is skipped for prereleases.
+
+GitHub release assets follow the repository's access permissions. In a private
+repository, publishing a GitHub prerelease does not make its wheel anonymously
+downloadable; PyPI publication is a separate step.
 
 Use a new `-rc.N` candidate when changing source or artifacts. The candidate tag
 suffix identifies a release rehearsal; the wheel itself remains version 0.1.0
@@ -99,8 +111,8 @@ GitHub OIDC and needs no upload token. A pending publisher does not reserve the
 project name.
 
 After the candidate succeeds and PyPI is configured, create stable tag
-`turbopairformer-v0.1.0` at the same commit. Attach the exact same four files to a
-draft release, then publish it. **Publishing this stable GitHub release starts
+`turbopairformer-v0.1.0` at the validated release commit. Attach the exact same four
+files to a draft release, then publish it. **Publishing this stable GitHub release starts
 the PyPI upload.** The workflow never rebuilds the wheel. Keep the version and
 assets unchanged during a retry; do not replace an already published PyPI file.
 

@@ -1,0 +1,42 @@
+{
+  "aot": {
+    "abi": {
+      "python_soabi": "cpython-314-x86_64-linux-gnu",
+      "python_version": "3.14.7",
+      "torch_cuda_version": "12.8",
+      "torch_cxx11_abi": true,
+      "torch_version": "2.10.0+cu128"
+    },
+    "extensions": {
+      "stablefold_delta": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/_ext/_stablefold_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
+      "stablefold_dkdv": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/_ext/_stablefold_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
+      "stablefold_dq_dbias": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/_ext/_stablefold_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
+      "stablefold_forward": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/_ext/_stablefold_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
+      "stablefold_trimul": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/_ext/_stablefold_trimul_sm90a.cpython-314-x86_64-linux-gnu.so"
+    },
+    "git": {
+      "commit": "d77e8d06cba4918fa551ce1f4ec41cbb21d055af",
+      "dirty": false
+    },
+    "manifest": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/_build_manifest.json",
+    "manifest_sha256": "2d2fc449b8eedb3738cf272d74882221bb532e3807889b83b0386126f055840f"
+  },
+  "gpu": {
+    "available": true,
+    "capability": "9.0",
+    "count": 1,
+    "name": "NVIDIA H100 80GB HBM3",
+    "torch": "2.10.0+cu128",
+    "torch_cuda": "12.8"
+  },
+  "package": {
+    "name": "turbopairformer",
+    "path": "/tmp/validation/lib/python3.14/site-packages/turbopairformer/__init__.py",
+    "version": "0.1.0"
+  },
+  "provider": {
+    "host": "not installed",
+    "provider": "turbopairformer"
+  },
+  "scope": "aot-load"
+}

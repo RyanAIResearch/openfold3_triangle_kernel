@@ -13,11 +13,13 @@ import importlib.util
 import json
 import re
 import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_TREE = "packages/turbopairformer"
 REQUIRED_GPU_CASES = {
     "attention support": "test_accepts_the_declared_bf16_contract",
     "attention FP64": "test_triangle_attention_fp64_error_stays_within_stock_envelope",
@@ -152,18 +154,115 @@ def validate_receipt(directory: Path, wheel: dict, commit: str) -> dict:
     }
 
 
-def validate_bundle(directory: Path, commit: str, tag: str, prerelease: bool) -> dict:
-    require(bool(re.fullmatch(r"[0-9a-f]{40}", commit)), "expected a full commit SHA")
+def validate_release_source(
+    repository: Path,
+    wheel_build_commit: str,
+    release_commit: str,
+) -> dict:
+    """Allow later host/workflow changes only with identical tracked package source."""
+    for commit in (wheel_build_commit, release_commit):
+        require(
+            isinstance(commit, str) and bool(re.fullmatch(r"[0-9a-f]{40}", commit)),
+            "expected a full commit SHA",
+        )
+
+    def git(*arguments: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        require(
+            result.returncode == 0,
+            "cannot verify release source; checkout complete Git history: "
+            + result.stderr.strip(),
+        )
+        return result.stdout.strip()
+
+    for commit in (wheel_build_commit, release_commit):
+        require(
+            git("cat-file", "-t", commit) == "commit", "source identity is not a commit"
+        )
+    ancestry = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "merge-base",
+            "--is-ancestor",
+            wheel_build_commit,
+            release_commit,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(
+        ancestry.returncode == 0,
+        "wheel build commit is not an ancestor of release commit",
+    )
+    build_tree = git("rev-parse", "--verify", f"{wheel_build_commit}:{PACKAGE_TREE}")
+    release_tree = git("rev-parse", "--verify", f"{release_commit}:{PACKAGE_TREE}")
+    require(
+        git("cat-file", "-t", build_tree) == "tree", "package source is not a Git tree"
+    )
+    require(
+        build_tree == release_tree,
+        "tracked package source changed since wheel build; "
+        "rebuild and revalidate the wheel",
+    )
+    return {
+        "wheel_build_commit": wheel_build_commit,
+        "release_commit": release_commit,
+        "package_path": PACKAGE_TREE,
+        "package_tree": build_tree,
+    }
+
+
+def validate_bundle(
+    directory: Path,
+    commit: str | None,
+    tag: str,
+    prerelease: bool,
+    *,
+    release_commit: str | None = None,
+    repository: Path = ROOT,
+) -> dict:
+    require(
+        commit is not None or release_commit is not None,
+        "provide --expected-commit or --release-commit",
+    )
+    receipt = json.loads((directory / "release-validation.json").read_text())
+    wheel_build_commit = receipt["source_commit"]
+    require(
+        isinstance(wheel_build_commit, str)
+        and bool(re.fullmatch(r"[0-9a-f]{40}", wheel_build_commit)),
+        "release receipt must identify a full wheel build commit SHA",
+    )
+    if commit is not None:
+        require(commit == wheel_build_commit, "release receipt commit mismatch")
+    identity = {"wheel_build_commit": wheel_build_commit}
+    if release_commit is not None:
+        identity = validate_release_source(
+            repository, wheel_build_commit, release_commit
+        )
     wheels = list(directory.glob("turbopairformer-*.whl"))
     require(len(wheels) == 1, "release must contain exactly one TurboPairFormer wheel")
-    wheel = validate_wheel(wheels[0], commit)
+    wheel = validate_wheel(wheels[0], wheel_build_commit)
     base_tag = "turbopairformer-v" + wheel["version"]
     expected_tag = re.escape(base_tag) + (r"-rc\.[1-9][0-9]*" if prerelease else "")
     require(
         bool(re.fullmatch(expected_tag, tag)), "release tag/version/prerelease mismatch"
     )
-    evidence = validate_receipt(directory, wheel, commit)
-    return {"tag": tag, "publish_to_pypi": not prerelease, "wheel": wheel, **evidence}
+    evidence = validate_receipt(directory, wheel, wheel_build_commit)
+    return {
+        "tag": tag,
+        "publish_to_pypi": not prerelease,
+        "wheel": wheel,
+        **identity,
+        **evidence,
+    }
 
 
 def create_bundle(args: argparse.Namespace) -> dict:
@@ -219,7 +318,11 @@ def main() -> None:
     create.add_argument("--expected-commit", required=True)
     validate = subparsers.add_parser("validate", help="check downloaded release assets")
     validate.add_argument("directory", type=Path)
-    validate.add_argument("--expected-commit", required=True)
+    validate.add_argument("--expected-commit", help="expected wheel build commit")
+    validate.add_argument(
+        "--release-commit",
+        help="tagged commit; requires an ancestor build with identical package tree",
+    )
     validate.add_argument("--tag", required=True)
     validate.add_argument("--prerelease", choices=("true", "false"), required=True)
     args = parser.parse_args()
@@ -232,6 +335,7 @@ def main() -> None:
                 args.expected_commit,
                 args.tag,
                 args.prerelease == "true",
+                release_commit=args.release_commit,
             )
         )
     except (ValueError, KeyError, TypeError, OSError, ET.ParseError) as exc:
