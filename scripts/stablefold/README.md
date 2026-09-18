@@ -1,7 +1,7 @@
 # StableFold installation and single-GPU launch helpers
 
 These scripts build and verify an installed StableFold wheel and run the
-OpenFold3 host adapter on one GPU. See the
+OpenFold3 host adapter on one H100 or H200 GPU. See the
 [package quickstart](../../docs/source/stablefold_pip_quickstart.md) for the full
 installation and provider contract.
 
@@ -10,7 +10,7 @@ training, this version of OpenFold3:
 
 ```bash
 python3.14 -m venv /absolute/path/to/venv
-/absolute/path/to/venv/bin/python -m pip install torch==2.10.0 setuptools wheel ninja
+/absolute/path/to/venv/bin/python -m pip install torch==2.10.0 setuptools wheel ninja patchelf
 export STABLEFOLD_PYTHON=/absolute/path/to/venv/bin/python
 export CUDA_HOME=/absolute/path/to/cuda-12.9
 scripts/stablefold/install_stablefold.sh

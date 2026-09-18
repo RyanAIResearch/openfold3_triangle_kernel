@@ -3,7 +3,7 @@
 """Metadata-only support contract for the StableFold TriMul fast path.
 
 This module deliberately does not import :mod:`stablefold.trimul`, load an
-extension, or launch a kernel.  It separates the currently validated H100
+extension, or launch a kernel.  It separates the Hopper sm90a
 fast-path domain from future selector/fallback policy.
 """
 
@@ -103,7 +103,7 @@ def _accepted(batch: int, sequence: int, channels: int) -> SupportResult:
         True,
         "supported",
         (
-            "supported H100 sm90 BF16 TriMul fast path: "
+            "supported Hopper sm90a BF16 TriMul fast path: "
             f"batch={batch}, N={sequence}, C_z=C_hidden={channels}"
         ),
         batch=batch,
@@ -147,15 +147,16 @@ def evaluate_trimul_support(
 ) -> SupportResult:
     """Evaluate the StableFold TriMul contract without CUDA/JIT side effects."""
 
-    if metadata.capability != (9, 0) or "H100" not in metadata.device_name.upper():
+    if metadata.capability != (9, 0):
         return _rejected(
             "architecture",
-            "StableFold TriMul fast path requires an NVIDIA H100 with sm90",
+            "StableFold TriMul requires Hopper sm90a (H100/H200), "
+            "compute capability 9.0",
         )
     if metadata.multiprocessor_count <= 0:
         return _rejected(
             "device_metadata",
-            "H100 multiprocessor_count must be a positive integer",
+            "Hopper multiprocessor_count must be a positive integer",
         )
 
     z = metadata.z

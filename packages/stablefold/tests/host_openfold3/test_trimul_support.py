@@ -148,6 +148,28 @@ def test_pure_contract_accepts_dimension_scalable_domain(channels, sequence):
     assert bool(result)
 
 
+@pytest.mark.parametrize(
+    "device_name",
+    (
+        "NVIDIA H100 80GB HBM3",
+        "NVIDIA H100 SXM5 80GB",
+        "NVIDIA H100 NVL",
+        "NVIDIA H200",
+        "NVIDIA H200 SXM",
+        "NVIDIA H200 NVL",
+        "NVIDIA Hopper",
+    ),
+)
+def test_pure_contract_accepts_hopper_independent_of_product_name(device_name):
+    # Synthetic metadata proves dispatch eligibility, not execution on this GPU.
+    result = evaluate_trimul_support(
+        _metadata(sequence=101, device_name=device_name, capability=(9, 0))
+    )
+
+    assert result.supported
+    assert result.code == "supported"
+
+
 @pytest.mark.parametrize("sequence", (1, 31, 99, 100))
 def test_valid_short_sequences_are_reasoned_stock_fallbacks(sequence):
     result = evaluate_trimul_support(_metadata(sequence=sequence))
@@ -218,8 +240,9 @@ def test_non_boolean_direction_is_rejected():
 @pytest.mark.parametrize(
     ("changes", "code"),
     (
-        ({"device_name": "NVIDIA H200", "capability": (9, 0)}, "architecture"),
         ({"device_name": "NVIDIA H100", "capability": (8, 0)}, "architecture"),
+        ({"device_name": "NVIDIA H200", "capability": (9, 1)}, "architecture"),
+        ({"device_name": "NVIDIA H200", "capability": (10, 0)}, "architecture"),
         ({"multiprocessor_count": 0}, "device_metadata"),
         ({"z_device_type": "cpu", "z_device_index": None}, "z_device"),
         ({"z_dtype": torch.float32}, "z_dtype"),
@@ -420,14 +443,11 @@ assert 'stablefold.trimul' not in sys.modules
     )
 
 
-def _is_h100() -> bool:
+def _is_hopper() -> bool:
     if not torch.cuda.is_available():
         return False
     device = torch.device("cuda", torch.cuda.current_device())
-    return (
-        torch.cuda.get_device_capability(device) == (9, 0)
-        and "H100" in torch.cuda.get_device_name(device).upper()
-    )
+    return torch.cuda.get_device_capability(device) == (9, 0)
 
 
 def _live_trimul_module(c_z: int, c_hidden: int, outgoing: bool, device):
@@ -442,11 +462,11 @@ def _live_trimul_module(c_z: int, c_hidden: int, outgoing: bool, device):
     ).to(device)
 
 
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
 @pytest.mark.parametrize("channels", (32, 64, 96, 128))
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("requires_grad", (False, True))
-def test_h100_live_positive_metadata_contract(channels, outgoing, requires_grad):
+def test_hopper_live_positive_metadata_contract(channels, outgoing, requires_grad):
     device = torch.device("cuda", torch.cuda.current_device())
     module = _live_trimul_module(channels, channels, outgoing, device)
     module.requires_grad_(requires_grad)
@@ -464,8 +484,8 @@ def test_h100_live_positive_metadata_contract(channels, outgoing, requires_grad)
     assert result.channels == channels
 
 
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
-def test_h100_live_negative_metadata_contracts():
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
+def test_hopper_live_negative_metadata_contracts():
     from openfold3.core.model.layers.triangular_multiplicative_update import (
         FusedTriangleMultiplicationOutgoing,
     )

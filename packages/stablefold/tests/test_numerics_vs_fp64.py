@@ -23,7 +23,7 @@ import torch
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability(0) != (9, 0),
-    reason="StableFold kernels need an H100 (sm_90a)",
+    reason="StableFold kernels need a Hopper GPU (sm_90a, capability 9.0)",
 )
 
 DEV = torch.device("cuda")

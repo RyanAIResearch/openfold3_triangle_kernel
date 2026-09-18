@@ -41,7 +41,8 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 
 ## 运行时支持范围
 
-- GPU：Hopper `sm_90a`（当前发布门禁设备为 H100 80GB）；
+- GPU：H100 / H200，均为 Hopper compute capability 9.0，共用 `sm_90a` wheel；
+  历史硬件验证基线为 H100 80GB，H200 运行回执单独记录；
 - dtype：Q/K/V 为 BF16；pair bias 接受 BF16 或 FP32，FP32 在 facade 的
   Hopper 内核边界显式转为 BF16（其梯度由 autograd 转回 FP32）；mask 接受
   FP32/BF16/FP16；
@@ -86,7 +87,7 @@ manifest、ABI/hash preflight 与显式 development-JIT gate，但其数值和�
 不属于本 Attention release manifest。
 
 发布 wheel ABI 固定为 CPython 3.14、Torch 2.10.0、Torch CUDA 12.8 与
-H100 `sm_90a` SASS；不包含 PTX。build manifest 必须记录 commit、dirty 状态、
+H100 / H200 共用的 Hopper `sm_90a` SASS；不包含 PTX。build manifest 必须记录 commit、dirty 状态、
 ABI/toolchain、所有生产源 SHA-256 以及全部五个 `.so` 的 SHA-256 和导出符号。
 canonical builder 必须使用 fresh clone，并通过 `nm`、`cuobjdump` 和只读、
 无 NVCC clean-install 的 public-facade F+B smoke。
@@ -130,3 +131,5 @@ pair bias、官方 mask、统一 downstream consumer、平衡执行顺序及 raw
 
 
 当前 pip 构建目标使用 PyPI Torch 2.10.0+cu128 / CPython 3.14，编译工具链为 CUDA 12.9。历史集成 wheel 的认证不自动转移到此独立包；发布前必须对最终 artifact 重新验证。
+
+H200 兼容不改变上面的历史认证范围。不同 GPU 型号的 SM 数、显存容量和带宽可以不同；固定配置逐位重放不等同于 H100/H200 跨设备逐位一致，也不转移已有 H100 性能数字或多卡认证。

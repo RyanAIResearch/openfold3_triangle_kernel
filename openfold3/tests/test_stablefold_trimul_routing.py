@@ -259,14 +259,11 @@ _EXPECTED_RELEASE_FIELDS = frozenset(
 )
 
 
-def _is_h100() -> bool:
+def _is_hopper() -> bool:
     if not torch.cuda.is_available():
         return False
     device = torch.device("cuda", torch.cuda.current_device())
-    return (
-        torch.cuda.get_device_capability(device) == (9, 0)
-        and "H100" in torch.cuda.get_device_name(device).upper()
-    )
+    return torch.cuda.get_device_capability(device) == (9, 0)
 
 
 def _release_module(channels: int, outgoing: bool):
@@ -378,12 +375,12 @@ def _assert_canonical_aot_paths(paths) -> None:
     )
 
 
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
 @pytest.mark.parametrize("sequence", (100, 101))
 @pytest.mark.parametrize("channels", (32, 128))
 @pytest.mark.parametrize("outgoing", (False, True), ids=("incoming", "outgoing"))
 @pytest.mark.parametrize("training", (False, True), ids=("infer", "train"))
-def test_h100_short_sequence_boundary_routes(
+def test_hopper_short_sequence_boundary_routes(
     sequence,
     channels,
     outgoing,
@@ -441,8 +438,8 @@ def test_h100_short_sequence_boundary_routes(
     assert all(torch.isfinite(value).all() for value in stable_fields.values())
 
 
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
-def test_h100_n31_seed2997_stock_exact_all_fields_and_five_replays():
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
+def test_hopper_n31_seed2997_stock_exact_all_fields_and_five_replays():
     torch.manual_seed(2997)
     module = _release_module(32, True)
     _initialize_release_module(module)

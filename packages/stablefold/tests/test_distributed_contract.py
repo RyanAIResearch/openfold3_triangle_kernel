@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -269,3 +270,120 @@ def test_fit_start_rejects_missing_kernel_preflight(tmp_path: Path):
     )
     with pytest.raises(DistributedContractError, match="process group"):
         callback.on_fit_start(SimpleNamespace(), SimpleNamespace())
+
+
+@pytest.fixture
+def local_hopper_record(monkeypatch):
+    """Exercise the actual hardware guard using synthetic rank/device metadata."""
+    import stablefold._aot_runtime as aot_runtime
+    import stablefold.distributed as contract
+
+    monkeypatch.setattr(contract.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(contract.dist, "get_world_size", lambda: 2)
+    monkeypatch.setattr(contract.dist, "get_backend", lambda: "nccl")
+    monkeypatch.setattr(contract.pl, "__version__", "2.6.1")
+    monkeypatch.setattr(contract, "_runtime_identity", lambda: {"fixture": "CPU guard"})
+    monkeypatch.setattr(contract.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(contract.torch.cuda, "current_device", lambda: 0)
+    for name in ("OPENFOLD3_TRIANGLE_ALLOW_JIT", "STABLEFOLD_ALLOW_JIT"):
+        monkeypatch.setenv(name, "0")
+    aot_identity = Mock(return_value={"fixture": "AOT identity not executed"})
+    monkeypatch.setattr(aot_runtime, "distributed_aot_identity", aot_identity)
+    trainer = SimpleNamespace(
+        global_rank=0,
+        local_rank=0,
+        node_rank=0,
+        world_size=2,
+        strategy=contract.DDPStrategy(),
+    )
+    module = SimpleNamespace(config=_config(train_trimul=True))
+
+    def collect(
+        *,
+        device_name="NVIDIA H200",
+        capability=(9, 0),
+        total_memory=141 * 1024**3,
+        multiprocessor_count=132,
+        uuid="GPU-00000000-0000-0000-0000-000000000000",
+    ):
+        properties = SimpleNamespace(
+            uuid=uuid,
+            total_memory=total_memory,
+            multi_processor_count=multiprocessor_count,
+        )
+        monkeypatch.setattr(
+            contract.torch.cuda, "get_device_properties", lambda _index: properties
+        )
+        monkeypatch.setattr(
+            contract.torch.cuda, "get_device_capability", lambda _index: capability
+        )
+        monkeypatch.setattr(
+            contract.torch.cuda, "get_device_name", lambda _index: device_name
+        )
+        return contract._local_kernel_record(
+            trainer,
+            module,
+            expected_world_size=2,
+            expected_num_nodes=1,
+            expected_devices_per_node=2,
+            expected_aot_modules=("stablefold_trimul",),
+        )
+
+    return collect, aot_identity
+
+
+@pytest.mark.parametrize(
+    "device_name",
+    (
+        "NVIDIA H100 80GB HBM3",
+        "NVIDIA H100 SXM5 80GB",
+        "NVIDIA H100 NVL",
+        "NVIDIA H200",
+        "NVIDIA H200 SXM",
+        "NVIDIA H200 NVL",
+        "NVIDIA Hopper",
+    ),
+)
+def test_local_hopper_hardware_guard_accepts_product_names(
+    local_hopper_record, device_name
+):
+    collect, aot_identity = local_hopper_record
+    record = collect(device_name=device_name)
+
+    assert record["ok"], record.get("error")
+    assert record["device_name"] == device_name
+    assert record["compute_capability"] == [9, 0]
+    aot_identity.assert_called_once_with(("stablefold_trimul",))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"capability": (8, 0)},
+        {"capability": (9, 1)},
+        {"capability": (10, 0)},
+        {"device_name": "NVIDIA H200 MIG 1g.18gb"},
+        {"uuid": "MIG-00000000-0000-0000-0000-000000000000"},
+        {"uuid": ""},
+        {"total_memory": 75 * 1024**3 - 1},
+        {"multiprocessor_count": 99},
+    ),
+)
+def test_local_hopper_hardware_guard_retains_architecture_and_full_gpu_checks(
+    local_hopper_record, changes
+):
+    collect, aot_identity = local_hopper_record
+    record = collect(**changes)
+
+    assert not record["ok"]
+    assert "DistributedContractError" in record["error"]
+    assert "CUDA device UUID" in record["error"] or "full Hopper" in record["error"]
+    aot_identity.assert_not_called()
+
+
+def test_local_hopper_hardware_guard_preserves_minimum_resources(local_hopper_record):
+    collect, aot_identity = local_hopper_record
+    record = collect(total_memory=75 * 1024**3, multiprocessor_count=100)
+
+    assert record["ok"], record.get("error")
+    aot_identity.assert_called_once_with(("stablefold_trimul",))

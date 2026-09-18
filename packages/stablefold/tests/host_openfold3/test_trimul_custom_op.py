@@ -418,14 +418,11 @@ def test_unsupported_public_path_calls_neither_custom_op_nor_extension():
     get_ext.assert_not_called()
 
 
-def _is_h100() -> bool:
+def _is_hopper() -> bool:
     if not torch.cuda.is_available():
         return False
     device = torch.device("cuda", torch.cuda.current_device())
-    return (
-        torch.cuda.get_device_capability(device) == (9, 0)
-        and "H100" in torch.cuda.get_device_name(device).upper()
-    )
+    return torch.cuda.get_device_capability(device) == (9, 0)
 
 
 def _live_module(c: int, outgoing: bool):
@@ -520,9 +517,9 @@ class _RecordingWgradFold:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
 @pytest.mark.parametrize("sequence", (792, 800))
-def test_h100_wgrad_c128_single_wave_large_tail_reference_replay_and_memory(
+def test_hopper_wgrad_c128_single_wave_large_tail_reference_replay_and_memory(
     sequence,
 ):
     channels = 128
@@ -555,8 +552,8 @@ def test_h100_wgrad_c128_single_wave_large_tail_reference_replay_and_memory(
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
-def test_h100_wgrad_tail_accuracy_matches_pure_pytorch_fp32():
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
+def test_hopper_wgrad_tail_accuracy_matches_pure_pytorch_fp32():
     channels = 128
     sequence = 65
     rows = sequence * sequence
@@ -570,11 +567,11 @@ def test_h100_wgrad_tail_accuracy_matches_pure_pytorch_fp32():
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
 @pytest.mark.parametrize("channels", (32, 64, 96, 128))
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("sequence", (17, 33, 101, 113))
-def test_h100_legacy_custom_op_exact_parity_and_replay(
+def test_hopper_legacy_custom_op_exact_parity_and_replay(
     channels,
     outgoing,
     sequence,
@@ -618,10 +615,10 @@ def test_h100_legacy_custom_op_exact_parity_and_replay(
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize(("channels", "sequence"), ((32, 64), (128, 65)))
-def test_h100_custom_ops_pass_opcheck(channels, sequence, outgoing):
+def test_hopper_custom_ops_pass_opcheck(channels, sequence, outgoing):
     torch.manual_seed(2026 + channels + sequence + int(outgoing))
     module = _live_module(channels, outgoing)
     z = torch.randn(
@@ -697,9 +694,9 @@ def test_h100_custom_ops_pass_opcheck(channels, sequence, outgoing):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
 @pytest.mark.parametrize("save_state", (False, True))
-def test_h100_actual_and_fake_forward_metadata_match(save_state):
+def test_hopper_actual_and_fake_forward_metadata_match(save_state):
     torch.manual_seed(2525 + int(save_state))
     module = _live_module(32, True)
     inputs = (
@@ -753,11 +750,11 @@ class _SupportedModule(torch.nn.Module):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("backend", ("aot_eager", "inductor"))
 @pytest.mark.parametrize(("channels", "sequence"), ((32, 64), (128, 65)))
-def test_h100_eager_matches_fullgraph_forward_and_backward(
+def test_hopper_eager_matches_fullgraph_forward_and_backward(
     outgoing,
     backend,
     channels,
@@ -794,10 +791,10 @@ def test_h100_eager_matches_fullgraph_forward_and_backward(
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("backend", ("aot_eager", "inductor"))
-def test_h100_dynamic_fullgraph_backward_crosses_k_chunk_boundary(
+def test_hopper_dynamic_fullgraph_backward_crosses_k_chunk_boundary(
     outgoing,
     backend,
 ):
@@ -834,8 +831,8 @@ def test_h100_dynamic_fullgraph_backward_crosses_k_chunk_boundary(
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _is_h100(), reason="requires an NVIDIA H100")
-def test_h100_dynamic_sequence_export_save_load_preserves_versioned_target(tmp_path):
+@pytest.mark.skipif(not _is_hopper(), reason="requires a Hopper GPU with compute capability 9.0")
+def test_hopper_dynamic_sequence_export_save_load_preserves_versioned_target(tmp_path):
     torch.manual_seed(4040)
     wrapper = _SupportedModule(_live_module(32, True))
     z = torch.randn((1, 17, 17, 32), dtype=torch.bfloat16, device="cuda")

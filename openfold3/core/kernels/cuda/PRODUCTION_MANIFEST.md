@@ -41,7 +41,8 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 
 ## 运行时支持范围
 
-- GPU：Hopper `sm_90a`（当前发布门禁设备为 H100 80GB）；
+- GPU：H100 / H200，均为 Hopper compute capability 9.0，可共用 `sm_90a` 内核；
+  以下历史发布门禁与回执的设备仍为 H100 80GB，不自动构成 H200 生产认证；
 - dtype：Q/K/V 为 BF16；pair bias 接受 BF16 或 FP32，FP32 在 facade 的
   Hopper 内核边界显式转为 BF16（其梯度由 autograd 转回 FP32）；mask 接受
   FP32/BF16/FP16；

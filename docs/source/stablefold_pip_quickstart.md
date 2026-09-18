@@ -13,7 +13,8 @@ change to TriOnce will be handled separately.
 ## Build and install
 
 The initial target is Linux x86_64, CPython 3.14, and Hopper compute capability
-9.0 (`sm_90a`), with PyTorch 2.10.0 and its PyPI CUDA 12.8 runtime.
+9.0 on H100 or H200 (the same `sm_90a` wheel), with PyTorch 2.10.0 and its
+PyPI CUDA 12.8 runtime.
 Install the exact PyTorch build required by the wheel. The AOT
 loader checks Python, Torch, CUDA runtime, and C++ ABI against its embedded
 manifest; an incompatible wheel fails before executing a kernel. A build
@@ -45,7 +46,9 @@ python -m pip install /absolute/path/to/stablefold-<version>-<tags>.whl
 
 See `packages/stablefold/README.md` for the supported runtime version and direct
 operator examples. Build-toolkit and Torch CUDA-runtime versions are separate;
-use the wheel manifest to identify the latter.
+use the wheel manifest to identify the latter. H100 and H200 use the same
+binary architecture target; retain GPU-specific validation receipts when
+deploying to either model.
 
 ## Verify the installed provider
 
@@ -119,8 +122,8 @@ python -m pytest openfold3/tests/test_stablefold_provider_equivalence.py \
   --import-mode=importlib
 ```
 
-GPU tests require a compatible H100 runtime and built artifacts. CPU tests or
-skips do not establish CUDA correctness. Compare installed artifacts in isolated
+GPU tests require a compatible H100 or H200 runtime and built artifacts. CPU
+tests or skips do not establish CUDA correctness. Compare installed artifacts in isolated
 environments and retain the wheel manifest and test results. Historical
 benchmarks from earlier artifacts are not validation for a rebuilt wheel.
 

@@ -7,7 +7,7 @@ The independent package remains named **stablefold**. Its source is in
 preparing the eventual `pip install stablefold` release; it does not itself
 publish a PyPI package.
 
-The first standalone wheel targets Linux x86-64, CPython 3.14, H100, and
+The standalone wheel targets Linux x86-64, CPython 3.14, H100/H200, and
 **PyPI Torch 2.10.0 with CUDA runtime 12.8**. Building uses CUDA toolkit 12.9;
 users of a prebuilt wheel do not need nvcc or OpenFold3. The older production
 OpenFold3 environment documented below uses a different, pinned Conda ABI.
@@ -20,7 +20,8 @@ Its full OpenFold3 DDP integration is not qualified and fails early rather than
 writing a receipt for a different implementation.
 
 The production results and historical receipts below keep their original
-artifact scope; they are not performance claims for the new pip wheel.
+artifact and H100 hardware scope; they do not establish H200 measurements
+or performance claims for the new pip wheel.
 
 
 StableFold is a Hopper-optimized Triangle Attention and Triangle

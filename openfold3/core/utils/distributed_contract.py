@@ -304,15 +304,15 @@ def _local_kernel_record(
             raise DistributedContractError("CUDA device UUID is unavailable")
         if (
             capability != (9, 0)
-            or "H100" not in device_name
             or "MIG" in device_name.upper()
             or device_uuid.upper().startswith("MIG")
             or int(properties.total_memory) < 75 * 1024**3
             or int(properties.multi_processor_count) < 100
         ):
             raise DistributedContractError(
-                "StableFold kernel DDP requires full H100 80GB-class GPUs "
-                "with MIG disabled"
+                "StableFold kernel DDP requires full Hopper sm90a GPUs "
+                "(H100/H200) with MIG disabled, at least 75 GiB memory "
+                "and at least 100 multiprocessors"
             )
 
         from openfold3.core.kernels.cuda._aot_runtime import (

@@ -8,11 +8,19 @@ rename is outside this release work.
 ## Supported build
 
 The first wheel targets Linux x86-64, CPython 3.14, PyTorch 2.10.0 with its CUDA
-12.8 runtime, and an NVIDIA H100 (sm_90a). The build uses CUDA toolkit 12.9.
+12.8 runtime, and NVIDIA H100 or H200 GPUs (Hopper, compute capability 9.0).
+Both use the same `sm_90a` wheel. The build uses CUDA toolkit 12.9.
 The toolkit is needed only to build the wheel, not to run an installed wheel.
 Other Python, Torch, CUDA runtime, GPU and platform combinations are not covered
 by this wheel. The loader verifies the installed ABI and binary hashes before
 loading an extension and reports mismatches instead of silently compiling.
+
+GPU eligibility uses compute capability 9.0; it does not require the device
+name to contain H100. NVIDIA lists both H100 and H200 as
+[compute capability 9.0](https://developer.nvidia.com/cuda/gpus).
+Validation receipts identify the actual GPU used: H100 measurements are not
+H200 measurements, and fixed-configuration replay does not promise identical
+bits across different GPU models.
 
 ## Install
 
@@ -99,7 +107,7 @@ uncommitted development changes, explicitly set `STABLEFOLD_ALLOW_DIRTY_BUILD=1`
 such wheels are marked dirty and are not release artifacts.
 
 Run `pytest /absolute/path/to/packages/stablefold/tests` against the installed
-wheel on H100. The optional test dependencies are `pytest` and
+wheel on H100 or H200. The optional test dependencies are `pytest` and
 `pytorch-lightning`. `tests/host_openfold3/` additionally requires OpenFold3 and
 is skipped when it is absent. The standalone suite and the installed-wheel
 smoke serve different purposes: the smoke verifies loading and autograd, while

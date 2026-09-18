@@ -385,7 +385,7 @@ class Attention(nn.Module):
                 Whether to use Triton-based memory-efficient attention kernel.
                 Mutually exclusive with other kernel options.
             use_stable_triangle_attention:
-                Whether to use the default-off, fixed-tree H100 Triangle
+                Whether to use the default-off, fixed-tree Hopper Triangle
                 Attention backend. Mutually exclusive with every other
                 attention implementation and high-precision attention.
             use_lma:
