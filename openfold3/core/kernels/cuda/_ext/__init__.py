@@ -1,4 +1,4 @@
-"""Private AOT CUDA extension modules for StableFold kernels.
+"""Private AOT CUDA extension modules for TurboPairFormer kernels.
 
 The binary modules are installed by the H100 ``sm_90a`` wheel.  They are
 kept in a private package so their CPython initializer names cannot collide

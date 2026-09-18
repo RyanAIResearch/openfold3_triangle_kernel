@@ -8,10 +8,9 @@ structure unchanged; users select the backend through the model configuration.
 The two operators are **TurboTriangleAttention** (Triangle Attention) and
 **TurboTriangleMultiplicative** (Triangle Multiplicative Update).
 
-This project was previously called StableFold. Existing `stablefold_*` imports,
-configuration keys, artifact paths, and receipt names remain compatibility
-identifiers for the qualified production wheel. The backend selector accepts
-`--backend turbopairformer`; `--backend stablefold` remains a compatible alias.
+The integrated backend is selected with `--backend turbopairformer`. Current
+module names, extension identities, artifact paths and kernel receipts use the
+TurboPairFormer name.
 
 This `main` branch provides the integrated OpenFold3 production workflow. The
 standalone **TurboPairFormer** Python package is being prepared on
@@ -59,9 +58,9 @@ The source tree includes AQLab `main` through
 [`7de748b7`](https://github.com/aqlaboratory/openfold-3/commit/7de748b7bc93adb5af0a4032d5e9f208b6e1325f)
 (2026-09-18), including template-server reliability, inference intermediate
 management, and memory-efficient metrics updates. See [`UPSTREAM.md`](UPSTREAM.md).
-The production environment below still installs the separately qualified
-`87ebe22da` wheel. Updating this checkout does not rebuild that wheel or claim
-GPU qualification of the newly merged host code.
+The production environment uses a separately built, pinned binary. Source
+updates and namespace changes require their own artifact verification; the
+qualification of an earlier binary does not transfer to a renamed build.
 
 ## Pixi production workflow
 
@@ -77,8 +76,8 @@ git rev-parse HEAD
 test -z "$(git status --porcelain=v1)"
 ```
 
-Create the locked, non-editable H100 environment and install the qualified
-wheel already stored in the repository; no kernel build command is required:
+Create the locked, non-editable H100 environment and install its pinned wheel;
+users do not need a local kernel build command:
 
 Run the two installation commands once for either one GPU or multiple GPUs on
 one host. For multiple hosts, run them once on node 0 only when the checkout
@@ -105,14 +104,15 @@ Ninja, or JIT. It then directly executes AQLab `run_openfold` or standard
 `torchrun` without replacing training, strategy, checkpoint, logging, or loss
 behavior, and the selector changes only the training kernel-route flags.
 
-The integration checkout and the binary artifact intentionally have separate
-identities: the `main` checkout contains the installer and guide, while the
-wheel records the qualified source commit `87ebe22da13c657d36997dedb4ec398fbd62c6b7`.
-That wheel keeps Diffusion on AQLab's original attention path and runs
-TurboPairFormer only for non-Diffusion triangle Attention and TMU outside the source
-checkout. Its single-node DDP path has been exercised on two real H100s through
-scratch training, validation, checkpointing, and resume. Eight-H100 and real
-multi-node qualification remain pending hardware.
+The integration checkout and binary artifact have separate identities. The
+installed wheel records its build source and extension hashes; the installer
+verifies them before launch. Current release artifacts are stored under
+`release_artifacts/turbopairformer-h100-20260918/`.
+
+The renamed binary requires its own H100 execution validation. Consult the
+artifact's accompanying validation report for completed checks. Full training,
+checkpoint/resume and multi-GPU DDP qualification of this renamed artifact are
+pending; historical results are not certification of the current binary.
 
 For a copy-and-run bare-metal path covering clone, data, prebuilt installation,
 backend selection, single-GPU training, single-node DDP, and multi-node launch,
@@ -179,16 +179,16 @@ Run the packaging and routing tests:
 
 ```bash
 python -m unittest \
-  openfold3.tests.core.kernels.test_stablefold_triangle_aot_packaging \
-  openfold3.tests.core.kernels.test_stablefold_triangle_packaging \
-  openfold3.tests.core.kernels.test_stablefold_triangle_workspace \
+  openfold3.tests.core.kernels.test_turbopairformer_triangle_aot_packaging \
+  openfold3.tests.core.kernels.test_turbopairformer_triangle_packaging \
+  openfold3.tests.core.kernels.test_turbopairformer_triangle_workspace \
   openfold3.tests.core.model.test_attention_stable_routing
 ```
 
 Run one public-facade forward/backward smoke:
 
 ```bash
-python scripts/benchmarks/stablefold_triangle_sanitizer_smoke.py \
+python scripts/benchmarks/turbopairformer_triangle_sanitizer_smoke.py \
   --sequence 65 --heads 4 --head-dim 32 --prefix 1
 ```
 
@@ -233,8 +233,6 @@ fail-closed; only the model selector owns the stock fallback.
 
 ## Supported scope and claim boundaries
 
-- Main measured crops: 384, 640, and 768
-- Main measured head dimensions: 16, 24, 32, and 48 across real OpenFold3 sites
 - Runtime Triangle Attention contract: positive prefixes, runtime sequence
   length/head count, and `1 <= D <= 64`, subject to CUDA grid and memory limits
 - Determinism means bitwise self-replay with the same backend, inputs, software
@@ -242,25 +240,28 @@ fail-closed; only the model selector owns the stock fallback.
   cross-hardware bit equality
 - The rounding residual corrects the backward row-scalar channel only; it does
   not eliminate every BF16 error
-- The speedup comes from single reconstruction; the fixed reduction tree and
-  rounding residual each have a cost
+- Single reconstruction reduces repeated attention reconstruction work; the
+  fixed reduction tree and rounding residual also have execution costs
 - Do not infer convergence superiority or memory savings from the timing result
 
 The detailed kernel contract is in
 [`PRODUCTION_MANIFEST.md`](openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md).
-Experimental protocols and receipts are documented under
-[`scripts/benchmarks/sr/`](scripts/benchmarks/sr/) and [`paper/`](paper/).
+Current experiment tooling is under [`scripts/benchmarks/sr/`](scripts/benchmarks/sr/).
+The [methodology overview](paper/README.md) explains the evidence boundaries.
+Earlier manuscripts, raw receipts and result figures remain in the
+[historical source snapshot](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/a522470b500d040e5649e1deed1a7a9581438c62); their version-specific results have not
+been relabeled as measurements of this renamed release.
 
 ## Direct operator entry point
 
 Users integrating below the OpenFold3 model router can call:
 
 ```python
-from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
-    stablefold_triangle_attention,
+from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+    turbopairformer_triangle_attention,
 )
 
-output = stablefold_triangle_attention(q, k, v, mask, pair_bias)
+output = turbopairformer_triangle_attention(q, k, v, mask, pair_bias)
 ```
 
 Use the public facade rather than importing private extension symbols. The facade

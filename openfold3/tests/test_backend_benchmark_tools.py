@@ -22,8 +22,8 @@ from tools.benchmark_training_backend import (
 from tools.plot_backend_comparison import build_report
 
 
-@pytest.mark.parametrize("backend", ("turbopairformer", "stablefold"))
-def test_benchmark_config_is_matched_validation_free_training(tmp_path, backend):
+def test_benchmark_config_is_matched_validation_free_training(tmp_path):
+    backend = "turbopairformer"
     config = {
         "experiment_settings": {"restart_checkpoint_path": "last"},
         "data_module_args": {"batch_size": 8, "num_workers": 10},
@@ -80,8 +80,8 @@ def test_benchmark_config_is_matched_validation_free_training(tmp_path, backend)
 def test_multi_node_benchmark_config_scales_epoch_len_by_world_size(tmp_path):
     configured = configure_benchmark(
         {},
-        backend="stablefold",
-        output_dir=tmp_path / "stablefold",
+        backend="turbopairformer",
+        output_dir=tmp_path / "turbopairformer",
         warmup_steps=10,
         measure_steps=400,
         seed=42,
@@ -190,12 +190,12 @@ def test_benchmark_output_owner_is_global_rank_zero_under_each_launcher():
 
 
 def test_result_check_ignores_directories_created_by_other_ranks(tmp_path):
-    output = tmp_path / "stablefold"
+    output = tmp_path / "turbopairformer"
     assert not has_benchmark_results(output)
     # Under srun, other ranks create the log directory and the DDP receipt
     # before rank 0 finishes importing; that must not count as a prior result.
     (output / "logs").mkdir(parents=True)
-    (output / "logs" / "stablefold_kernel_ddp.json").write_text("{}")
+    (output / "logs" / "turbopairformer_kernel_ddp.json").write_text("{}")
     assert not has_benchmark_results(output)
     (output / "summary.json").write_text("{}")
     assert has_benchmark_results(output)
@@ -238,8 +238,8 @@ def _write_result(root: Path, backend: str, seconds: float, losses: list[float])
             )
 
 
-@pytest.mark.parametrize("backend", ("turbopairformer", "stablefold"))
-def test_comparison_writes_tables_and_loss_timing_plots(tmp_path, backend):
+def test_comparison_writes_tables_and_loss_timing_plots(tmp_path):
+    backend = "turbopairformer"
     results = tmp_path / "results"
     _write_result(results, "aqlab", 2.0, [10.0, 9.0, 8.0])
     _write_result(results, "triton", 1.5, [10.0, 8.95, 7.95])

@@ -1,7 +1,7 @@
-# StableFold Triangle Attention — release manifest
+# TurboPairFormer Triangle Attention — release manifest
 
-本文件描述当前由 `use_stable_triangle_attention=true` 选择的 StableFold
-Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；StableFold 路径必须
+本文件描述当前由 `use_stable_triangle_attention=true` 选择的 TurboPairFormer
+Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；TurboPairFormer 路径必须
 显式启用。公开 facade 对不支持的输入直接报错；模型级 blanket-coverage 路由会对
 不满足 facade 契约的站点记录一次原因并回退官方 PyTorch attention。
 
@@ -27,7 +27,7 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；Stable
 - DDP 首步前的全 rank AOT/ABI/SO 哈希、GPU、环境和设备绑定一致性预检；
 - distributed strict route：Attention 不允许隐式回退，TriMul 只允许
   `N<=100` 的声明式 stock 路由；
-- rank-zero `stablefold_kernel_ddp.json` 与 SHA-256 sidecar；该预检不修改
+- rank-zero `turbopairformer_kernel_ddp.json` 与 SHA-256 sidecar；该预检不修改
   AQLab 的 DDP strategy、梯度归约、EMA、loss、checkpoint 或 logger。
 
 正式放行仍缺少：
@@ -63,17 +63,17 @@ facade 的未填充 direct ABI 调用才走 `StaticSequence=0` 的显式尾块 g
 
 | 文件 | 职责 |
 |---|---|
-| `openfold3/core/model/primitives/attention.py` | 显式 StableFold 路由；unsupported 模型站点回退 stock |
-| `stablefold_triangle_attention.py` | public facade、broadcast/prefix 编排、自定义 autograd |
+| `openfold3/core/model/primitives/attention.py` | 显式 TurboPairFormer 路由；unsupported 模型站点回退 stock |
+| `turbopairformer_triangle_attention.py` | public facade、broadcast/prefix 编排、自定义 autograd |
 | `_aot_runtime.py` | AOT import、ABI/device/hash/symbol 核验；production 禁止自动 JIT |
-| `_ext/_stablefold_forward_sm90a*.so` | forward 与 fused physical-layout QKV pack AOT module |
-| `_ext/_stablefold_delta_sm90a*.so` | 独立 delta AOT module |
-| `_ext/_stablefold_dkdv_sm90a*.so` | 独立 dK+dV AOT module |
-| `_ext/_stablefold_dq_dbias_sm90a*.so` | 独立 dQ+dBias/reduce AOT module |
-| `stablefold_triangle_forward.{py,cu}` | fused QKV pack、online-softmax forward 与 LSE |
-| `stablefold_triangle_delta.{py,cu}` | backward delta 预计算 |
-| `stablefold_triangle_dkdv.{py,cu}` | generic/runtime dK+dV |
-| `stablefold_triangle_dq_dbias.{py,cu}` | fixed-tree dQ+dBias |
+| `_ext/_turbopairformer_forward_sm90a*.so` | forward 与 fused physical-layout QKV pack AOT module |
+| `_ext/_turbopairformer_delta_sm90a*.so` | 独立 delta AOT module |
+| `_ext/_turbopairformer_dkdv_sm90a*.so` | 独立 dK+dV AOT module |
+| `_ext/_turbopairformer_dq_dbias_sm90a*.so` | 独立 dQ+dBias/reduce AOT module |
+| `turbopairformer_triangle_forward.{py,cu}` | fused QKV pack、online-softmax forward 与 LSE |
+| `turbopairformer_triangle_delta.{py,cu}` | backward delta 预计算 |
+| `turbopairformer_triangle_dkdv.{py,cu}` | generic/runtime dK+dV |
+| `turbopairformer_triangle_dq_dbias.{py,cu}` | fixed-tree dQ+dBias |
 
 上述四组 CUDA 源作为 build receipt/source distribution 进入 package-data，
 但 production runtime 只 import wheel 内四个 `.so`，不调用 NVCC。只有开发者
@@ -81,7 +81,7 @@ facade 的未填充 direct ABI 调用才走 `StaticSequence=0` 的显式尾块 g
 损坏或 ABI 不匹配的生产二进制会直接报错。生产 facade 不允许依赖
 `scripts/benchmarks` 或任何历史 backward loader。
 
-共享 AOT wheel 还包含独立的 `_stablefold_trimul_sm90a` 模块；它复用同一
+共享 AOT wheel 还包含独立的 `_turbopairformer_trimul_sm90a` 模块；它复用同一
 manifest、ABI/hash preflight 与显式 development-JIT gate，但其数值和支持范围
 不属于本 Attention release manifest。
 
@@ -93,7 +93,7 @@ canonical builder 必须使用 fresh clone，并通过 `nm`、`cuobjdump` 和只
 
 ## 数值契约
 
-StableFold 与官方 PyTorch 使用相同实数公式，但浮点执行契约不同：
+TurboPairFormer 与官方 PyTorch 使用相同实数公式，但浮点执行契约不同：
 
 - raw BF16 Q/K 进入 HMMA，FP32 accumulator 后乘 scale；
 - mask 以 FP32 加入；pair bias 从 BF16 内核存储提升到 FP32 后加入；
@@ -121,7 +121,7 @@ operator replay 推断；这些长期证据目前尚未完成。
 
 `pytorch_aligned_*`、`stable_triangle_attention.py`、resident dK/dV、历史
 backward 以及 `scripts/benchmarks` 中的裸 kernel 链都是参考、诊断或历史实现。
-当前 StableFold 模型路由不会调用它们；observer 仍可监视 aligned facade，目的只是
+当前 TurboPairFormer 模型路由不会调用它们；observer 仍可监视 aligned facade，目的只是
 证明其调用次数为零。
 
 性能数字只有在 clean commit、真实 non-contiguous Q/K/V、permuted BF16

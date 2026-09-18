@@ -1,4 +1,4 @@
-"""Build (dev-JIT) all four StableFold extensions from the SR worktree."""
+"""Build (dev-JIT) all four TurboPairFormer extensions from the SR worktree."""
 
 import os
 import sys
@@ -15,16 +15,16 @@ os.environ.setdefault(
 
 t0 = time.time()
 from openfold3.core.kernels.cuda import (  # noqa: E402
-    stablefold_triangle_attention as facade,
+    turbopairformer_triangle_attention as facade,
 )
 
 for name in ("_forward_extension", "_delta_extension"):
     getattr(facade, name)()
     print(f"{name} ready at {time.time() - t0:.0f}s", flush=True)
 
-from openfold3.core.kernels.cuda import stablefold_triangle_dkdv as dkdv_mod  # noqa: E402
+from openfold3.core.kernels.cuda import turbopairformer_triangle_dkdv as dkdv_mod  # noqa: E402
 from openfold3.core.kernels.cuda import (  # noqa: E402
-    stablefold_triangle_dq_dbias as dq_mod,
+    turbopairformer_triangle_dq_dbias as dq_mod,
 )
 
 dkdv_mod.load_extension()

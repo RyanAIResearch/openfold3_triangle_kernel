@@ -31,10 +31,10 @@ os.environ.setdefault(
 import torch  # noqa: E402
 
 from openfold3.core.kernels.cuda import (  # noqa: E402
-    stablefold_triangle_attention as facade,
+    turbopairformer_triangle_attention as facade,
 )
-from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (  # noqa: E402
-    stablefold_triangle_sr_backward,
+from openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias import (  # noqa: E402
+    turbopairformer_triangle_sr_backward,
 )
 
 CASES = {
@@ -84,7 +84,7 @@ def kernel_forward(q, k, v, mask, bias):
     )
     lse = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
     shadow = torch.empty_like(out)
-    ext.stablefold_triangle_forward_shadow_out(
+    ext.turbopairformer_triangle_forward_shadow_out(
         q, k, v, mask, bias, out, lse, shadow
     )
     return out, lse, shadow
@@ -179,7 +179,7 @@ def run_case(name, q, k, v, mask, bias, grad_out):
     arms["sr-perfect"] = ref["delta_perfect"].float().contiguous()
     lines = [name]
     for arm, delta in arms.items():
-        dq, dk, dv, dbias = stablefold_triangle_sr_backward(
+        dq, dk, dv, dbias = turbopairformer_triangle_sr_backward(
             q, k, v, grad_out, lse, delta, mask, bias
         )
         e_dq = rel_l2(dq, ref["dq"])

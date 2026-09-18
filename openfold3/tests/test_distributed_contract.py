@@ -1,7 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the StableFold-only distributed kernel contract."""
+"""Unit tests for the TurboPairFormer-only distributed kernel contract."""
 
 from __future__ import annotations
 
@@ -16,15 +16,15 @@ import pytest
 
 from openfold3.core.utils.distributed_contract import (
     DistributedContractError,
-    StableFoldKernelDDPCallback,
-    _set_stablefold_distributed_strict,
+    TurboPairFormerKernelDDPCallback,
+    _set_turbopairformer_distributed_strict,
     _validate_kernel_records,
     _write_receipt,
-    required_stablefold_aot_modules,
-    stablefold_aot_modules_from_config,
-    stablefold_distributed_execution_flag,
-    stablefold_distributed_strict_enabled,
-    validate_stablefold_distributed_environment,
+    required_turbopairformer_aot_modules,
+    turbopairformer_aot_modules_from_config,
+    turbopairformer_distributed_execution_flag,
+    turbopairformer_distributed_strict_enabled,
+    validate_turbopairformer_distributed_environment,
 )
 
 
@@ -59,34 +59,34 @@ def _config(
         (
             _config(train_attention=True),
             (
-                "stablefold_forward",
-                "stablefold_delta",
-                "stablefold_dkdv",
-                "stablefold_dq_dbias",
+                "turbopairformer_forward",
+                "turbopairformer_delta",
+                "turbopairformer_dkdv",
+                "turbopairformer_dq_dbias",
             ),
         ),
-        (_config(train_trimul=True), ("stablefold_trimul",)),
+        (_config(train_trimul=True), ("turbopairformer_trimul",)),
         (
             _config(train_trimul=True, eval_attention=True),
             (
-                "stablefold_forward",
-                "stablefold_delta",
-                "stablefold_dkdv",
-                "stablefold_dq_dbias",
-                "stablefold_trimul",
+                "turbopairformer_forward",
+                "turbopairformer_delta",
+                "turbopairformer_dkdv",
+                "turbopairformer_dq_dbias",
+                "turbopairformer_trimul",
             ),
         ),
     ],
 )
-def test_stablefold_aot_module_discovery_uses_train_eval_union(config, expected):
-    assert stablefold_aot_modules_from_config(config) == expected
+def test_turbopairformer_aot_module_discovery_uses_train_eval_union(config, expected):
+    assert turbopairformer_aot_modules_from_config(config) == expected
     module = SimpleNamespace(config=config)
-    assert required_stablefold_aot_modules(module) == expected
+    assert required_turbopairformer_aot_modules(module) == expected
 
 
-def test_stablefold_aot_module_discovery_handles_missing_settings():
-    assert stablefold_aot_modules_from_config(None) == ()
-    assert stablefold_aot_modules_from_config(SimpleNamespace()) == ()
+def test_turbopairformer_aot_module_discovery_handles_missing_settings():
+    assert turbopairformer_aot_modules_from_config(None) == ()
+    assert turbopairformer_aot_modules_from_config(SimpleNamespace()) == ()
 
 
 def test_strict_execution_flags_are_immutable(monkeypatch):
@@ -97,24 +97,24 @@ def test_strict_execution_flags_are_immutable(monkeypatch):
     }
     for name, value in expected.items():
         monkeypatch.setenv(name, value)
-    _set_stablefold_distributed_strict(True, expected)
+    _set_turbopairformer_distributed_strict(True, expected)
     try:
-        assert stablefold_distributed_strict_enabled()
-        assert stablefold_distributed_execution_flag("OPENFOLD3_SR_BACKWARD")
-        assert not stablefold_distributed_execution_flag("OPENFOLD3_TRIANGLE_ALLOW_JIT")
+        assert turbopairformer_distributed_strict_enabled()
+        assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_BACKWARD")
+        assert not turbopairformer_distributed_execution_flag("OPENFOLD3_TRIANGLE_ALLOW_JIT")
 
         monkeypatch.setenv("OPENFOLD3_SR_SHADOW", "0")
         with pytest.raises(DistributedContractError, match="environment changed"):
-            validate_stablefold_distributed_environment()
+            validate_turbopairformer_distributed_environment()
 
         # Route decisions stay pinned to the preflight snapshot.  The boundary
         # audit above is what terminates a job after an environment mutation.
-        assert stablefold_distributed_execution_flag("OPENFOLD3_SR_SHADOW")
-        with pytest.raises(KeyError, match="unknown StableFold execution flag"):
-            stablefold_distributed_execution_flag("UNRELATED_FLAG")
+        assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_SHADOW")
+        with pytest.raises(KeyError, match="unknown TurboPairFormer execution flag"):
+            turbopairformer_distributed_execution_flag("UNRELATED_FLAG")
     finally:
-        _set_stablefold_distributed_strict(False)
-    assert not stablefold_distributed_strict_enabled()
+        _set_turbopairformer_distributed_strict(False)
+    assert not turbopairformer_distributed_strict_enabled()
 
 
 def _kernel_record(rank: int) -> dict:
@@ -128,7 +128,7 @@ def _kernel_record(rank: int) -> dict:
         "expected_world_size": 2,
         "expected_num_nodes": 1,
         "expected_devices_per_node": 2,
-        "declared_aot_modules": ["stablefold_forward"],
+        "declared_aot_modules": ["turbopairformer_forward"],
         "trainer_world_size": 2,
         "process_group_rank": rank,
         "process_group_world_size": 2,
@@ -159,10 +159,10 @@ def _kernel_record(rank: int) -> dict:
                 "installed_package_tree_sha256": "b" * 64,
             },
         },
-        "required_aot_modules": ["stablefold_forward"],
+        "required_aot_modules": ["turbopairformer_forward"],
         "aot_identity": {
             "manifest_sha256": "a" * 64,
-            "modules": {"stablefold_forward": {"sha256": "c" * 64}},
+            "modules": {"turbopairformer_forward": {"sha256": "c" * 64}},
         },
     }
 
@@ -175,7 +175,7 @@ def test_kernel_rank_identity_rejects_aot_drift():
     second = _kernel_record(1)
     second["aot_identity"] = {
         "manifest_sha256": "f" * 64,
-        "modules": {"stablefold_forward": {"sha256": "e" * 64}},
+        "modules": {"turbopairformer_forward": {"sha256": "e" * 64}},
     }
     with pytest.raises(DistributedContractError, match="aot_identity"):
         _validate_kernel_records([_kernel_record(0), second])
@@ -200,7 +200,7 @@ def test_kernel_rank_identity_rejects_duplicate_physical_gpu():
 
 def test_kernel_rank_identity_rejects_declared_module_drift():
     second = _kernel_record(1)
-    second["declared_aot_modules"] = ["stablefold_trimul"]
+    second["declared_aot_modules"] = ["turbopairformer_trimul"]
     with pytest.raises(DistributedContractError, match="declared_aot_modules"):
         _validate_kernel_records([_kernel_record(0), second])
 
@@ -208,8 +208,8 @@ def test_kernel_rank_identity_rejects_declared_module_drift():
 def test_kernel_rank_identity_rejects_discovery_mismatch():
     first = _kernel_record(0)
     second = _kernel_record(1)
-    first["declared_aot_modules"] = ["stablefold_trimul"]
-    second["declared_aot_modules"] = ["stablefold_trimul"]
+    first["declared_aot_modules"] = ["turbopairformer_trimul"]
+    second["declared_aot_modules"] = ["turbopairformer_trimul"]
     with pytest.raises(DistributedContractError, match="module discovery"):
         _validate_kernel_records([first, second])
 
@@ -248,7 +248,7 @@ def test_kernel_rank_identity_reports_local_aot_failure():
 
 
 def test_kernel_receipt_has_content_hash_sidecar(tmp_path: Path):
-    receipt = tmp_path / "stablefold_kernel_ddp.json"
+    receipt = tmp_path / "turbopairformer_kernel_ddp.json"
     digest = _write_receipt(receipt, {"schema_version": 1, "status": "PASS"})
 
     assert digest == hashlib.sha256(receipt.read_bytes()).hexdigest()
@@ -262,12 +262,12 @@ def test_kernel_receipt_has_content_hash_sidecar(tmp_path: Path):
 
 
 def test_fit_start_rejects_missing_kernel_preflight(tmp_path: Path):
-    callback = StableFoldKernelDDPCallback(
+    callback = TurboPairFormerKernelDDPCallback(
         expected_world_size=2,
         expected_num_nodes=1,
         expected_devices_per_node=2,
-        expected_aot_modules=("stablefold_forward",),
-        receipt_path=tmp_path / "stablefold_kernel_ddp.json",
+        expected_aot_modules=("turbopairformer_forward",),
+        receipt_path=tmp_path / "turbopairformer_kernel_ddp.json",
     )
     with pytest.raises(DistributedContractError, match="process group"):
         callback.on_fit_start(SimpleNamespace(), SimpleNamespace())
@@ -310,14 +310,14 @@ def test_training_runner_keeps_aqlab_ddp_and_adds_only_kernel_callback(
     kernel_callbacks = [
         callback
         for callback in runner.callbacks
-        if isinstance(callback, StableFoldKernelDDPCallback)
+        if isinstance(callback, TurboPairFormerKernelDDPCallback)
     ]
     assert len(kernel_callbacks) == 1
     assert kernel_callbacks[0].expected_world_size == 2
     assert kernel_callbacks[0].expected_aot_modules == (
-        "stablefold_forward",
-        "stablefold_delta",
-        "stablefold_dkdv",
-        "stablefold_dq_dbias",
-        "stablefold_trimul",
+        "turbopairformer_forward",
+        "turbopairformer_delta",
+        "turbopairformer_dkdv",
+        "turbopairformer_dq_dbias",
+        "turbopairformer_trimul",
     )

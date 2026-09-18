@@ -49,30 +49,16 @@ def test_backend_selector_changes_only_route_flags(base_config, backend):
 
 
 def test_backend_selector_creates_only_the_train_memory_path():
-    configured = configure_training_backend({}, backend="stablefold")
+    configured = configure_training_backend({}, backend="turbopairformer")
     assert configured == {
         "model_update": {
             "custom": {
                 "settings": {
-                    "memory": {"train": dict(BACKEND_FLAGS["stablefold"])},
+                    "memory": {"train": dict(BACKEND_FLAGS["turbopairformer"])},
                 },
             },
         },
     }
-
-
-def test_turbopairformer_and_legacy_name_generate_identical_training_config(
-    base_config,
-):
-    canonical = configure_training_backend(
-        deepcopy(base_config),
-        backend="turbopairformer",
-    )
-    legacy = configure_training_backend(deepcopy(base_config), backend="stablefold")
-    assert canonical == legacy
-    train_memory = canonical["model_update"]["custom"]["settings"]["memory"]["train"]
-    assert train_memory["use_stable_triangle_attention"] is True
-    assert train_memory["use_stable_triangle_multiplicative"] is True
 
 
 def test_backend_selector_rejects_unknown_backend():
@@ -86,8 +72,8 @@ def test_aqlab_selects_native_stock_routes():
 
 def test_each_accelerated_backend_has_exactly_one_operator_family():
     assert BACKEND_FLAGS["cueq"]["use_cueq_triangle_kernels"] is True
-    assert BACKEND_FLAGS["stablefold"]["use_stable_triangle_attention"] is True
-    assert BACKEND_FLAGS["stablefold"]["use_stable_triangle_multiplicative"] is True
+    assert BACKEND_FLAGS["turbopairformer"]["use_stable_triangle_attention"] is True
+    assert BACKEND_FLAGS["turbopairformer"]["use_stable_triangle_multiplicative"] is True
     assert BACKEND_FLAGS["deepspeed-evo"]["use_deepspeed_evo_attention"] is True
     assert BACKEND_FLAGS["triton"]["use_triton_triangle_kernels"] is True
     for name, flags in BACKEND_FLAGS.items():
@@ -99,17 +85,17 @@ def test_each_accelerated_backend_has_exactly_one_operator_family():
             "cueq": flags["use_cueq_triangle_kernels"],
             "triton": flags["use_triton_triangle_kernels"],
             "deepspeed-evo": flags["use_deepspeed_evo_attention"],
-            "stablefold": flags["use_stable_triangle_attention"]
+            "turbopairformer": flags["use_stable_triangle_attention"]
             or flags["use_stable_triangle_multiplicative"],
         }
         assert sum(families.values()) == 1, name
 
 
 def test_single_gpu_smoke_is_one_validation_free_training_step(base_config):
-    configured = configure_single_gpu_smoke(base_config, backend="stablefold")
+    configured = configure_single_gpu_smoke(base_config, backend="turbopairformer")
 
     assert configured["experiment_settings"] == {
-        "output_dir": "./openfold3_smoke_stablefold",
+        "output_dir": "./openfold3_smoke_turbopairformer",
         "restart_checkpoint_path": None,
     }
     assert configured["data_module_args"] == {

@@ -204,9 +204,9 @@ semantics used by the single-node configuration.
 
 #### TurboPairFormer kernel preflight for DDP
 
-This describes the existing in-tree `main` runtime, previously named StableFold,
-inside the pinned `87ebe22da` OpenFold3 wheel (Conda PyTorch 2.10.0 / CUDA 12.9).
-The historical kernel receipt filenames and configuration keys are unchanged.
+This describes the in-tree `main` runtime with Conda PyTorch 2.10.0 and CUDA
+12.9. Artifact identity and completed validation are recorded alongside the
+pinned wheel in `release_artifacts/turbopairformer-h100-20260918/`.
 
 TurboPairFormer adds a kernel-only preflight to AQLab's ordinary DDP path; it does
 not replace the DDP strategy or alter gradients, EMA, losses, checkpoints, or
@@ -223,17 +223,15 @@ export OPENFOLD3_SR_SHADOW=1
 Before the first model forward, every rank preloads the selected TurboPairFormer
 AOT modules and exchanges its package identity, binary hashes, ABI, GPU identity,
 and TurboPairFormer execution flags. A mismatch fails the kernel preflight on
-every rank, and rank zero writes ``<log_dir>/stablefold_kernel_ddp.json`` plus a
+every rank, and rank zero writes ``<log_dir>/turbopairformer_kernel_ddp.json`` plus a
 SHA-256 sidecar. Once armed, an unexpected Attention fallback is an error and
 TriMul permits only its documented stock route for sequence lengths at or below
 100.
 
 The operator flag ``use_deepspeed_evo_attention`` is not the same as
-Lightning's DeepSpeed/ZeRO strategy. TurboPairFormer's kernel preflight is
-currently qualified under the previous StableFold name with AQLab's standard DDP
-strategy on a real single-node two-H100 NCCL run through validation,
-checkpointing, and resume. Eight-GPU and real
-multi-node qualification remain pending hardware; all other backends retain
+Lightning's DeepSpeed/ZeRO strategy. Full training, checkpoint/resume and DDP
+qualification of the renamed binary remain pending. Launch examples alone do
+not establish two-GPU, eight-GPU or multi-node validation. Other backends retain
 the strategy behavior selected by the unmodified AQLab runner.
 
 For a concise source-to-launch example and an explicit selector for native

@@ -11,7 +11,7 @@ Here is the upstream overview diagram showing the environment and feature
 composition. In this fork, the editable CUDA 12 development environment shown in
 the diagram is named `openfold3-cuda12-dev`; the shorter `openfold3-cuda12` name
 is reserved for the pinned, non-editable TurboPairFormer H100 runtime
-(previously named StableFold) described in {doc}`Installation <Installation>`.
+described in {doc}`Installation <Installation>`.
 
 ```{figure} ../imgs/pixi-environments-and-features.png
 :class: only-light

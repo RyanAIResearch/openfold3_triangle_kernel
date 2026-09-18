@@ -1,7 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2021 DeepMind Technologies Limited
-# Modified by RyanAIResearch in 2026 to integrate StableFold Triangle Attention.
+# Modified by RyanAIResearch in 2026 to integrate TurboPairFormer Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -319,7 +319,7 @@ class PairBlock(nn.Module):
         use_stable_triangle_multiplicative: bool = False,
     ) -> torch.Tensor:
         """Perform the outgoing and incoming triangular multiplicative updates."""
-        # StableFold owns the trimul site when enabled; cuEq keeps other sites.
+        # TurboPairFormer owns the trimul site when enabled; cuEq keeps other sites.
         use_cueq_triangle_kernels = (
             use_cueq_triangle_kernels and not use_stable_triangle_multiplicative
         )

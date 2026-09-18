@@ -57,10 +57,12 @@ Available pixi environments:
 
 Choose the environment that matches your system. Use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12` for the precompiled OpenFold3 wheel with TurboPairFormer H100 kernels and direct AQLab training-launch passthroughs, `openfold3-cuda12-dev` or `openfold3-cuda13` for general NVIDIA GPU development, and `openfold3-rocm7` for AMD ROCm systems. The complete build-free H100 workflow is documented in the {doc}`Pixi-first bare-metal training quickstart <bare_metal_distributed_quickstart>`.
 
-The `main` production environment retains OpenFold3 wheel
-`0.5.1.dev5860+g87ebe22da`, Conda PyTorch 2.10.0, and CUDA 12.9. This artifact
-was qualified on H100 under the previous StableFold name. The standalone
-TurboPairFormer pip package has a separate release and runtime ABI.
+The `main` production environment pins an OpenFold3 binary, Conda PyTorch
+2.10.0, CUDA 12.9 and CPython 3.14. The binary's build identity and completed
+checks are recorded in `release_artifacts/turbopairformer-h100-20260918/`.
+Namespace migration requires new artifact validation; full training and
+multi-GPU qualification remain pending. The standalone TurboPairFormer pip
+package has a separate release and runtime ABI.
 
 For more information, including rationale, tips and tricks, see [Modern Conda Environments with Pixi](./modern-conda-environments-with-pixi.md).
 

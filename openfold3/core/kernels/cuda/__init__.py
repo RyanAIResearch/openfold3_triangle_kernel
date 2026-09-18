@@ -1,6 +1,6 @@
 """Default-off CUDA production candidates for OpenFold3."""
 
-from openfold3.core.kernels.cuda.stablefold_trimul_support import (
+from openfold3.core.kernels.cuda.turbopairformer_trimul_support import (
     STABLE_TRIMUL_STOCK_FALLBACK_THRESHOLD,
     StableTrimulSupportMetadata,
     SupportResult,

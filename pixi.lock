@@ -2881,7 +2881,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/wcwidth-0.2.14-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
-      - pypi: ./release_artifacts/stablefold-h100-87ebe22d/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl
+      - pypi: ./release_artifacts/turbopairformer-h100-20260918/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/1b/52/3131b6dc9577eaa556b2b66584a44df32a9d4356aa641ff5d33c8b797225/cuequivariance-0.10.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/23/cd/066e86230ae37ed0be70aae89aabf03ca8d9f39c8aea0dec8029455b5540/opt_einsum-3.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2b/a3/5c2b6cac9bf5d210536c26bfb1ba191c3c36883ec8188076576332a4a49f/cuequivariance_torch-0.10.0-py3-none-any.whl
@@ -28919,10 +28919,10 @@ packages:
   - cuequivariance-torch==0.10.0 ; extra == 'cuequivariance'
   - torch==2.10.0 ; extra == 'cuequivariance'
   - deepspeed>=0.18.7 ; extra == 'deepspeed'
-  - torch==2.10.0 ; extra == 'stablefold-h100'
-  - pytorch-lightning==2.6.1 ; extra == 'stablefold-h100'
+  - torch==2.10.0 ; extra == 'turbopairformer-h100'
+  - pytorch-lightning==2.6.1 ; extra == 'turbopairformer-h100'
   requires_python: ==3.14.*
-- pypi: ./release_artifacts/stablefold-h100-87ebe22d/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl
+- pypi: ./release_artifacts/turbopairformer-h100-20260918/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl
   name: openfold3
   version: 0.5.1.dev5860+g87ebe22da
   requires_dist:
@@ -28966,8 +28966,8 @@ packages:
   - cuequivariance-torch>=0.8 ; extra == 'cuequivariance'
   - torch==2.10.0 ; extra == 'cuequivariance'
   - deepspeed>=0.18.7 ; extra == 'deepspeed'
-  - torch==2.10.0 ; extra == 'stablefold-h100'
-  - pytorch-lightning==2.6.1 ; extra == 'stablefold-h100'
+  - torch==2.10.0 ; extra == 'turbopairformer-h100'
+  - pytorch-lightning==2.6.1 ; extra == 'turbopairformer-h100'
   requires_python: ==3.14.*
 - pypi: https://download-r2.pytorch.org/whl/cu129/torch-2.12.1%2Bcu129-cp314-cp314-manylinux_2_28_aarch64.whl
   name: torch

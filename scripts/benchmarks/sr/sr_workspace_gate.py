@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bitwise workspace-plan invariance gate for StableFold SR backward.
+"""Bitwise workspace-plan invariance gate for TurboPairFormer SR backward.
 
 This gate intentionally crosses query-stripe, leaf-wave, batch-chunk, and
 storage-dimension boundaries.  It also compares dK/dV against the independent
@@ -17,14 +17,14 @@ from dataclasses import asdict
 import torch
 
 from openfold3.core.kernels.cuda import (
-    stablefold_triangle_attention as facade,
+    turbopairformer_triangle_attention as facade,
 )
-from openfold3.core.kernels.cuda.stablefold_triangle_dkdv import (
-    stablefold_triangle_dkdv,
+from openfold3.core.kernels.cuda.turbopairformer_triangle_dkdv import (
+    turbopairformer_triangle_dkdv,
 )
-from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
+from openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias import (
     sr_workspace_plan,
-    stablefold_triangle_sr_backward,
+    turbopairformer_triangle_sr_backward,
 )
 
 CASES = {
@@ -95,7 +95,7 @@ def forward_state(
     )
     logsumexp = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
     shadow = torch.empty_like(out)
-    facade._forward_extension().stablefold_triangle_forward_shadow_out(
+    facade._forward_extension().turbopairformer_triangle_forward_shadow_out(
         q, k, v, mask, bias, out, logsumexp, shadow
     )
     delta = (
@@ -153,7 +153,7 @@ def configurations(name: str) -> list[dict[str, int | None]]:
 def run_case(name: str) -> None:
     q, k, v, mask, bias, grad_out = make_case(name)
     logsumexp, delta = forward_state(q, k, v, mask, bias, grad_out)
-    two_pass_dk, two_pass_dv = stablefold_triangle_dkdv(
+    two_pass_dk, two_pass_dv = turbopairformer_triangle_dkdv(
         q, k, v, grad_out, logsumexp, delta, mask, bias
     )
     reference: tuple[torch.Tensor, ...] | None = None
@@ -169,7 +169,7 @@ def run_case(name: str) -> None:
             **config,
         )
         torch.cuda.reset_peak_memory_stats()
-        outputs = stablefold_triangle_sr_backward(
+        outputs = turbopairformer_triangle_sr_backward(
             q, k, v, grad_out, logsumexp, delta, mask, bias, **config
         )
         torch.cuda.synchronize()

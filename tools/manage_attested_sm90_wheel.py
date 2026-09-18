@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install, validate, or maintain the attested StableFold H100 wheel."""
+"""Install, validate, or maintain the attested TurboPairFormer H100 wheel."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_DIR = ROOT / "dist"
 PREBUILT_COMMIT = "87ebe22da13c657d36997dedb4ec398fbd62c6b7"
-PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "stablefold-h100-87ebe22d"
+PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "turbopairformer-h100-20260918"
 PREBUILT_FILE_SHA256 = {
     "RECEIPT.json": (
         "1f967eae4e19abce1e5ed90ffcb3263da416ed2c57f8230fa4523942f9ff73a8"
@@ -61,16 +61,16 @@ PREBUILT_FILE_SHA256 = {
 }
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 MODULE_KEYS = (
-    "stablefold_forward",
-    "stablefold_delta",
-    "stablefold_dkdv",
-    "stablefold_dq_dbias",
-    "stablefold_trimul",
+    "turbopairformer_forward",
+    "turbopairformer_delta",
+    "turbopairformer_dkdv",
+    "turbopairformer_dq_dbias",
+    "turbopairformer_trimul",
 )
 
 
 class ArtifactError(RuntimeError):
-    """Raised when a StableFold wheel or installation fails its contract."""
+    """Raised when a TurboPairFormer wheel or installation fails its contract."""
 
 
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ def source_commit() -> str:
     dirty = _git("status", "--porcelain", "--untracked-files=all")
     if dirty:
         message = (
-            "StableFold AOT artifacts require a clean Git checkout.\n"
+            "TurboPairFormer AOT artifacts require a clean Git checkout.\n"
             f"Dirty paths:\n{dirty}"
         )
         dirty_paths = [line[3:].strip() for line in dirty.splitlines()]
@@ -306,33 +306,33 @@ def prebuilt_bundle() -> ArtifactBundle:
 
     if not PREBUILT_ARTIFACT_DIR.is_dir():
         raise ArtifactError(
-            f"prebuilt StableFold bundle is missing: {PREBUILT_ARTIFACT_DIR}"
+            f"prebuilt TurboPairFormer bundle is missing: {PREBUILT_ARTIFACT_DIR}"
         )
     actual_names = {
         path.name for path in PREBUILT_ARTIFACT_DIR.iterdir() if path.is_file()
     }
     if actual_names != set(PREBUILT_FILE_SHA256):
         raise ArtifactError(
-            "prebuilt StableFold bundle has missing or unexpected files: "
+            "prebuilt TurboPairFormer bundle has missing or unexpected files: "
             f"{sorted(actual_names)}"
         )
     for name, expected_sha256 in PREBUILT_FILE_SHA256.items():
         path = PREBUILT_ARTIFACT_DIR / name
         if sha256_file(path) != expected_sha256:
-            raise ArtifactError(f"prebuilt StableFold artifact digest mismatch: {name}")
+            raise ArtifactError(f"prebuilt TurboPairFormer artifact digest mismatch: {name}")
 
     receipt = _read_json(PREBUILT_ARTIFACT_DIR / "RECEIPT.json")
     if receipt.get("schema_version") != 2:
-        raise ArtifactError("unsupported prebuilt StableFold receipt schema")
+        raise ArtifactError("unsupported prebuilt TurboPairFormer receipt schema")
     if receipt.get("status") != "PASS_SINGLE_NODE_2XH100_PRODUCTION":
-        raise ArtifactError("prebuilt StableFold artifact is not qualified")
+        raise ArtifactError("prebuilt TurboPairFormer artifact is not qualified")
     if receipt.get("git_commit") != PREBUILT_COMMIT:
-        raise ArtifactError("prebuilt StableFold receipt names another commit")
+        raise ArtifactError("prebuilt TurboPairFormer receipt names another commit")
     wheel_receipt = receipt.get("wheel", {})
     if wheel_receipt.get("name") not in PREBUILT_FILE_SHA256 or wheel_receipt.get(
         "sha256"
     ) != PREBUILT_FILE_SHA256.get(wheel_receipt.get("name")):
-        raise ArtifactError("prebuilt StableFold receipt names another wheel")
+        raise ArtifactError("prebuilt TurboPairFormer receipt names another wheel")
     return discover_bundle(
         PREBUILT_ARTIFACT_DIR,
         expected_commit=PREBUILT_COMMIT,
@@ -388,7 +388,7 @@ import sys
 from pathlib import Path
 
 if os.environ.get('OPENFOLD3_TRIANGLE_ALLOW_JIT') not in (None, '0'):
-    raise SystemExit('production verification forbids StableFold JIT')
+    raise SystemExit('production verification forbids TurboPairFormer JIT')
 import openfold3
 module = Path(openfold3.__file__).resolve()
 prefix = Path(sys.prefix).resolve()
@@ -438,7 +438,7 @@ def verify_installed(
             "OPENFOLD3_TRIANGLE_ALLOW_JIT": "0",
         }
     )
-    with tempfile.TemporaryDirectory(prefix="stablefold-wheel-verify-") as directory:
+    with tempfile.TemporaryDirectory(prefix="turbopairformer-wheel-verify-") as directory:
         result = subprocess.run(
             (sys.executable, "-c", _verification_program(bundle, expected_commit)),
             cwd=directory,

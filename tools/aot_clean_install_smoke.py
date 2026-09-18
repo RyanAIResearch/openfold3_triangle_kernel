@@ -14,22 +14,22 @@ from pathlib import Path
 import torch
 
 MODULES = (
-    "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
-    "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
-    "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
-    "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
-    "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
+    "openfold3.core.kernels.cuda._ext._turbopairformer_forward_sm90a",
+    "openfold3.core.kernels.cuda._ext._turbopairformer_delta_sm90a",
+    "openfold3.core.kernels.cuda._ext._turbopairformer_dkdv_sm90a",
+    "openfold3.core.kernels.cuda._ext._turbopairformer_dq_dbias_sm90a",
+    "openfold3.core.kernels.cuda._ext._turbopairformer_trimul_sm90a",
 )
 
 FORWARD_SCHEMA = (
-    "openfold3_stablefold::_trimul_fwd_v1(Tensor z_bf, Tensor mask_f, "
+    "openfold3_turbopairformer::_trimul_fwd_v1(Tensor z_bf, Tensor mask_f, "
     "Tensor w_ap, Tensor w_ag, Tensor w_bp, Tensor w_bg, Tensor w_g, "
     "Tensor w_z, Tensor g_in, Tensor b_in, Tensor g_out, Tensor b_out, "
     "bool outgoing, bool save_state) -> (Tensor, Tensor, Tensor, Tensor, "
     "Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor)"
 )
 BACKWARD_SCHEMA = (
-    "openfold3_stablefold::_trimul_bwd_v1(Tensor grad_out, Tensor z_bf, "
+    "openfold3_turbopairformer::_trimul_bwd_v1(Tensor grad_out, Tensor z_bf, "
     "Tensor mask_f, Tensor z_ln, Tensor gate, Tensor a, Tensor b, Tensor x, "
     "Tensor xlnT, Tensor mean_in, Tensor rstd_in, Tensor mean_out, "
     "Tensor rstd_out, Tensor w_ap, Tensor w_ag, Tensor w_bp, Tensor w_bg, "
@@ -64,15 +64,15 @@ def main() -> None:
         raise RuntimeError(f"expected five AOT shared objects, got {binary_paths}")
     assert_no_jit_cache("AOT binary import")
 
-    from openfold3.core.kernels.cuda import stablefold_trimul as stable
+    from openfold3.core.kernels.cuda import turbopairformer_trimul as stable
 
     if stable._ext is not None:
         raise RuntimeError("custom-op registration eagerly loaded the TriMul facade")
-    forward_schema = str(torch.ops.openfold3_stablefold._trimul_fwd_v1.default._schema)
-    backward_schema = str(torch.ops.openfold3_stablefold._trimul_bwd_v1.default._schema)
+    forward_schema = str(torch.ops.openfold3_turbopairformer._trimul_fwd_v1.default._schema)
+    backward_schema = str(torch.ops.openfold3_turbopairformer._trimul_bwd_v1.default._schema)
     if forward_schema != FORWARD_SCHEMA or backward_schema != BACKWARD_SCHEMA:
         raise RuntimeError(
-            "versioned StableFold TriMul schemas differ from the release contract"
+            "versioned TurboPairFormer TriMul schemas differ from the release contract"
         )
     assert_no_jit_cache("custom-op import")
 
@@ -215,12 +215,12 @@ def main() -> None:
         custom_targets = [
             str(node.target)
             for node in exported.graph.nodes
-            if node.op == "call_function" and "openfold3_stablefold" in str(node.target)
+            if node.op == "call_function" and "openfold3_turbopairformer" in str(node.target)
         ]
-        expected_target = "openfold3_stablefold._trimul_fwd_v1.default"
+        expected_target = "openfold3_turbopairformer._trimul_fwd_v1.default"
         if custom_targets != [expected_target]:
             raise RuntimeError(
-                f"dynamic export has unexpected StableFold targets: {custom_targets}"
+                f"dynamic export has unexpected TurboPairFormer targets: {custom_targets}"
             )
         with tempfile.TemporaryDirectory(
             prefix="openfold3-trimul-export-"
@@ -255,9 +255,9 @@ def main() -> None:
 
     dynamic_export_receipt = run_dynamic_export()
 
-    from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
+    from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
         invocation_count,
-        stablefold_triangle_attention,
+        turbopairformer_triangle_attention,
     )
 
     # Exact 64-key tiles deliberately exercise the non-contiguous fused QKV
@@ -311,8 +311,8 @@ def main() -> None:
         )
         bias_contiguous = bias.detach().clone().requires_grad_(True)
         before = invocation_count()
-        output = stablefold_triangle_attention(q, k, v, mask, bias)
-        output_contiguous = stablefold_triangle_attention(
+        output = turbopairformer_triangle_attention(q, k, v, mask, bias)
+        output_contiguous = turbopairformer_triangle_attention(
             q_contiguous,
             k_contiguous,
             v_contiguous,
@@ -445,7 +445,7 @@ def main() -> None:
         }
 
     def run_short_sequence_stock() -> dict[str, object]:
-        from openfold3.core.kernels.cuda.stablefold_trimul_support import (
+        from openfold3.core.kernels.cuda.turbopairformer_trimul_support import (
             check_stable_trimul_support,
         )
         from openfold3.core.model.layers import (
@@ -505,10 +505,10 @@ def main() -> None:
 
         stock = execute(False)
         support = check_stable_trimul_support(module, z_value, mask)
-        original_fallback_logged = set(model_module._STABLEFOLD_TRIMUL_FALLBACK_LOGGED)
+        original_fallback_logged = set(model_module._TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED)
         if support or support.code != "sequence_stock_fallback":
             raise RuntimeError(
-                "N=17 must be metadata-unsupported by the StableFold AOT route"
+                "N=17 must be metadata-unsupported by the TurboPairFormer AOT route"
             )
 
         counts = {"runner": 0, "get_ext": 0, "cueq": 0}
@@ -535,8 +535,8 @@ def main() -> None:
             stable._get_ext = original_get_ext
             model_module._cueq_triangle_mult = original_cueq
             model_module.TRITON_AVAILABLE = original_triton_available
-            model_module._STABLEFOLD_TRIMUL_FALLBACK_LOGGED.clear()
-            model_module._STABLEFOLD_TRIMUL_FALLBACK_LOGGED.update(
+            model_module._TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED.clear()
+            model_module._TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED.update(
                 original_fallback_logged
             )
 
@@ -549,7 +549,7 @@ def main() -> None:
         ]
         if mismatched:
             raise RuntimeError(
-                "N=17 StableFold selector differs from stock PyTorch: "
+                "N=17 TurboPairFormer selector differs from stock PyTorch: "
                 + ", ".join(mismatched)
             )
         assert_no_jit_cache("TriMul N=17 stock selector")
@@ -573,11 +573,11 @@ def main() -> None:
 
     aot_identity = distributed_aot_identity(
         (
-            "stablefold_forward",
-            "stablefold_delta",
-            "stablefold_dkdv",
-            "stablefold_dq_dbias",
-            "stablefold_trimul",
+            "turbopairformer_forward",
+            "turbopairformer_delta",
+            "turbopairformer_dkdv",
+            "turbopairformer_dq_dbias",
+            "turbopairformer_trimul",
         )
     )
     distribution_identity = installed_distribution_identity()

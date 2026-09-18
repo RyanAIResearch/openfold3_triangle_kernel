@@ -24,35 +24,32 @@ def test_h100_pixi_environment_is_non_editable_and_exactly_pinned():
     environments = manifest["environments"]
     assert "openfold3-h100" not in environments
     features = environments["openfold3-cuda12"]["features"]
-    assert "stablefold-h100" in features
+    assert "turbopairformer-h100" in features
     assert "openfold3-editable" not in features
     assert "openfold3-editable-full" not in features
     assert "tests" not in features
     development_features = environments["openfold3-cuda12-dev"]["features"]
-    assert "stablefold-h100" not in development_features
+    assert "turbopairformer-h100" not in development_features
     assert "openfold3-editable" in development_features
     assert "tests" in development_features
-    production = manifest["feature"]["stablefold-h100"]
+    production = manifest["feature"]["turbopairformer-h100"]
     assert production["platforms"] == ["linux-64-cuda12"]
     assert production["dependencies"]["python"] == "3.14.*"
     assert production["dependencies"]["pytorch-gpu"] == "==2.10.0"
     assert production["dependencies"]["pytorch-lightning"] == "==2.6.1"
     assert production["dependencies"]["cuda-version"] == "12.9.*"
+    production_wheel_path = (
+        artifact_manager.PREBUILT_ARTIFACT_DIR / artifact_manager.PREBUILT_WHEEL
+    ).relative_to(REPOSITORY)
     assert production["pypi-dependencies"]["openfold3"] == {
-        "path": (
-            "release_artifacts/stablefold-h100-87ebe22d/"
-            "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
-        )
+        "path": production_wheel_path.as_posix(),
     }
 
     lock = yaml.safe_load((REPOSITORY / "pixi.lock").read_text())
     locked_environments = lock["environments"]
     assert "openfold3-h100" not in locked_environments
     locked = locked_environments["openfold3-cuda12"]
-    production_wheel = (
-        "./release_artifacts/stablefold-h100-87ebe22d/"
-        "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
-    )
+    production_wheel = "./" + production_wheel_path.as_posix()
     locked_pypi = []
     for packages in locked["packages"].values():
         for package in packages:
@@ -93,7 +90,7 @@ def test_cuequivariance_comparator_is_exactly_pinned_to_0_10_0():
 
 
 def test_h100_pixi_tasks_keep_training_in_official_launchers():
-    tasks = _manifest()["feature"]["stablefold-h100"]["tasks"]
+    tasks = _manifest()["feature"]["turbopairformer-h100"]["tasks"]
     assert set(tasks) == {
         "doctor-h100",
         "download-pdb-subset",
@@ -103,7 +100,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         "prepare-pdb-subset",
         "prepare-crop-benchmark-data",
         "setup-pdb-subset",
-        "setup-stablefold-h100",
+        "setup-turbopairformer-h100",
         "verify-aot",
         "validate-training-data",
         "select-training-backend",
@@ -130,7 +127,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
     assert commands["plot-backend-comparison"][-1] == (
         "tools/plot_backend_comparison.py"
     )
-    assert commands["setup-stablefold-h100"][3] == "verify-prebuilt"
+    assert commands["setup-turbopairformer-h100"][3] == "verify-prebuilt"
     assert commands["verify-aot"][3] == "verify-prebuilt"
     assert not any("build" in " ".join(command) for command in commands.values())
     for name in ("train-single-gpu", "train-single-node", "train-multinode"):
@@ -194,17 +191,6 @@ def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     assert "--baseline triton" in text
     assert "Changing the worker count can therefore change the concrete" in text
     assert "not a per-step fingerprint" in text
-    assert "Reproduced Two-H100 Standard-Benchmark Results" in text
-    assert "Reproduced One- and Two-H100 Results" not in text
-    assert "5d4c79748fa5c76ce6a69478c6f4d38395d81b2c" in text
-    assert "0.5.1.dev5860+g87ebe22da" in text
-    assert "does **not**" in text
-    assert "OOM in first backward pass" in text
-    assert "backend_loss_2gpu_crops_384_640_768.png" in text
-    assert "1.704x" in text
-    assert "Single-H100 Adaptation of a Supplied Fine-Tuning Recipe" in text
-    assert "OOM after 58/66 microbatches" in text
-    assert "long-horizon convergence or unchanged model accuracy" in text
     assert "two-node H100 qualification" not in text
     assert "TriOnce" not in text
     assert text.count("--use-tf32") >= 2
@@ -426,7 +412,7 @@ def test_artifact_discovery_rejects_an_incomplete_bundle(tmp_path):
 def test_aot_identity_treats_symbol_order_as_non_semantic():
     first = {
         "extensions": {
-            "stablefold_forward": {
+            "turbopairformer_forward": {
                 "sha256": "binary",
                 "symbols": ["forward", "pack", "shadow"],
             }
@@ -434,7 +420,7 @@ def test_aot_identity_treats_symbol_order_as_non_semantic():
     }
     reordered = {
         "extensions": {
-            "stablefold_forward": {
+            "turbopairformer_forward": {
                 "sha256": "binary",
                 "symbols": ["shadow", "forward", "pack"],
             }
@@ -442,7 +428,7 @@ def test_aot_identity_treats_symbol_order_as_non_semantic():
     }
     changed = {
         "extensions": {
-            "stablefold_forward": {
+            "turbopairformer_forward": {
                 "sha256": "binary",
                 "symbols": ["forward", "pack"],
             }

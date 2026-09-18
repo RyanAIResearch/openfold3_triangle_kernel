@@ -8,7 +8,7 @@ import torch
 from openfold3.core.model.primitives import attention as attention_module
 from openfold3.core.model.primitives.attention import Attention
 from openfold3.core.utils.distributed_contract import (
-    _set_stablefold_distributed_strict,
+    _set_turbopairformer_distributed_strict,
 )
 
 
@@ -60,7 +60,7 @@ class AttentionStableRoutingTest(unittest.TestCase):
         q_x = torch.zeros((1, 2, 2, 128), dtype=torch.bfloat16)
         mask = torch.zeros((1, 2, 1, 1, 2), dtype=torch.bfloat16)
         bias = torch.zeros((1, 1, 4, 2, 2), dtype=torch.bfloat16)
-        _set_stablefold_distributed_strict(
+        _set_turbopairformer_distributed_strict(
             True,
             {
                 "OPENFOLD3_SR_BACKWARD": "1",
@@ -77,7 +77,7 @@ class AttentionStableRoutingTest(unittest.TestCase):
                     use_stable_triangle_attention=True,
                 )
         finally:
-            _set_stablefold_distributed_strict(False)
+            _set_turbopairformer_distributed_strict(False)
 
 
 if __name__ == "__main__":

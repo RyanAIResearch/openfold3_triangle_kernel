@@ -139,7 +139,7 @@ openfold3-cuda12 = { no-default-feature = true, features = [
     "deepspeed",
     "deepspeed-build",
     "cuequivariance-cuda12",
-    "stablefold-h100",
+    "turbopairformer-h100",
 ] }
 openfold3-cuda13 = { no-default-feature = true, features = [
     "python",
@@ -436,10 +436,10 @@ cuequivariance-ops-torch-cu13 = "==0.10.0"
 
 # --- TurboPairFormer H100 production-candidate workflow
 
-[feature.stablefold-h100]
+[feature.turbopairformer-h100]
 platforms = ["linux-64-cuda12"]
 
-[feature.stablefold-h100.dependencies]
+[feature.turbopairformer-h100.dependencies]
 python = "3.14.*"
 pytorch-gpu = "==2.10.0"
 pytorch-lightning = "==2.6.1"
@@ -448,17 +448,17 @@ setuptools = "*"
 setuptools-scm = ">=8"
 wheel = "*"
 
-[feature.stablefold-h100.pypi-dependencies]
-openfold3 = { path = "release_artifacts/stablefold-h100-87ebe22d/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl" }
+[feature.turbopairformer-h100.pypi-dependencies]
+openfold3 = { path = "release_artifacts/turbopairformer-h100-20260918/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl" }
 
-[feature.stablefold-h100.activation]
+[feature.turbopairformer-h100.activation]
 env.PYTHONNOUSERSITE = "1"
 env.PYTHONDONTWRITEBYTECODE = "1"
 env.OPENFOLD3_TRIANGLE_ALLOW_JIT = "0"
 env.OPENFOLD3_SR_BACKWARD = "1"
 env.OPENFOLD3_SR_SHADOW = "1"
 
-[feature.stablefold-h100.tasks]
+[feature.turbopairformer-h100.tasks]
 doctor-h100.cmd = ["python", "-m", "tools.production_training", "doctor-h100"]
 prepare-training-data.cmd = [
     "python",
@@ -492,7 +492,7 @@ purify-pdb-subset.cmd = [
     "scripts/datasets/purify_subset.py",
 ]
 setup-pdb-subset.depends-on = ["generate-pdb-subset", "download-pdb-subset"]
-setup-stablefold-h100.cmd = [
+setup-turbopairformer-h100.cmd = [
     "python",
     "-m",
     "tools.manage_attested_sm90_wheel",

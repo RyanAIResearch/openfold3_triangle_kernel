@@ -1,7 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU multi-process tests for the StableFold kernel DDP preflight."""
+"""CPU multi-process tests for the TurboPairFormer kernel DDP preflight."""
 
 from __future__ import annotations
 
@@ -50,9 +50,9 @@ def _kernel_record(rank: int, failure_mode: str | None) -> dict:
         "expected_num_nodes": 1,
         "expected_devices_per_node": 2,
         "declared_aot_modules": [
-            "stablefold_trimul"
+            "turbopairformer_trimul"
             if failure_mode == "declared_mismatch" and rank == 1
-            else "stablefold_forward"
+            else "turbopairformer_forward"
         ],
         "trainer_world_size": 2,
         "process_group_rank": rank,
@@ -84,10 +84,10 @@ def _kernel_record(rank: int, failure_mode: str | None) -> dict:
                 "installed_package_tree_sha256": "b" * 64,
             },
         },
-        "required_aot_modules": ["stablefold_forward"],
+        "required_aot_modules": ["turbopairformer_forward"],
         "aot_identity": {
             "manifest_sha256": aot_digest,
-            "modules": {"stablefold_forward": {"sha256": aot_digest}},
+            "modules": {"turbopairformer_forward": {"sha256": aot_digest}},
         },
     }
 
@@ -145,11 +145,11 @@ def _callback_worker(
                 return original_receipt_readback(*args, **kwargs)
 
             contract._receipt_readback_status = injected_readback
-        callback = contract.StableFoldKernelDDPCallback(
+        callback = contract.TurboPairFormerKernelDDPCallback(
             expected_world_size=world_size,
             expected_num_nodes=1,
             expected_devices_per_node=world_size,
-            expected_aot_modules=("stablefold_forward",),
+            expected_aot_modules=("turbopairformer_forward",),
             receipt_path=Path(receipt_path),
         )
         trainer = SimpleNamespace(
@@ -175,17 +175,17 @@ def _callback_worker(
         dist.all_reduce(caught_count, op=dist.ReduceOp.SUM)
         if failure_mode is None:
             assert caught_count.item() == 0, error
-            assert contract.stablefold_distributed_strict_enabled()
+            assert contract.turbopairformer_distributed_strict_enabled()
             callback.on_fit_end(trainer, SimpleNamespace())
-            assert not contract.stablefold_distributed_strict_enabled()
+            assert not contract.turbopairformer_distributed_strict_enabled()
         else:
             assert caught_count.item() == world_size
-            assert not contract.stablefold_distributed_strict_enabled()
+            assert not contract.turbopairformer_distributed_strict_enabled()
     finally:
         contract._local_kernel_record = original_local_record
         contract.dist.get_backend = original_get_backend
         contract._receipt_readback_status = original_receipt_readback
-        contract._set_stablefold_distributed_strict(False)
+        contract._set_turbopairformer_distributed_strict(False)
         for name, value in previous_environment.items():
             if value is None:
                 os.environ.pop(name, None)
@@ -199,7 +199,7 @@ def _callback_worker(
     reason="requires torch.distributed Gloo",
 )
 def test_two_process_kernel_preflight_seals_receipt(tmp_path: Path) -> None:
-    receipt = tmp_path / "stablefold_kernel_ddp.json"
+    receipt = tmp_path / "turbopairformer_kernel_ddp.json"
     mp.spawn(
         _callback_worker,
         args=(2, str(tmp_path / "success-rendezvous"), str(receipt), None),
@@ -234,7 +234,7 @@ def test_two_process_kernel_preflight_seals_receipt(tmp_path: Path) -> None:
 def test_two_process_kernel_failure_reaches_every_rank_without_hang(
     tmp_path: Path, failure_mode: str
 ) -> None:
-    receipt = tmp_path / "stablefold_kernel_ddp.json"
+    receipt = tmp_path / "turbopairformer_kernel_ddp.json"
     mp.spawn(
         _callback_worker,
         args=(
@@ -268,7 +268,7 @@ def test_two_process_receipt_failure_reaches_every_rank_without_hang(
         args=(
             2,
             str(tmp_path / "receipt-failure-rendezvous"),
-            str(blocker / "stablefold_kernel_ddp.json"),
+            str(blocker / "turbopairformer_kernel_ddp.json"),
             "receipt_failure",
         ),
         nprocs=2,

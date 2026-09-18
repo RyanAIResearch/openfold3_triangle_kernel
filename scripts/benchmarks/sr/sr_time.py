@@ -14,8 +14,8 @@ os.environ.setdefault(
 
 import torch  # noqa: E402
 
-from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E402
-    stablefold_triangle_attention,
+from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (  # noqa: E402
+    turbopairformer_triangle_attention,
 )
 
 REPS = 60
@@ -31,11 +31,11 @@ def bench(n, heads=4, dim=32):
     bias = (
         0.1 * torch.randn(1, 1, heads, n, n, device="cuda", dtype=torch.float32)
     ).requires_grad_()
-    out = stablefold_triangle_attention(q, k, v, mask, bias)
+    out = turbopairformer_triangle_attention(q, k, v, mask, bias)
     grad_out = torch.randn_like(out)
 
     def one():
-        result = stablefold_triangle_attention(q, k, v, mask, bias)
+        result = turbopairformer_triangle_attention(q, k, v, mask, bias)
         torch.autograd.grad(result, (q, k, v, bias), grad_outputs=grad_out)
 
     for _ in range(12):
@@ -47,7 +47,7 @@ def bench(n, heads=4, dim=32):
     fwd, bwd = [], []
     for _ in range(REPS):
         start.record()
-        result = stablefold_triangle_attention(q, k, v, mask, bias)
+        result = turbopairformer_triangle_attention(q, k, v, mask, bias)
         mid.record()
         torch.autograd.grad(result, (q, k, v, bias), grad_outputs=grad_out)
         end.record()

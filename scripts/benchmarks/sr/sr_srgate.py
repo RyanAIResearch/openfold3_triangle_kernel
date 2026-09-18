@@ -22,8 +22,8 @@ os.environ.setdefault(
 
 import torch  # noqa: E402
 
-from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E402
-    stablefold_triangle_attention,
+from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (  # noqa: E402
+    turbopairformer_triangle_attention,
 )
 
 SHAPES = {
@@ -59,7 +59,7 @@ def make_case(name):
 def run_grads(name, sr):
     os.environ["OPENFOLD3_SR_BACKWARD"] = "1" if sr else "0"
     q, k, v, mask, bias = make_case(name)
-    out = stablefold_triangle_attention(q, k, v, mask, bias)
+    out = turbopairformer_triangle_attention(q, k, v, mask, bias)
     torch.manual_seed(99)
     grad_out = torch.randn_like(out)
     grads = torch.autograd.grad(out, (q, k, v, bias), grad_outputs=grad_out)

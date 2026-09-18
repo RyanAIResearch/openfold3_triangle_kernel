@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Select one mutually exclusive OpenFold3 training-kernel backend in a YAML.
 
-TurboPairFormer uses the existing production kernel flags. The previous
-``stablefold`` backend name remains a compatible alias.
+TurboPairFormer uses the existing production kernel configuration flags.
 """
 
 from __future__ import annotations
@@ -55,8 +54,6 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_lma": False,
     },
 }
-# Preserve existing launch commands without changing their training routes.
-BACKEND_FLAGS["stablefold"] = BACKEND_FLAGS["turbopairformer"].copy()
 
 
 def configure_training_backend(

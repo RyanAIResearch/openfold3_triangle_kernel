@@ -3,7 +3,7 @@
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2025 NVIDIA Corporation
 # Copyright 2021 DeepMind Technologies Limited
-# Modified by RyanAIResearch in 2026 to integrate StableFold Triangle Attention.
+# Modified by RyanAIResearch in 2026 to integrate TurboPairFormer Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -84,7 +84,7 @@ if cueq_is_installed:
         return False
 
 
-_STABLEFOLD_FALLBACK_LOGGED: set = set()
+_TURBOPAIRFORMER_FALLBACK_LOGGED: set = set()
 
 DEFAULT_LMA_Q_CHUNK_SIZE = 1024
 DEFAULT_LMA_KV_CHUNK_SIZE = 4096
@@ -95,14 +95,14 @@ DEFAULT_LMA_KV_CHUNK_SIZE = 4096
 _ZERO_PAIR_BIAS_CACHE: dict = {}
 
 
-def _raise_if_strict_stablefold_fallback(reason: str, shape: tuple[int, ...]) -> None:
+def _raise_if_strict_turbopairformer_fallback(reason: str, shape: tuple[int, ...]) -> None:
     from openfold3.core.utils.distributed_contract import (
-        stablefold_distributed_strict_enabled,
+        turbopairformer_distributed_strict_enabled,
     )
 
-    if stablefold_distributed_strict_enabled():
+    if turbopairformer_distributed_strict_enabled():
         raise RuntimeError(
-            "StableFold distributed strict route rejected an Attention fallback "
+            "TurboPairFormer distributed strict route rejected an Attention fallback "
             f"at shape {shape}: {reason}"
         )
 
@@ -410,7 +410,7 @@ class Attention(nn.Module):
                 "lma_kv_chunk_size must be provided"
             )
 
-        # Product precedence: StableFold owns attention whenever its flag is
+        # Product precedence: TurboPairFormer owns attention whenever its flag is
         # on; a simultaneous cuEq/Triton request (the "cuEq keeps trimul"
         # deployment) is simply ignored here rather than treated as a
         # conflict. Genuinely incompatible modes still raise.
@@ -462,7 +462,7 @@ class Attention(nn.Module):
 
         if use_stable_triangle_attention:
             # Blanket-coverage soft gate, mirroring the cuEq fallback
-            # contract: shapes outside the StableFold facade fall back to the
+            # contract: shapes outside the TurboPairFormer facade fall back to the
             # stock path (identical math, never a silent wrong result).
             # Mask-only sites (e.g. MSA column attention) get the cached zero
             # pair bias so the two-bias facade contract holds.
@@ -490,7 +490,7 @@ class Attention(nn.Module):
             if q_x.is_cuda and torch.cuda.get_device_capability(q_x.device) != (9, 0):
                 blanket_reasons.append("requires Hopper compute capability 9.0")
             if blanket_reasons:
-                _raise_if_strict_stablefold_fallback(
+                _raise_if_strict_turbopairformer_fallback(
                     "; ".join(blanket_reasons), tuple(q_x.shape)
                 )
                 use_stable_triangle_attention = False
@@ -521,12 +521,12 @@ class Attention(nn.Module):
             # build, support, launch, and backward failures propagate unchanged.
             # The facade validates (memoized) and raises on unsupported cases,
             # so no separate pre-check runs on this hot path.
-            from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E501
-                is_stablefold_supported,
-                stablefold_triangle_attention,
+            from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (  # noqa: E501
+                is_turbopairformer_supported,
+                turbopairformer_triangle_attention,
             )
 
-            # Deterministic StableFold backend: raw q, internal scaling,
+            # Deterministic TurboPairFormer backend: raw q, internal scaling,
             # replay-bitwise vs itself, zero FP atomics. Triangle-site shapes
             # always validate; blanket-coverage sites with residual shape
             # mismatches fall back to stock math (correct, logged once).
@@ -543,23 +543,23 @@ class Attention(nn.Module):
             else:
                 q_s, k_s, v_s = q, k, v
                 bias_s = biases
-            supported, reason = is_stablefold_supported(
+            supported, reason = is_turbopairformer_supported(
                 q_s, k_s, v_s, bias_s[0], bias_s[1]
             )
             if supported:
-                o = stablefold_triangle_attention(
+                o = turbopairformer_triangle_attention(
                     q_s, k_s, v_s, bias_s[0], bias_s[1]
                 )
                 if orig_dtype != torch.bfloat16:
                     o = o.to(orig_dtype)
             else:
-                _raise_if_strict_stablefold_fallback(reason, tuple(q.shape))
-                global _STABLEFOLD_FALLBACK_LOGGED
+                _raise_if_strict_turbopairformer_fallback(reason, tuple(q.shape))
+                global _TURBOPAIRFORMER_FALLBACK_LOGGED
                 key = (reason, tuple(q.shape))
-                if key not in _STABLEFOLD_FALLBACK_LOGGED:
-                    _STABLEFOLD_FALLBACK_LOGGED.add(key)
+                if key not in _TURBOPAIRFORMER_FALLBACK_LOGGED:
+                    _TURBOPAIRFORMER_FALLBACK_LOGGED.add(key)
                     logging.getLogger(__name__).warning(
-                        "stablefold fallback to stock at shape %s: %s",
+                        "turbopairformer fallback to stock at shape %s: %s",
                         tuple(q.shape), reason,
                     )
                 o = _attention(

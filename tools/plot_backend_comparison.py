@@ -39,13 +39,11 @@ BACKEND_ORDER = (
     "triton",
     "cueq",
     "turbopairformer",
-    "stablefold",
     "deepspeed-evo",
 )
-# Keep receipt keys intact; only presentation uses the current project name.
+# Keep machine-readable backend keys distinct from their display labels.
 BACKEND_LABELS = {
     "turbopairformer": "TurboPairFormer",
-    "stablefold": "TurboPairFormer (stablefold)",
 }
 MATCHED_PROTOCOL_FIELDS = (
     "seed",
