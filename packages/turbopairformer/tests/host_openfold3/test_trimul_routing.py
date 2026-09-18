@@ -73,7 +73,7 @@ def test_short_sequence_rejection_falls_back_to_stock_output_and_gradients(
             return_value=rejection,
         ) as support_check,
         patch(
-            "turbopairformer.trimul._run_supported_trimul",
+            "turbopairformer._trimul._run_supported_trimul",
             side_effect=AssertionError("short N must not enter the AOT runner"),
         ) as runner,
         patch.object(tmu, "TRITON_AVAILABLE", False),
@@ -116,7 +116,7 @@ def test_supported_metadata_calls_prechecked_runner_once():
             return_value=_accepted(),
         ) as support_check,
         patch(
-            "turbopairformer.trimul._run_supported_trimul",
+            "turbopairformer._trimul._run_supported_trimul",
             return_value=expected,
         ) as runner,
     ):
@@ -143,7 +143,7 @@ def test_supported_runner_failure_propagates_without_fallback():
             return_value=_accepted(),
         ),
         patch(
-            "turbopairformer.trimul._run_supported_trimul",
+            "turbopairformer._trimul._run_supported_trimul",
             side_effect=RuntimeError("synthetic AOT launch failure"),
         ),
         pytest.raises(RuntimeError, match="synthetic AOT launch failure"),
@@ -152,7 +152,7 @@ def test_supported_runner_failure_propagates_without_fallback():
 
 
 def test_public_runner_rejects_before_extension_load():
-    from turbopairformer import trimul as stablefold_trimul
+    from turbopairformer import _trimul as stablefold_trimul
 
     module = TriangleMultiplicationOutgoing(32, 32)
     z = torch.randn((1, 3, 3, 32), dtype=torch.bfloat16)
@@ -315,7 +315,7 @@ def _call_public_fields(
 
 
 def _call_stable_with_route(module, z, mask, grad_out, *, training: bool):
-    from turbopairformer import trimul as facade
+    from turbopairformer import _trimul as facade
 
     original_get_ext = facade._get_ext
     original_runner = facade._run_supported_trimul

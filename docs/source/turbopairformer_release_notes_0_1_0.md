@@ -5,7 +5,14 @@ TurboPairFormer is a Python package providing two CUDA operators for AlphaFold3-
 - **TurboTriangleAttention** — Triangle Attention with autograd support.
 - **TurboTriangleMultiplicative** — Triangle Multiplicative Update with autograd support.
 
-These are the agreed public operator names. Their Python exports are pending; the attached candidate currently exports `triangle_attention` and `run_trimul`.
+The package name is `turbopairformer`. Its public entry points are:
+
+```python
+from turbopairformer import turbo_attention, turbo_trimul
+
+attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
+trimul_output = turbo_trimul(module, z, pair_mask)
+```
 
 The standalone package can be used without installing OpenFold3. It includes precompiled Hopper kernels, so users do not need a CUDA compiler or a runtime JIT build.
 
@@ -20,7 +27,7 @@ The confirmed developer credits will appear here and in the package README and a
 **pip** — in a fresh Python 3.14 virtual environment, after PyPI publication:
 
 ```bash
-pip install TurboPairFormer
+pip install turbopairformer
 ```
 
 **Pixi / OpenFold3** — from a separate repository checkout:
@@ -51,4 +58,4 @@ TurboPairFormer is distributed under Apache-2.0. It integrates with the AQLab Op
 
 ## Draft status
 
-This release has not been published to PyPI. The two operator names above are the agreed public names; the currently attached candidate still exports `triangle_attention` and `run_trimul`. Before publication, finalize developer credits, synchronize the public function exports and package metadata, rebuild and validate the resulting wheel, and replace the draft's assets and evidence together. PyPI Trusted Publisher authorization is also pending.
+This release has not been published to PyPI. Developer credits and author metadata still need confirmation. PyPI Trusted Publisher authorization is also pending.

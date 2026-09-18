@@ -108,7 +108,7 @@ def test_public_import_registers_torch_ops_without_loading_cuda_extensions():
             """
 import sys
 import turbopairformer
-assert "turbopairformer.trimul" not in sys.modules
+assert "turbopairformer._trimul" not in sys.modules
 from turbopairformer import run_trimul
 import torch
 assert callable(run_trimul)

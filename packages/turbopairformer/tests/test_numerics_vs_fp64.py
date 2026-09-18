@@ -60,11 +60,11 @@ def _stock(q, k, v, mask, bias, dout):
 
 
 def _stablefold(q, k, v, mask, bias, dout):
-    from turbopairformer import triangle_attention
+    from turbopairformer import turbo_attention
 
     q_, k_, v_ = (t.detach().clone().requires_grad_(True) for t in (q, k, v))
     b_ = bias.detach().clone().requires_grad_(True)
-    out = triangle_attention(q_, k_, v_, mask, b_)
+    out = turbo_attention(q_, k_, v_, mask, b_)
     out.backward(dout)
     return out.detach(), q_.grad, k_.grad, v_.grad, b_.grad
 

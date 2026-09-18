@@ -126,7 +126,7 @@ def _module(kind: str) -> Any:
             "openfold3.core.kernels.cuda.stablefold_trimul_support",
         ),
         "trimul_runner": (
-            "turbopairformer.trimul",
+            "turbopairformer._trimul",
             "openfold3.core.kernels.cuda.stablefold_trimul",
         ),
     }[kind]

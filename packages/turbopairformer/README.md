@@ -3,7 +3,16 @@
 Standalone CUDA Triangle Attention and Triangle Multiplicative Update (TriMul)
 kernels for AlphaFold3-style pair stacks. Importing and using this package does
 not require OpenFold3. The distribution and Python import are both
-`turbopairformer`. This branch migrates the previously named StableFold package;
+`turbopairformer`, with two direct operator calls:
+
+```python
+from turbopairformer import turbo_attention, turbo_trimul
+
+attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
+trimul_output = turbo_trimul(module, z, pair_mask)
+```
+
+This branch migrates the previously named StableFold package;
 existing StableFold wheels and validation receipts retain their original identities.
 
 ## Supported build
@@ -29,12 +38,13 @@ bits across different GPU models.
 
 ## Install
 
-Use a fresh Python 3.14 environment on Linux x86-64 (glibc 2.28 or newer):
+PyPI publication is pending. After publication, use a fresh Python 3.14
+environment on Linux x86-64 (glibc 2.28 or newer):
 
 ```bash
 python3.14 -m venv .venv-turbopairformer
 source .venv-turbopairformer/bin/activate
-python -m pip install TurboPairFormer
+python -m pip install turbopairformer
 ```
 
 The Python import is `turbopairformer`; PyPI package names are case-insensitive.
@@ -65,7 +75,7 @@ os.environ["TURBOPAIRFORMER_SR_BACKWARD"] = "1"
 os.environ["TURBOPAIRFORMER_SR_SHADOW"] = "1"
 
 import torch
-import turbopairformer
+from turbopairformer import turbo_attention
 
 # q/k/v: [batch, outer, heads, sequence, head_dim], raw unscaled BF16.
 shape = (1, 8, 4, 128, 32)
@@ -74,23 +84,22 @@ q, k, v = [torch.randn(shape, device="cuda", dtype=torch.bfloat16,
 mask = torch.zeros((1, 8, 1, 1, 128), device="cuda", dtype=torch.bfloat16)
 bias = torch.zeros((1, 1, 4, 128, 128), device="cuda", dtype=torch.bfloat16,
                    requires_grad=True)
-supported, reason = turbopairformer.is_triangle_attention_supported(q, k, v, mask, bias)
-assert supported, reason
-out = turbopairformer.triangle_attention(q, k, v, mask, bias)
+out = turbo_attention(q, k, v, mask, bias)
 # Output: [batch, outer, sequence, heads, head_dim].
 out.float().square().mean().backward()
 ```
 
 The mask is additive: zero keeps a key and negative infinity masks it. The facade
 checks supported shapes, dtypes and layouts; unsupported inputs raise. A host
-model can call the support check first and choose its own fallback.
+model can call `turbopairformer.is_triangle_attention_supported` first and choose
+its own fallback.
 
 ## Triangle Multiplicative Update
 
 ```python
-support = turbopairformer.check_trimul_support(module, z, mask)
-assert support, support.reason
-out = turbopairformer.run_trimul(module, z, mask)
+from turbopairformer import turbo_trimul
+
+out = turbo_trimul(module, z, mask)
 out.float().square().mean().backward()
 ```
 

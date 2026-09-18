@@ -20,6 +20,7 @@ os.environ["TURBOPAIRFORMER_SR_SHADOW"] = "1"
 import torch  # noqa: E402
 
 import turbopairformer  # noqa: E402
+from turbopairformer import turbo_attention, turbo_trimul  # noqa: E402
 
 
 def bits_equal(left, right):
@@ -33,7 +34,7 @@ def bits_equal(left, right):
 
 
 class TriangleWeights(torch.nn.Module):
-    """The documented weight protocol accepted by run_trimul; no host import."""
+    """The documented weight protocol accepted by turbo_trimul; no host import."""
 
     def __init__(self, channels, outgoing):
         super().__init__()
@@ -67,7 +68,7 @@ def attention_run():
         q, k, v, mask, bias
     )
     assert supported, reason
-    out = turbopairformer.triangle_attention(q, k, v, mask, bias)
+    out = turbo_attention(q, k, v, mask, bias)
     gradients = torch.autograd.grad(out.float().square().mean(), (q, k, v, bias))
     return (out.detach(), *(gradient.detach() for gradient in gradients))
 
@@ -81,7 +82,7 @@ def trimul_run(outgoing):
     mask = torch.ones((1, 128, 128), device="cuda", dtype=torch.bfloat16)
     support = turbopairformer.check_trimul_support(module, z, mask)
     assert support, support.reason
-    out = turbopairformer.run_trimul(module, z, mask)
+    out = turbo_trimul(module, z, mask)
     gradients = torch.autograd.grad(
         out.float().square().mean(), (z, *module.parameters())
     )

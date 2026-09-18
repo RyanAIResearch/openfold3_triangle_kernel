@@ -432,7 +432,7 @@ def test_package_export_does_not_import_or_build_cuda_extension():
 import sys
 from turbopairformer import check_trimul_support
 assert callable(check_trimul_support)
-assert 'turbopairformer.trimul' not in sys.modules
+assert 'turbopairformer._trimul' not in sys.modules
 """
 
     subprocess.run(

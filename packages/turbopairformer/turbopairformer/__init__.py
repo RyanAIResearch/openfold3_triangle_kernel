@@ -4,14 +4,17 @@
 
 Public entry points::
 
-    from turbopairformer import triangle_attention, is_triangle_attention_supported
-    from turbopairformer import run_trimul, check_trimul_support
+    from turbopairformer import turbo_attention, turbo_trimul
+
+``TurboTriangleAttention`` and ``TurboTriangleMultiplicative`` are descriptive
+aliases of these functions. ``triangle_attention`` and ``run_trimul`` remain
+available for existing integrations.
 
 Importing the package is deliberately light: only the pure-Python policy and
-TriMul support-check modules load eagerly. The kernel facades, and with them
-``torch.library`` op registration and the CUDA extensions, load on first
-attribute access, so a host model can import ``turbopairformer`` for a support
-check without touching a GPU.
+TriMul support-check modules load eagerly. The kernel facades, including
+``torch.library`` op registration, load on first attribute access. CUDA
+extensions load only when a supported GPU call needs them; importing these
+functions or checking support does not touch a GPU.
 
 The facades validate the tensor contract and fail closed on unsupported
 inputs; model-level routing with a stock fallback belongs to the host model.
@@ -40,9 +43,16 @@ from turbopairformer.trimul_support import (
 # facades out of import time is what lets a CPU-only host import ``turbopairformer``
 # for a support check without loading the CUDA extensions.
 _LAZY_ATTRIBUTES: dict[str, tuple[str, str]] = {
+    "turbo_attention": ("turbopairformer._triangle_attention", "turbo_attention"),
+    "turbo_trimul": ("turbopairformer._trimul", "turbo_trimul"),
+    "TurboTriangleAttention": (
+        "turbopairformer._triangle_attention",
+        "turbo_attention",
+    ),
+    "TurboTriangleMultiplicative": ("turbopairformer._trimul", "turbo_trimul"),
     "triangle_attention": (
         "turbopairformer._triangle_attention",
-        "triangle_attention",
+        "turbo_attention",
     ),
     "is_triangle_attention_supported": (
         "turbopairformer._triangle_attention",
@@ -52,7 +62,7 @@ _LAZY_ATTRIBUTES: dict[str, tuple[str, str]] = {
         "turbopairformer._triangle_attention",
         "invocation_count",
     ),
-    "run_trimul": ("turbopairformer.trimul", "run_trimul"),
+    "run_trimul": ("turbopairformer._trimul", "turbo_trimul"),
 }
 
 
@@ -78,6 +88,10 @@ except PackageNotFoundError:  # source checkout without an installed dist
     __version__ = "0.0.0+source"
 
 __all__ = [
+    "TurboTriangleAttention",
+    "TurboTriangleMultiplicative",
+    "turbo_attention",
+    "turbo_trimul",
     "TRIMUL_STOCK_FALLBACK_THRESHOLD",
     "DistributedContractError",
     "SupportResult",

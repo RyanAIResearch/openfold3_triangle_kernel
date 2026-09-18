@@ -105,7 +105,7 @@ PACKAGED_PYTHON = (
     "triangle_dkdv.py",
     "triangle_dq_dbias.py",
     "_triangle_attention.py",
-    "trimul.py",
+    "_trimul.py",
     "trimul_cuda.py",
     "trimul_support.py",
     "_aot_runtime.py",

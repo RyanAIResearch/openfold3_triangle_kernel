@@ -5,7 +5,7 @@
 PyPI publication is pending. The tested 0.1.0 candidate wheel is bundled in
 this repository, which currently requires repository access. From a checkout,
 install it into a dedicated environment with the command below. After the
-PyPI upload, `pip install TurboPairFormer` will be available directly.
+PyPI upload, `pip install turbopairformer` will be available directly.
 
 The standalone package provides Triangle Attention and Triangle Multiplicative
 Update without requiring an OpenFold3 installation:
@@ -17,9 +17,10 @@ python -m pip install release_artifacts/turbopairformer/0.1.0/turbopairformer-0.
 ```
 
 ```python
-from turbopairformer import triangle_attention, run_trimul
+from turbopairformer import turbo_attention, turbo_trimul
 
-output = triangle_attention(q, k, v, mask, pair_bias)
+attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
+trimul_output = turbo_trimul(module, z, pair_mask)
 ```
 
 For the complete OpenFold3 environment, create a separate checkout:
@@ -303,18 +304,19 @@ Experimental protocols and receipts are documented under
 
 ## Direct operator entry point
 
-Users integrating below the OpenFold3 model router can call:
+The standalone `turbopairformer` package exposes both operators directly:
 
 ```python
-from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
-    stablefold_triangle_attention,
-)
+from turbopairformer import turbo_attention, turbo_trimul
 
-output = stablefold_triangle_attention(q, k, v, mask, pair_bias)
+attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
+trimul_output = turbo_trimul(module, z, pair_mask)
 ```
 
-Use the public facade rather than importing private extension symbols. The facade
-validates the tensor/device contract and supplies PyTorch autograd integration.
+Both calls validate supported inputs and provide PyTorch autograd integration.
+`module` supplies the TriMul weights from your model. See the
+[operator examples](packages/turbopairformer/README.md) for input shapes and the
+weight interface. Direct calls require only the standalone package.
 
 ## License and attribution
 

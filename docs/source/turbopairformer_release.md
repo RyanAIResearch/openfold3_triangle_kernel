@@ -8,7 +8,7 @@ release assets and skips PyPI; a stable release uploads the validated wheel.
 The first binary targets Linux x86_64, CPython 3.14, PyTorch 2.10.0/CUDA 12.8 and
 Hopper `sm_90a`. GPU evidence records the device actually tested. H100 validation
 does not establish H200 execution results. The public command after publication
-is `pip install TurboPairFormer`; Python imports use `turbopairformer`.
+is `pip install turbopairformer`; Python imports use `turbopairformer`.
 
 ## Build and validate the final wheel
 
@@ -122,7 +122,7 @@ Linux/Hopper host:
 ```bash
 python3.14 -m venv /absolute/path/to/new-pypi-validation-venv
 /absolute/path/to/new-pypi-validation-venv/bin/python -m pip install \
-  --only-binary=:all: TurboPairFormer==0.1.0
+  --only-binary=:all: turbopairformer==0.1.0
 /absolute/path/to/new-pypi-validation-venv/bin/python -m pip check
 ```
 

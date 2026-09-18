@@ -750,7 +750,7 @@ index 59636b2..c99d95f 100644
 +
 +    support = check_trimul_support(module, z, mask)
 +    if support:
-+        from turbopairformer.trimul import (
++        from turbopairformer._trimul import (
 +            _run_supported_trimul,
 +        )
 +

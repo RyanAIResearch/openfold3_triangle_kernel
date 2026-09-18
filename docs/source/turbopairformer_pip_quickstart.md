@@ -1,15 +1,23 @@
 # TurboPairFormer pip package quickstart
 
-The standalone package lives in `packages/turbopairformer`. Its public API is
-`turbopairformer.triangle_attention`, `turbopairformer.is_triangle_attention_supported`,
-`turbopairformer.run_trimul`, and `turbopairformer.check_trimul_support`. It does not
-require an OpenFold3 installation for direct operator calls.
+The standalone package is `turbopairformer`. Its two operators can be called
+without an OpenFold3 installation:
+
+```python
+from turbopairformer import turbo_attention, turbo_trimul
+
+attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
+trimul_output = turbo_trimul(module, z, pair_mask)
+```
+
+See the [operator examples](../../packages/turbopairformer/README.md) for tensor
+shapes and the TriMul weight interface.
 
 ## Install the standalone package
 
 PyPI publication is pending. The tested candidate is bundled in this private
 repository; from a checkout with repository access, install it into a dedicated
-environment below. After publication, use `python -m pip install TurboPairFormer`.
+environment below. After publication, use `python -m pip install turbopairformer`.
 
 On Linux x86-64 with glibc 2.28+, CPython 3.14, and a Hopper GPU (H100/H200):
 

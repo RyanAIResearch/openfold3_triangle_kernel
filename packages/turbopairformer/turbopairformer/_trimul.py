@@ -906,8 +906,14 @@ def _run_supported_trimul(module, z, mask):
     return output.view(orig_shape).to(z.dtype)
 
 
-def run_trimul(module, z, mask):
-    """Strict differentiable entry point bound to an official module."""
+def turbo_trimul(module, z, mask=None):
+    """Run TriMul using the supplied module's weights and direction.
+
+    ``module`` follows the OpenFold3 triangle-multiplication weight contract;
+    importing OpenFold3 is not required. ``z`` has shape ``[..., N, N, C]``;
+    ``mask=None`` means every pair is valid. Unsupported inputs raise
+    ``ValueError`` before any CUDA extension is loaded.
+    """
     from turbopairformer.trimul_support import (
         check_trimul_support,
     )
@@ -920,6 +926,10 @@ def run_trimul(module, z, mask):
     return _run_supported_trimul(module, z, mask)
 
 
+# Compatibility with integrations using the original descriptive name.
+run_trimul = turbo_trimul
+
+
 class TurboPairFormerTrimul:
     """Callable mirroring the official module's numerics with fused passes."""
 
@@ -927,4 +937,4 @@ class TurboPairFormerTrimul:
         self.module = module
 
     def __call__(self, z, mask):
-        return run_trimul(self.module, z, mask)
+        return turbo_trimul(self.module, z, mask)

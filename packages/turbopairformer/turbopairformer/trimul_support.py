@@ -2,7 +2,7 @@
 
 """Metadata-only support contract for the TurboPairFormer TriMul fast path.
 
-This module deliberately does not import :mod:`turbopairformer.trimul`, load an
+This module deliberately does not import :mod:`turbopairformer._trimul`, load an
 extension, or launch a kernel.  It separates the Hopper sm90a
 fast-path domain from future selector/fallback policy.
 """

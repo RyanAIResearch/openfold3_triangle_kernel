@@ -293,7 +293,7 @@ class TriMulProviderEquivalenceTest(unittest.TestCase):
                 self._assert_direction_equivalent(outgoing)
 
     def _assert_direction_equivalent(self, outgoing):
-        from turbopairformer.trimul import _run_supported_trimul
+        from turbopairformer._trimul import _run_supported_trimul
         from turbopairformer.trimul_support import check_trimul_support
 
         from openfold3.core.kernels.cuda.stablefold_trimul import (
@@ -496,7 +496,7 @@ class ProviderResolutionTest(unittest.TestCase):
                 [
                     mock.call("turbopairformer"),
                     mock.call("turbopairformer.trimul_support"),
-                    mock.call("turbopairformer.trimul"),
+                    mock.call("turbopairformer._trimul"),
                     mock.call("turbopairformer"),
                 ],
             )

@@ -21,7 +21,7 @@ from openfold3.core.model.layers.triangular_multiplicative_update import (
 )
 from torch._subclasses.fake_tensor import FakeTensorMode
 
-from turbopairformer import trimul as stable
+from turbopairformer import _trimul as stable
 
 _FORWARD_SCHEMA = (
     "turbopairformer::_trimul_fwd_v1(Tensor z_bf, Tensor mask_f, "
@@ -224,7 +224,7 @@ def test_clean_import_registers_ops_without_importing_aot_loader():
 import sys
 import torch
 from unittest.mock import patch
-from turbopairformer import trimul as stable
+from turbopairformer import _trimul as stable
 assert stable._ext is None
 assert 'turbopairformer.trimul_cuda' not in sys.modules
 z = torch.empty((1, 5, 5, 32), device='meta', dtype=torch.bfloat16)

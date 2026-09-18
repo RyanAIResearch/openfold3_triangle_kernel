@@ -383,7 +383,7 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
         return d_q, d_k, d_v, None, None, d_bias, None, None
 
 
-def triangle_attention(
+def turbo_attention(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -517,7 +517,12 @@ def triangle_attention(
     return output.reshape(prefix + output.shape[1:])
 
 
+# Compatibility with integrations using the original descriptive name.
+triangle_attention = turbo_attention
+
+
 __all__ = [
+    "turbo_attention",
     "invocation_count",
     "is_triangle_attention_supported",
     "triangle_attention",

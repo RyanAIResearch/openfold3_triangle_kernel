@@ -253,6 +253,72 @@ def test_explicit_source_only_wheel_excludes_editable_receipts_and_binaries(
         _wheel_validator().validate_wheel(wheel)
 
 
+def test_fresh_source_only_install_exports_short_callable_api(source_copy, tmp_path):
+    """Check wheel contents/imports without claiming a source wheel can run CUDA."""
+    result = _setup(source_copy, "bdist_wheel", source_only=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    (wheel,) = (source_copy / "dist").glob("*.whl")
+    target = tmp_path / "installed"
+    installed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-compile",
+            "--target",
+            str(target),
+            str(wheel),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(target)
+    script = """
+import json
+import sys
+from pathlib import Path
+import torch
+import turbopairformer
+from turbopairformer import turbo_attention, turbo_trimul
+from turbopairformer import TurboTriangleAttention, TurboTriangleMultiplicative
+package = Path(turbopairformer.__file__).resolve().parent
+assert package == Path(sys.argv[1]).resolve() / 'turbopairformer'
+assert (package / '_trimul.py').is_file()
+assert not (package / 'trimul.py').exists()
+assert json.loads((package / '_build_manifest.json').read_text())['built'] is False
+assert callable(turbo_attention) and callable(turbo_trimul)
+assert turbo_attention is TurboTriangleAttention
+assert turbo_trimul is TurboTriangleMultiplicative
+q = torch.zeros((1, 1, 1, 8, 32), dtype=torch.bfloat16)
+mask = torch.zeros((1, 1, 1, 1, 8), dtype=torch.float32)
+bias = torch.zeros((1, 1, 1, 8, 8), dtype=torch.bfloat16)
+for function, args in (
+    (turbo_attention, (q, q, q, mask, bias)),
+    (turbo_trimul, (object(), torch.zeros((1, 8, 8, 32)))),
+):
+    try:
+        function(*args)
+    except ValueError as error:
+        assert 'unsupported' in str(error)
+    else:
+        raise AssertionError('CPU input was accepted')
+assert not any(name.startswith('turbopairformer._ext.') for name in sys.modules)
+assert 'openfold3' not in sys.modules
+"""
+    checked = subprocess.run(
+        [sys.executable, "-c", script, str(target)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
 def test_facade_metadata_contract_is_release_bounded():
     text = (PACKAGE / "_triangle_attention.py").read_text()
     assert "_PAD_HEAD_LANES = (16, 32, 64)" in text
@@ -306,7 +372,7 @@ def test_binary_hash_is_checked_before_extension_import():
 
 
 def test_trimul_custom_ops_use_the_package_namespace():
-    text = (PACKAGE / "trimul.py").read_text()
+    text = (PACKAGE / "_trimul.py").read_text()
     assert '"turbopairformer::_trimul_fwd_v1"' in text
     assert '"turbopairformer::_trimul_bwd_v1"' in text
     assert "openfold3_stablefold" not in text
