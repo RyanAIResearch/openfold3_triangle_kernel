@@ -196,16 +196,16 @@ openfold3-msa = { no-default-feature = true, features = [
 [feature.openfold3-editable.pypi-dependencies]
 openfold3 = { path = ".", editable = true }
 
-# Trionce is installed by a task, not a pypi path dependency: its AOT build
-# needs TRIONCE_BUILD_AOT=1, TORCH_CUDA_ARCH_LIST=9.0a and --no-build-isolation
+# StableFold is installed by a task, not a pypi path dependency: its AOT build
+# needs STABLEFOLD_BUILD_AOT=1, TORCH_CUDA_ARCH_LIST=9.0a and --no-build-isolation
 # (the extension links the exact runtime Torch ABI), none of which a declarative
-# dependency can express.  Declaring it would yield a source-only install whose
-# loader refuses to run -- worse than absent, because it looks installed.
+# dependency can express. Use STABLEFOLD_PYTHON for the standalone PyPI Torch
+# environment; the existing Conda production runtime retains its own ABI.
 [feature.openfold3-editable.tasks]
-install-trionce.cmd = ["bash", "scripts/trionce/install_trionce.sh"]
-install-trionce.description = "AOT-build and editable-install the trionce sm_90a kernels"
-doctor-trionce.cmd = ["bash", "scripts/trionce/doctor_trionce.sh"]
-doctor-trionce.description = "Preflight the trionce install: GPU, package, AOT binaries, provider"
+install-stablefold.cmd = ["bash", "scripts/stablefold/install_stablefold.sh"]
+install-stablefold.description = "Build and install a standalone StableFold wheel (requires STABLEFOLD_PYTHON with PyPI Torch)"
+doctor-stablefold.cmd = ["bash", "scripts/stablefold/doctor_stablefold.sh"]
+doctor-stablefold.description = "Preflight the stablefold install: GPU, package, AOT binaries, provider"
 
 [feature.openfold3-editable-full.pypi-dependencies]
 openfold3 = { path = ".", editable = true, extras = ["deepspeed", "dev"] }

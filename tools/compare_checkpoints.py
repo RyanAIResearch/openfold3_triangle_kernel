@@ -3,7 +3,7 @@
 
 """Compare two OpenFold3 checkpoints tensor by tensor.
 
-Moving the stable triangle routes onto the ``trionce`` pip package is meant to
+Moving the stable triangle routes onto the ``stablefold`` pip package is meant to
 change packaging only.  Running the same runner YAML with the same seed under
 each provider and diffing the resulting checkpoints is the end-to-end form of
 that claim: every parameter after the optimizer step must match exactly, not
@@ -48,10 +48,30 @@ def _resolve(path: Path) -> Path:
 def _state_dict(checkpoint: dict[str, Any]) -> dict[str, torch.Tensor]:
     state = checkpoint.get("state_dict", checkpoint)
     return {
-        name: value
-        for name, value in state.items()
-        if isinstance(value, torch.Tensor)
+        name: value for name, value in state.items() if isinstance(value, torch.Tensor)
     }
+
+
+def _tensor_bytes(tensor: torch.Tensor) -> torch.Tensor:
+    """Compare logical tensor contents, including signed zero and NaN payloads."""
+    if tensor.layout != torch.strided or tensor.is_quantized:
+        raise ValueError("bitwise comparison requires dense, non-quantized tensors")
+    return (
+        tensor.detach()
+        .resolve_conj()
+        .resolve_neg()
+        .contiguous()
+        .reshape(-1)
+        .view(torch.uint8)
+    )
+
+
+def _bitwise_equal(left: torch.Tensor, right: torch.Tensor) -> bool:
+    return (
+        left.shape == right.shape
+        and left.dtype == right.dtype
+        and torch.equal(_tensor_bytes(left), _tensor_bytes(right))
+    )
 
 
 def _describe(name: str, left: torch.Tensor, right: torch.Tensor) -> str:
@@ -59,10 +79,13 @@ def _describe(name: str, left: torch.Tensor, right: torch.Tensor) -> str:
         return f"  {name}: shape {tuple(left.shape)} vs {tuple(right.shape)}"
     if left.dtype != right.dtype:
         return f"  {name}: dtype {left.dtype} vs {right.dtype}"
-    delta = (left.double() - right.double()).abs()
+    different_bytes = int((_tensor_bytes(left) != _tensor_bytes(right)).sum())
+    numeric_dtype = torch.complex128 if left.is_complex() else torch.float64
+    delta = (left.to(numeric_dtype) - right.to(numeric_dtype)).abs()
+    max_delta = delta.max().item() if delta.numel() else 0.0
     return (
-        f"  {name}: max |delta| = {delta.max().item():.3e}, "
-        f"differing elements = {int((left != right).sum())}/{left.numel()}"
+        f"  {name}: max |delta| = {max_delta:.3e}, "
+        f"differing bytes = {different_bytes}/{left.numel() * left.element_size()}"
     )
 
 
@@ -80,23 +103,23 @@ def main() -> int:
     left = _state_dict(torch.load(left_path, map_location="cpu", weights_only=False))
     right = _state_dict(torch.load(right_path, map_location="cpu", weights_only=False))
 
+    if not left and not right:
+        print("FAIL: neither checkpoint contains any state tensors")
+        return 1
+
     only_left = sorted(set(left) - set(right))
     only_right = sorted(set(right) - set(left))
     if only_left or only_right:
-        print(f"FAIL: parameter sets differ ({len(only_left)} only on the left, "
-              f"{len(only_right)} only on the right)")
+        print(
+            f"FAIL: parameter sets differ ({len(only_left)} only on the left, "
+            f"{len(only_right)} only on the right)"
+        )
         for name in (only_left + only_right)[:MAX_REPORTED]:
             print(f"  {name}")
         return 1
 
     differing = [
-        name
-        for name in sorted(left)
-        if not (
-            left[name].shape == right[name].shape
-            and left[name].dtype == right[name].dtype
-            and torch.equal(left[name], right[name])
-        )
+        name for name in sorted(left) if not _bitwise_equal(left[name], right[name])
     ]
 
     total = len(left)

@@ -1,7 +1,0 @@
-build/
-dist/
-*.egg-info/
-__pycache__/
-*.pyc
-trionce/_ext/*.so
-.pytest_cache/

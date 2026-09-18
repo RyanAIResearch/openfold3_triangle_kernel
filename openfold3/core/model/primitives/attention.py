@@ -519,7 +519,7 @@ class Attention(nn.Module):
             # build, support, launch, and backward failures propagate unchanged.
             # The facade validates (memoized) and raises on unsupported cases,
             # so no separate pre-check runs on this hot path.
-            # The serving implementation is the `trionce` pip package when it is
+            # The serving implementation is the `stablefold` pip package when it is
             # installed and the in-tree kernel copy otherwise; both build the
             # same .cu sources.  See core/kernels/cuda/provider.py.
             from openfold3.core.kernels.cuda.provider import (

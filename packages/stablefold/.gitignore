@@ -1,0 +1,9 @@
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+stablefold/_ext/*.so
+.pytest_cache/
+stablefold/_build_manifest.local.json
+release_artifacts/

@@ -42,17 +42,6 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_deepspeed_evo_attention": False,
         "use_lma": False,
     },
-    # Same model flags as `stablefold`; the two differ only in which build of
-    # the identical kernels serves them, which the launcher selects through
-    # OPENFOLD3_TRIANGLE_PROVIDER (see core/kernels/cuda/provider.py).
-    "trionce": {
-        "use_triton_triangle_kernels": False,
-        "use_cueq_triangle_kernels": False,
-        "use_stable_triangle_attention": True,
-        "use_stable_triangle_multiplicative": True,
-        "use_deepspeed_evo_attention": False,
-        "use_lma": False,
-    },
     "deepspeed-evo": {
         "use_triton_triangle_kernels": False,
         "use_cueq_triangle_kernels": False,
@@ -67,7 +56,6 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
 # launcher must export so the run cannot silently pick the other build.
 BACKEND_KERNEL_PROVIDER: dict[str, str] = {
     "stablefold": "intree",
-    "trionce": "trionce",
 }
 
 
@@ -133,6 +121,12 @@ def main() -> None:
     parser.add_argument("runner_yaml", type=Path)
     parser.add_argument("--backend", required=True, choices=tuple(BACKEND_FLAGS))
     parser.add_argument(
+        "--provider",
+        choices=("intree", "stablefold"),
+        help="kernel provider for --backend stablefold (default: intree); "
+        "prints the required export because provider selection is outside YAML",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="write a new YAML instead of replacing runner_yaml",
@@ -143,6 +137,8 @@ def main() -> None:
         help="also configure one validation-free BF16 training step on one GPU",
     )
     args = parser.parse_args()
+    if args.provider is not None and args.backend != "stablefold":
+        parser.error("--provider requires --backend stablefold")
 
     with args.runner_yaml.open() as source:
         config = yaml.safe_load(source)
@@ -159,7 +155,7 @@ def main() -> None:
     with destination.open("w") as target:
         yaml.safe_dump(config, target, sort_keys=False, default_flow_style=False)
     print(f"Wrote {destination} with training backend {args.backend}")
-    provider = BACKEND_KERNEL_PROVIDER.get(args.backend)
+    provider = args.provider or BACKEND_KERNEL_PROVIDER.get(args.backend)
     if provider is not None:
         print(
             f"Export OPENFOLD3_TRIANGLE_PROVIDER={provider} before launching; "

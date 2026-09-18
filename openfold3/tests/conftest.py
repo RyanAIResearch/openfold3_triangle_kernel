@@ -17,6 +17,20 @@ from torch.random import fork_rng
 from openfold3.core.data.primitives.structure.component import BiotiteCCDWrapper
 from openfold3.setup_openfold import setup_biotite_ccd
 
+
+@pytest.fixture(autouse=True)
+def _isolate_intree_triangle_provider(monkeypatch):
+    """Host tests patch the in-tree kernels, independently of installed packages."""
+    from openfold3.core.kernels.cuda import provider
+
+    monkeypatch.setenv(provider.PROVIDER_ENV, provider.INTREE)
+    provider._reset_for_tests()
+    try:
+        yield
+    finally:
+        provider._reset_for_tests()
+
+
 # ---------------------------------------------------------------------------
 # Device fixture: parametrize tests to run on both CPU and CUDA
 # ---------------------------------------------------------------------------

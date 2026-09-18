@@ -55,7 +55,7 @@ _STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
 
 def _route_stable_trimul(module, z, mask):
     """Return ``(selected, output)`` without swallowing fast-path failures."""
-    # The serving implementation is the `trionce` pip package when it is
+    # The serving implementation is the `stablefold` pip package when it is
     # installed and the in-tree kernel copy otherwise; both build the same .cu
     # sources.  See core/kernels/cuda/provider.py.
     from openfold3.core.kernels.cuda.provider import (
