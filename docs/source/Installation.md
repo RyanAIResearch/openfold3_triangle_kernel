@@ -28,10 +28,11 @@ curl -fsSL https://pixi.sh/install.sh | sh
 # Optionally, you can also install shell completions for pixi.
 ```
 
-Next, clone the OpenFold3 repository:
+Next, clone this fork's `main` branch for the TurboPairFormer environment:
 
 ```shell
-git clone git@github.com:aqlaboratory/openfold-3.git
+git clone --branch main --single-branch \
+  https://github.com/RyanAIResearch/openfold3_triangle_kernel.git openfold-3
 cd openfold-3
 ```
 
@@ -49,17 +50,25 @@ Available pixi environments:
 | Environment        | Supported platforms                                | Description                                                          |
 | ------------------ | -------------------------------------------------- | -------------------------------------------------------------------- |
 | `openfold3-base`   | `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64` | Environment without CUDA or ROCm. CPU-only on Linux; on Apple Silicon the same pytorch build also provides MPS acceleration. |
-| `openfold3-cuda12` | `linux-64`                                         | Pinned, non-editable H100 CUDA 12 environment for the StableFold production workflow. |
+| `openfold3-cuda12` | `linux-64`                                         | Pinned, non-editable H100 CUDA 12 environment for the TurboPairFormer production workflow. |
 | `openfold3-cuda12-dev` | `linux-64`, `linux-aarch64`                    | Editable general NVIDIA CUDA 12 development and test environment.    |
 | `openfold3-cuda13` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 13.                                |
 | `openfold3-rocm7`  | `linux-64`                                         | AMD GPU environment using ROCm 7.                                    |
 
-Choose the environment that matches your system. Use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12` for the precompiled StableFold H100 wheel and direct AQLab training-launch passthroughs, `openfold3-cuda12-dev` or `openfold3-cuda13` for general NVIDIA GPU development, and `openfold3-rocm7` for AMD ROCm systems. The complete build-free H100 workflow is documented in the {doc}`Pixi-first bare-metal training quickstart <bare_metal_distributed_quickstart>`.
+Choose the environment that matches your system. Use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12` for the precompiled OpenFold3 wheel with TurboPairFormer H100 kernels and direct AQLab training-launch passthroughs, `openfold3-cuda12-dev` or `openfold3-cuda13` for general NVIDIA GPU development, and `openfold3-rocm7` for AMD ROCm systems. The complete build-free H100 workflow is documented in the {doc}`Pixi-first bare-metal training quickstart <bare_metal_distributed_quickstart>`.
+
+The `main` production environment retains OpenFold3 wheel
+`0.5.1.dev5860+g87ebe22da`, Conda PyTorch 2.10.0, and CUDA 12.9. This artifact
+was qualified on H100 under the previous StableFold name. The standalone
+TurboPairFormer pip package has a separate release and runtime ABI.
 
 For more information, including rationale, tips and tricks, see [Modern Conda Environments with Pixi](./modern-conda-environments-with-pixi.md).
 
 
 ### Installation via pip
+
+The following generic pip instructions describe upstream OpenFold3. Use the
+Pixi production workflow above for this fork's pinned H100 runtime.
 
 0. [Optional] Create a fresh environment with python. Python versions 3.10 - 3.13 are supported
 

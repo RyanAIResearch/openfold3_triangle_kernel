@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host and data preflight for the StableFold H100 Pixi environment.
+"""Host and data preflight for the TurboPairFormer H100 Pixi environment.
 
 This module intentionally does not launch training or modify an OpenFold3 runner
 configuration. Training remains owned by AQLab's ``run_openfold`` entry point and

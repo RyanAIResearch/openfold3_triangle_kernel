@@ -1,5 +1,11 @@
 # StableFold
 
+> **Historical package snapshot.** The project is now named **TurboPairFormer**.
+> This directory retains the earlier `stablefold` package and its original
+> installation/ABI identifiers. Current standalone-package development is on
+> [`feat/turbopairformer-pip-package`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/feat/turbopairformer-pip-package);
+> the renamed package has not yet been published to PyPI.
+
 Deterministic Hopper (`sm_90a`) CUDA kernels for the two O(N³) operators of
 AlphaFold3-style pair stacks: Triangle Attention and the Triangle
 Multiplicative Update (TriMul). StableFold is a standalone package; a host

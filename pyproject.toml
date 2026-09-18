@@ -1,4 +1,4 @@
-# Modified by RyanAIResearch in 2026 to package StableFold Triangle Attention.
+# Modified by RyanAIResearch in 2026 to package TurboPairFormer triangle kernels.
 
 [build-system]
 # CUDAExtension imports the exact runtime Torch ABI.  The canonical sm_90a
@@ -13,7 +13,7 @@ dynamic = ["version"]
 authors = [
     { name = "OpenFold Team", email = "support@openfold.io" }
 ]
-description = "OpenFold's Biological Structure Prediction Model based on DeepMind's AlphaFold 3"
+description = "OpenFold3 with TurboPairFormer Triangle Attention and Triangle Multiplicative Update kernels"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 classifiers = [

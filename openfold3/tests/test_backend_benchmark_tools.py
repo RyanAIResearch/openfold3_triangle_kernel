@@ -22,7 +22,8 @@ from tools.benchmark_training_backend import (
 from tools.plot_backend_comparison import build_report
 
 
-def test_benchmark_config_is_matched_validation_free_training(tmp_path):
+@pytest.mark.parametrize("backend", ("turbopairformer", "stablefold"))
+def test_benchmark_config_is_matched_validation_free_training(tmp_path, backend):
     config = {
         "experiment_settings": {"restart_checkpoint_path": "last"},
         "data_module_args": {"batch_size": 8, "num_workers": 10},
@@ -38,8 +39,8 @@ def test_benchmark_config_is_matched_validation_free_training(tmp_path):
 
     configured = configure_benchmark(
         config,
-        backend="stablefold",
-        output_dir=tmp_path / "stablefold",
+        backend=backend,
+        output_dir=tmp_path / backend,
         warmup_steps=3,
         measure_steps=7,
         seed=42,
@@ -49,7 +50,7 @@ def test_benchmark_config_is_matched_validation_free_training(tmp_path):
 
     assert configured["experiment_settings"] == {
         "restart_checkpoint_path": None,
-        "output_dir": str(tmp_path / "stablefold"),
+        "output_dir": str(tmp_path / backend),
         "seed": 42,
     }
     assert configured["data_module_args"] == {
@@ -237,24 +238,25 @@ def _write_result(root: Path, backend: str, seconds: float, losses: list[float])
             )
 
 
-def test_comparison_writes_tables_and_loss_timing_plots(tmp_path):
+@pytest.mark.parametrize("backend", ("turbopairformer", "stablefold"))
+def test_comparison_writes_tables_and_loss_timing_plots(tmp_path, backend):
     results = tmp_path / "results"
     _write_result(results, "aqlab", 2.0, [10.0, 9.0, 8.0])
     _write_result(results, "triton", 1.5, [10.0, 8.95, 7.95])
     _write_result(results, "cueq", 1.25, [10.0, 8.92, 7.92])
-    _write_result(results, "stablefold", 1.0, [10.0, 8.9, 7.9])
+    _write_result(results, backend, 1.0, [10.0, 8.9, 7.9])
     output = results / "comparison"
 
     report = build_report(results, output, baseline="aqlab")
 
     by_backend = {row["backend"]: row for row in report["backends"]}
     assert by_backend["aqlab"]["speedup_vs_baseline"] == 1.0
-    assert by_backend["stablefold"]["speedup_vs_baseline"] == 2.0
+    assert by_backend[backend]["speedup_vs_baseline"] == 2.0
     assert [row["backend"] for row in report["backends"]] == [
         "aqlab",
         "triton",
         "cueq",
-        "stablefold",
+        backend,
     ]
     assert report["world_size"] == 4
     assert report["gpu_name"] == "NVIDIA H100 80GB HBM3"
@@ -266,6 +268,7 @@ def test_comparison_writes_tables_and_loss_timing_plots(tmp_path):
         rows = list(csv.DictReader(handle))
     assert {row["devices"] for row in rows} == {"4"}
     assert {row["topology"] for row in rows} == {"single-node-ddp"}
+    assert {row["backend"] for row in rows} == {"aqlab", "triton", "cueq", backend}
 
 
 def test_distributed_metrics_use_critical_path_and_global_mean(monkeypatch):

@@ -8,9 +8,10 @@ OpenFold-3 builds its image with pixi:
 
 These images install the current checkout in editable mode for development and
 tests. The default CUDA 12 environment is `openfold3-cuda12-dev`. The separate
-`openfold3-cuda12` production environment installs the fixed, attested StableFold
-wheel; this Dockerfile rejects that environment to avoid replacing its wheel with
-an editable checkout. For production installation and verification, follow the
+`openfold3-cuda12` production environment installs the fixed, attested OpenFold3
+wheel containing the in-tree TurboPairFormer kernels (previously named
+StableFold); this Dockerfile rejects that environment to avoid replacing its
+wheel with an editable checkout. For production installation and verification, follow the
 [Pixi production workflow](../README.md#pixi-production-workflow).
 
 ### Development image

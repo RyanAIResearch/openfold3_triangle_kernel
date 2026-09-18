@@ -1,11 +1,19 @@
-# OpenFold3 + StableFold Training Quick Start
+# OpenFold3 + TurboPairFormer Training Quick Start
 
 This guide follows the Lambda OpenFold3 quick-start flow: set up the
 environment, prepare a small PDB dataset, remove samples affected by unavailable
 files, and launch training on one or more GPUs.
 
-The current prebuilt StableFold package supports full NVIDIA H100 80 GB GPUs on
-Linux x86-64. It does not require a system CUDA Toolkit or local kernel build.
+The prebuilt OpenFold3 runtime with TurboPairFormer kernels supports full
+NVIDIA H100 80 GB GPUs on Linux x86-64. It does not require a system CUDA Toolkit
+or local kernel build.
+
+TurboPairFormer is the current project name; earlier releases and receipts use
+StableFold. This `main` workflow continues to install the pinned OpenFold3
+wheel `0.5.1.dev5860+g87ebe22da`, with Conda PyTorch 2.10.0 and CUDA 12.9.
+Its `openfold3` imports, binary identities, configuration keys, and receipt
+filenames keep their existing names. The standalone pip package has a separate
+release and validation process.
 
 ## Setup
 
@@ -26,15 +34,15 @@ git clone --branch main --single-branch \
 cd openfold3_triangle_kernel
 ```
 
-### Set Up OpenFold3 and StableFold
+### Set Up OpenFold3 and TurboPairFormer
 
 ```bash
 pixi install -e openfold3-cuda12
 ```
 
 This one command creates the environment and installs the repository-pinned
-OpenFold3 wheel with the prebuilt StableFold kernels. No separate setup command
-or local kernel build is required.
+OpenFold3 wheel with the prebuilt TurboPairFormer kernels. No separate setup
+command or local kernel build is required.
 
 To optionally check the GPU, environment, and all five AOT kernel modules, run:
 
@@ -159,16 +167,17 @@ independent processes selected identical token, MSA, and template features.
 
 ### Choose a Training Backend
 
-Use StableFold by default:
+Use TurboPairFormer by default:
 
 ```bash
 pixi run -e openfold3-cuda12 select-training-backend \
   datasets/train_pdb_subset.yaml \
-  --backend stablefold \
-  --output datasets/train_pdb_subset.stablefold.yaml
+  --backend turbopairformer \
+  --output datasets/train_pdb_subset.turbopairformer.yaml
 ```
 
-The command can be pasted directly into Bash.
+The command can be pasted directly into Bash. `stablefold` remains a supported
+legacy alias for the same in-tree kernel route.
 
 To select another implementation, change `BACKEND` and use the generic form:
 
@@ -186,7 +195,7 @@ pixi run -e openfold3-cuda12 select-training-backend \
 | `aqlab` | Stock OpenFold3 PyTorch operators |
 | `triton` | OpenFold3 Triton triangle attention with the stock PyTorch training TMU path |
 | `cueq` | NVIDIA cuEquivariance triangle kernels |
-| `stablefold` | StableFold triangle attention and triangle multiplicative kernels |
+| `turbopairformer` | TurboPairFormer triangle attention and triangle multiplicative kernels |
 | `deepspeed-evo` | DeepSpeed Evo attention operator; this does not enable ZeRO |
 
 The selector first disables every mutually exclusive route and then enables the
@@ -196,8 +205,8 @@ pipeline, loss, optimizer, EMA, checkpointing, and distributed training.
 
 The standard full-crop comparison below uses the first four keys exactly as
 written:
-`aqlab`, `triton`, `cueq`, and `stablefold`. These are configuration keys, not
-display-name aliases. In particular, selecting `triton` enables OpenFold3's
+`aqlab`, `triton`, `cueq`, and `turbopairformer`. The last key selects the same
+route as the legacy `stablefold` alias. Selecting `triton` enables OpenFold3's
 Triton triangle-attention route; training TMU remains on its stock PyTorch path
 because OpenFold3 training does not use the in-place inference path.
 
@@ -210,7 +219,7 @@ creates a separate runner YAML for one BF16 training step with validation, W&B,
 and checkpoint output disabled:
 
 ```bash
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 
 pixi run -e openfold3-cuda12 select-training-backend \
   datasets/train_pdb_subset.yaml \
@@ -266,9 +275,10 @@ optimizer step through the selected backend. To smoke-test another backend,
 change only `BACKEND`, regenerate its runner YAML, and rerun the same launch
 command.
 
-This exact `stablefold` smoke path has been verified to reach `max_steps=1` on
-a Lambda H100 80 GB GPU. The first launch can spend about a minute in CPU-heavy
-model and data setup before the training progress bar appears. Warnings that no
+The same kernel smoke path, recorded under the legacy `stablefold` name, has
+been verified to reach `max_steps=1` on a Lambda H100 80 GB GPU. The first launch
+can spend about a minute in CPU-heavy model and data setup before the training
+progress bar appears. Warnings that no
 logger is configured are expected because the smoke preset deliberately
 disables W&B; they are not training failures.
 
@@ -302,7 +312,7 @@ mkdir -p ../openfold3-run/backend-comparison-1gpu
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CROP_DATA_ROOT="$OF3_RUN_CWD/pdb-full-crop-384-640-768"
 export CUDA_VISIBLE_DEVICES=0
-BACKENDS=(aqlab triton cueq stablefold)
+BACKENDS=(aqlab triton cueq turbopairformer)
 MATRIX_FAILED=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
@@ -373,7 +383,7 @@ export DEVICES=2
 export CUDA_VISIBLE_DEVICES=0,1
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CROP_DATA_ROOT="$OF3_RUN_CWD/pdb-full-crop-384-640-768"
-BACKENDS=(aqlab triton cueq stablefold)
+BACKENDS=(aqlab triton cueq turbopairformer)
 MATRIX_FAILED=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
@@ -430,7 +440,7 @@ export DEVICES=8
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CROP_DATA_ROOT="$OF3_RUN_CWD/pdb-full-crop-384-640-768"
-BACKENDS=(aqlab triton cueq stablefold)
+BACKENDS=(aqlab triton cueq turbopairformer)
 MATRIX_FAILED=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
@@ -574,6 +584,10 @@ time. A separate single-H100 adaptation below retains more of one supplied
 fine-tuning configuration and is reported as a distinct experiment.
 
 ### Reproduced Two-H100 Standard-Benchmark Results
+
+The experiments in this section and the following single-H100 section were
+recorded under the previous name **StableFold**. Tables, plots, and artifact
+identities retain that historical name; the current project is TurboPairFormer.
 
 These results were recorded on September 4, 2026. The table below is a
 descriptive full-crop backend screen, not an exact production-job,
@@ -832,7 +846,7 @@ Launch training on one H100:
 
 ```bash
 mkdir -p ../openfold3-run
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
@@ -864,7 +878,7 @@ Then launch OpenFold3 once:
 
 ```bash
 mkdir -p ../openfold3-run
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
@@ -903,8 +917,8 @@ pl_trainer_args:
 
 The repository, Pixi environment, prepared runner YAML, dataset, and output
 directory must use the same paths on every node. The run directory must be a
-real shared, read-write filesystem: StableFold rank 0 writes the kernel receipt
-there and every other rank reads it back. A path that merely has the same name
+real shared, read-write filesystem: TurboPairFormer rank 0 writes the kernel
+receipt there and every other rank reads it back. A path that merely has the same name
 on each node is not sufficient.
 
 Install the pinned environment on every node from the shared repository. Then
@@ -916,14 +930,14 @@ pixi install -e openfold3-cuda12
 
 mkdir -p /shared/openfold3-run
 test -r /shared/openfold3-run && test -w /shared/openfold3-run
-test -r "$PWD/datasets/train_pdb_subset.stablefold.yaml"
+test -r "$PWD/datasets/train_pdb_subset.turbopairformer.yaml"
 ```
 
 Run the following command on both allocated nodes from
 `/shared/openfold3_triangle_kernel`, changing `NODE_RANK` to `0` or `1`:
 
 ```bash
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export OF3_RUN_CWD=/shared/openfold3-run
 export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -1017,7 +1031,7 @@ unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 cd /shared/openfold3_triangle_kernel
 
-for BACKEND in aqlab triton cueq stablefold; do
+for BACKEND in aqlab triton cueq turbopairformer; do
   srun --kill-on-bad-exit=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" \
     pixi run -e openfold3-cuda12 benchmark-multinode \
     --runner-yaml "$CROP_DATA_ROOT/runner_crop_${CROP}.yaml" \
@@ -1069,7 +1083,7 @@ Save this as `/shared/openfold3-run/train_2x8.sbatch` and run
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=of3-stablefold-2x8
+#SBATCH --job-name=of3-turbopairformer-2x8
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=8
 #SBATCH --gres=gpu:8
@@ -1079,7 +1093,7 @@ Save this as `/shared/openfold3-run/train_2x8.sbatch` and run
 
 set -euo pipefail
 
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export PATH="$HOME/.pixi/bin:$PATH"
 export OF3_RUN_CWD=/shared/openfold3-run
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
@@ -1101,12 +1115,12 @@ starts once per task, and Lightning joins the sixteen tasks into one DDP group.
 
 ##### Smoke Test Before the Full Run
 
-First check that the StableFold receipt round-trips across nodes with one GPU
-per node. Create a one-step YAML:
+First check that the TurboPairFormer receipt round-trips across nodes with one
+GPU per node. Create a one-step YAML:
 
 ```bash
 cd /shared/openfold3_triangle_kernel
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 
 pixi run -e openfold3-cuda12 select-training-backend \
   datasets/train_pdb_subset.yaml \
@@ -1130,7 +1144,7 @@ grep -c '"hostname"' /shared/openfold3-run/<output_dir>/logs/stablefold_kernel_d
 ```
 
 The hostname count equals the world size: `16` for the full run and `2` for
-the smoke test, whose `output_dir` is `openfold3_smoke_stablefold`. For a
+the smoke test, whose `output_dir` is `openfold3_smoke_turbopairformer`. For a
 benchmark, the receipt sits under `$RESULTS_ROOT/<backend>/logs/`.
 
 ##### Alternative: One `torchrun` per Node
@@ -1140,7 +1154,7 @@ the node rank and master address:
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=of3-stablefold-2x8-torchrun
+#SBATCH --job-name=of3-turbopairformer-2x8-torchrun
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:8
@@ -1150,7 +1164,7 @@ the node rank and master address:
 
 set -euo pipefail
 
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export PATH="$HOME/.pixi/bin:$PATH"
 export OF3_RUN_CWD=/shared/openfold3-run
 export MASTER_ADDR="$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)"

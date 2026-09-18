@@ -61,6 +61,20 @@ def test_backend_selector_creates_only_the_train_memory_path():
     }
 
 
+def test_turbopairformer_and_legacy_name_generate_identical_training_config(
+    base_config,
+):
+    canonical = configure_training_backend(
+        deepcopy(base_config),
+        backend="turbopairformer",
+    )
+    legacy = configure_training_backend(deepcopy(base_config), backend="stablefold")
+    assert canonical == legacy
+    train_memory = canonical["model_update"]["custom"]["settings"]["memory"]["train"]
+    assert train_memory["use_stable_triangle_attention"] is True
+    assert train_memory["use_stable_triangle_multiplicative"] is True
+
+
 def test_backend_selector_rejects_unknown_backend():
     with pytest.raises(ValueError, match="unknown backend"):
         configure_training_backend({}, backend="not-a-backend")
@@ -80,7 +94,7 @@ def test_each_accelerated_backend_has_exactly_one_operator_family():
         if name == "aqlab":
             continue
         # Every accelerated backend enables exactly one operator family; the
-        # StableFold family spans its attention and TriMul flags.
+        # TurboPairFormer family spans its attention and TriMul flags.
         families = {
             "cueq": flags["use_cueq_triangle_kernels"],
             "triton": flags["use_triton_triangle_kernels"],

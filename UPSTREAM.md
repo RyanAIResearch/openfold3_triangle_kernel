@@ -11,8 +11,8 @@
 
 The complete AQLab source tree is retained so that the OpenFold3 model,
 training recipe, configuration system, and data pipeline remain runnable. The
-RyanAIResearch delta is limited to the StableFold Triangle Attention and
-Triangle Multiplicative Update runtimes, their routing/configuration
+RyanAIResearch delta is limited to the TurboPairFormer (formerly StableFold)
+Triangle Attention and Triangle Multiplicative Update runtimes, their routing/configuration
 integration, AOT package data, a kernel-only DDP identity preflight, and focused
 release tests. AQLab's DDP strategy, gradient reduction, EMA, loss, checkpoint,
 logging, optimizer, data pipeline, and training recipe remain unchanged.

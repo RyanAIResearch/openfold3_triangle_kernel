@@ -184,7 +184,7 @@ def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     assert "backend-comparison-1gpu/crop${CROP}" in text
     assert "backend-comparison-2gpu/crop${CROP}" in text
     assert "backend-comparison-8gpu/crop${CROP}" in text
-    assert text.count("BACKENDS=(aqlab triton cueq stablefold)") >= 3
+    assert text.count("BACKENDS=(aqlab triton cueq turbopairformer)") >= 3
     assert text.count('for BACKEND in "${BACKENDS[@]}"') >= 3
     assert text.count("not plotting") >= 3
     assert text.count("if (( MATRIX_FAILED ))") >= 3
@@ -194,7 +194,7 @@ def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     assert "--baseline triton" in text
     assert "Changing the worker count can therefore change the concrete" in text
     assert "not a per-step fingerprint" in text
-    assert "Reproduced Two-H100 Results" in text
+    assert "Reproduced Two-H100 Standard-Benchmark Results" in text
     assert "Reproduced One- and Two-H100 Results" not in text
     assert "5d4c79748fa5c76ce6a69478c6f4d38395d81b2c" in text
     assert "0.5.1.dev5860+g87ebe22da" in text
@@ -202,7 +202,8 @@ def test_bare_metal_sections_are_copy_paste_ready_for_multi_gpu_users():
     assert "OOM in first backward pass" in text
     assert "backend_loss_2gpu_crops_384_640_768.png" in text
     assert "1.704x" in text
-    assert "partial single-H100" in text
+    assert "Single-H100 Adaptation of a Supplied Fine-Tuning Recipe" in text
+    assert "OOM after 58/66 microbatches" in text
     assert "long-horizon convergence or unchanged model accuracy" in text
     assert "two-node H100 qualification" not in text
     assert "TriOnce" not in text

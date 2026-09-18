@@ -1,14 +1,27 @@
-# StableFold for OpenFold3
+# TurboPairFormer for OpenFold3
 
-StableFold is a Hopper-optimized Triangle Attention and Triangle
+TurboPairFormer is a Hopper-optimized Triangle Attention and Triangle
 Multiplicative Update backend integrated directly into OpenFold3. It keeps the
 OpenFold3 training entry points, datasets, checkpoints, and configuration
 structure unchanged; users select the backend through the model configuration.
 
+The two operators are **TurboTriangleAttention** (Triangle Attention) and
+**TurboTriangleMultiplicative** (Triangle Multiplicative Update).
+
+This project was previously called StableFold. Existing `stablefold_*` imports,
+configuration keys, artifact paths, and receipt names remain compatibility
+identifiers for the qualified production wheel. The backend selector accepts
+`--backend turbopairformer`; `--backend stablefold` remains a compatible alias.
+
+This `main` branch provides the integrated OpenFold3 production workflow. The
+standalone **TurboPairFormer** Python package is being prepared on
+[`feat/turbopairformer-pip-package`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/feat/turbopairformer-pip-package)
+and has not yet been published to PyPI.
+
 The central optimization is a single-reconstruction Triangle Attention
 backward. A flash-style two-pass implementation reconstructs the attention
 probabilities and score gradients once for `dK/dV` and again for `dQ/dBias`.
-StableFold reconstructs each tile once and immediately uses it for all four
+TurboPairFormer reconstructs each tile once and immediately uses it for all four
 gradients. A fixed-order `dBias` reduction replaces floating-point atomics, and
 an optional forward rounding residual improves the row-scalar used by the
 backward without changing the public BF16 output.
@@ -82,12 +95,12 @@ pixi run -e openfold3-cuda12 verify-aot
 
 The production Pixi environment deliberately contains no editable OpenFold3
 dependency. `pixi install` installs the repository-pinned wheel directly from
-the committed lockfile without compiling any StableFold source, while every
+the committed lockfile without compiling any TurboPairFormer source, while every
 training task checks
 that the installed package, artifact commit, ABI, embedded manifest, wheel
 RECORD, and five extension hashes still match before launching outside the
 source checkout. Dependencies may probe the Pixi-provided compiler ABI and
-CUDA version, but the task does not invoke a StableFold kernel build, CMake,
+CUDA version, but the task does not invoke a TurboPairFormer kernel build, CMake,
 Ninja, or JIT. It then directly executes AQLab `run_openfold` or standard
 `torchrun` without replacing training, strategy, checkpoint, logging, or loss
 behavior, and the selector changes only the training kernel-route flags.
@@ -96,7 +109,7 @@ The integration checkout and the binary artifact intentionally have separate
 identities: the `main` checkout contains the installer and guide, while the
 wheel records the qualified source commit `87ebe22da13c657d36997dedb4ec398fbd62c6b7`.
 That wheel keeps Diffusion on AQLab's original attention path and runs
-StableFold only for non-Diffusion triangle Attention and TMU outside the source
+TurboPairFormer only for non-Diffusion triangle Attention and TMU outside the source
 checkout. Its single-node DDP path has been exercised on two real H100s through
 scratch training, validation, checkpointing, and resume. Eight-H100 and real
 multi-node qualification remain pending hardware.
@@ -106,7 +119,7 @@ backend selection, single-GPU training, single-node DDP, and multi-node launch,
 see the
 [Bare-metal training quickstart](docs/source/bare_metal_distributed_quickstart.md).
 
-## Enable StableFold manually
+## Enable TurboPairFormer manually
 
 Set the SR-R backward contract before starting Python:
 
@@ -137,7 +150,7 @@ model_update:
           chunk_size: null
 ```
 
-Keep the existing OpenFold3 architecture defaults when using StableFold
+Keep the existing OpenFold3 architecture defaults when using TurboPairFormer
 Triangle Multiplicative Update: every relevant MSA, Pairformer, and template
 stack must retain `fuse_projection_weights: false`. Everything else in the
 existing OpenFold3 training command can remain unchanged.
@@ -183,7 +196,7 @@ Before trusting performance, run a short paired canary with the same checkpoint,
 data order, precision, crop, and logging configuration as the comparator. Check:
 
 - finite loss and gradients;
-- expected StableFold route counts and no silent fallback;
+- expected TurboPairFormer route counts and no silent fallback;
 - no JIT/rebuild of the four Triangle Attention extensions or the fifth TriMul
   extension;
 - peak memory and OOM headroom on the largest real sample;
@@ -205,16 +218,16 @@ unset OPENFOLD3_SR_BACKWARD
 unset OPENFOLD3_SR_SHADOW
 ```
 
-Unsupported StableFold Attention shapes are explicitly routed to the stock
-OpenFold3 implementation; the public StableFold facade itself fails closed.
+Unsupported TurboPairFormer Attention shapes are explicitly routed to the stock
+OpenFold3 implementation; the public TurboPairFormer facade itself fails closed.
 Monitor fallback counts rather than assuming every call used the custom kernel.
 
-StableFold TriMul uses a fixed, non-configurable short-sequence boundary:
+TurboPairFormer TriMul uses a fixed, non-configurable short-sequence boundary:
 valid TriMul calls with `N <= 100` are metadata-unsupported by the AOT path and
 the model selector routes them directly to stock PyTorch. The H100 BF16 AOT
 path starts at `N = 101` for `C_z = C_hidden` in `{32, 64, 96, 128}`. The
 boundary value matches cuEquivariance 0.10's
-`CUEQ_TRIMUL_FALLBACK_THRESHOLD=100`, but StableFold does not read that or any
+`CUEQ_TRIMUL_FALLBACK_THRESHOLD=100`, but TurboPairFormer does not read that or any
 other environment variable. Unsupported direct-facade calls remain
 fail-closed; only the model selector owns the stock fallback.
 
@@ -259,4 +272,6 @@ This repository is derived from
 [AQLab OpenFold3](https://github.com/aqlaboratory/openfold-3) and is distributed
 under Apache-2.0. Retain [`LICENSE`](LICENSE), [`NOTICE`](NOTICE),
 [`UPSTREAM.md`](UPSTREAM.md), and [`CITATION.cff`](CITATION.cff) when sharing an
-internal source or binary bundle.
+internal source or binary bundle. `CITATION.cff` records the upstream OpenFold3
+reference; TurboPairFormer developer credits and its own citation are pending
+confirmation.

@@ -19,7 +19,7 @@
 #   - openfold3-base: base environment without CUDA or ROCm, to enable developing without GPU.
 #                     On Apple Silicon the same conda-forge pytorch always ships Metal (MPS)
 #                     support, so this environment is not CPU-only there.
-#   - openfold3-cuda12: pinned, non-editable StableFold H100 runtime and training workflow
+#   - openfold3-cuda12: pinned, non-editable TurboPairFormer H100 runtime and training workflow
 #   - openfold3-cuda12-dev and openfold3-cuda13: editable development environments with cuda,
 #                                              deepspeed and cuequivariance
 #   - openfold3-cuda12-pypi and openfold3-cuda13-pypi: environments with python and cuda from conda,
@@ -434,7 +434,7 @@ cuequivariance-torch = "==0.10.0"
 cuequivariance-ops-torch-cu13 = "==0.10.0"
 
 
-# --- StableFold H100 production-candidate workflow
+# --- TurboPairFormer H100 production-candidate workflow
 
 [feature.stablefold-h100]
 platforms = ["linux-64-cuda12"]

@@ -1,4 +1,23 @@
-# OpenFold3-preview
+# TurboPairFormer for OpenFold3
+
+TurboPairFormer provides **TurboTriangleAttention** and
+**TurboTriangleMultiplicative** kernels integrated into OpenFold3. This fork
+retains the upstream model, data pipeline, training entry points and documentation.
+
+## Install TurboPairFormer for OpenFold3
+
+From a fresh checkout of this repository's `main` branch:
+
+```bash
+pixi install -e openfold3-cuda12
+```
+
+The current production environment targets H100 and uses the repository's pinned
+OpenFold3 wheel. See the {doc}`installation requirements <Installation>` and
+{doc}`training quickstart <bare_metal_distributed_quickstart>`.
+The standalone TurboPairFormer PyPI package is still in preparation.
+
+## Upstream model and inference
 
 ```{figure} ../../assets/predictions_combined_dark.png
 :width: 900px
@@ -16,9 +35,11 @@
 Welcome to the Documentation for [OpenFold3-preview](https://github.com/aqlaboratory/openfold-3), a biological structure prediction model based on DeepMind's 
 [AlphaFold3](https://github.com/google-deepmind/alphafold3). Developed under a fully open source (Apache 2) license.
 
-## Quick-Start Guide
+### Upstream OpenFold3 Quick-Start Guide
 
-1. Install OpenFold3 using our pip package, {doc}`more details here <Installation>`
+These commands install the upstream OpenFold3 package for model inference.
+
+1. Install OpenFold3 using the upstream pip package, {doc}`more details here <Installation>`
 ```bash
 pip install openfold3 
 ```

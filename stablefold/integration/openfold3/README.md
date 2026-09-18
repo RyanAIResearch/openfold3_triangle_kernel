@@ -1,5 +1,11 @@
 # Integrating StableFold into an OpenFold3 checkout
 
+> **Historical package snapshot.** The project is now named **TurboPairFormer**.
+> This directory retains the earlier `stablefold` package and its original
+> installation/ABI identifiers. Current standalone-package development is on
+> [`feat/turbopairformer-pip-package`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/feat/turbopairformer-pip-package);
+> the renamed package has not yet been published to PyPI.
+
 StableFold is adopted the same way OpenFold3 adopts cuEquivariance: one pip
 dependency, one configuration flag per operator, and a stock fallback for
 unsupported shapes. The host-side change is one patch of 16 files and about

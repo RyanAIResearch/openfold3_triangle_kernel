@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the ABI-locked StableFold CUDA sm_90a wheel."""
+"""Build the ABI-locked TurboPairFormer/OpenFold3 CUDA sm_90a wheel."""
 
 from __future__ import annotations
 
