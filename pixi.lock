@@ -29267,7 +29267,7 @@ packages:
 - pypi: ./release_artifacts/turbopairformer/0.1.0/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl
   name: turbopairformer
   version: 0.1.0
-  sha256: 1a47c9c0dee79ad41a135d2a6b5061c163a72c865d9bbe521538180ec83cdd02
+  sha256: 9bd26adf183dc508ffbf41e7c553574279b3a0690158d40e41e0194bd6550c53
   requires_dist:
   - torch==2.10.0
   - pytorch-lightning==2.6.1 ; extra == 'lightning'

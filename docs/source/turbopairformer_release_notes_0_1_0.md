@@ -51,7 +51,7 @@ pixi install -e openfold3-cuda12
 
 ## Validation
 
-The currently attached candidate passed **183 H100 tests with zero skips**. All five installed CUDA extensions were checked, including forward/backward execution, numerical checks and repeatability checks. Wheel portability and package metadata checks passed. The Pixi path uses this same pinned wheel; its installed-environment checks are recorded separately.
+The currently attached candidate passed **194 H100 tests with zero skips**. All five installed CUDA extensions were checked, including forward/backward execution, numerical checks and repeatability checks. Wheel portability and package metadata checks passed. The Pixi path uses this same pinned wheel; its installed-environment checks are recorded separately.
 
 The attached wheel, `release-validation.json`, `installed-aot.json` and `standalone-gpu.xml` identify the exact tested artifact. These checks do not establish a new performance result or qualify H200 and full multi-GPU host training.
 
