@@ -1,9 +1,9 @@
-# TurboPairFormer 0.1.0 candidate wheel
+# TurboPairFormer 0.1.0 release wheel
 
 This is the tested standalone wheel built from commit
-`5e887d4e391077a42e002deb2b72f38838ebf8b0`, retained in this repository so
+`702443296b88cc4237da35c5fc3f5ad1f695b502`, retained in this repository so
 `pixi install -e openfold3-cuda12` does not need a second download authenticated
-to private GitHub Releases. PyPI publication is a separate pending step.
+to private GitHub Releases. The same wheel is distributed on PyPI.
 
 The wheel targets Linux x86-64 / glibc 2.28+, CPython 3.14, PyPI Torch
 2.10.0 / CUDA 12.8, and Hopper CC 9.0 (H100/H200). Its final H100 numerical
