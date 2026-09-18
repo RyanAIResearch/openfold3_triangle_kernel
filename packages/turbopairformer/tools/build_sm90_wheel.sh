@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # Build the standalone TurboPairFormer wheel in a clean temporary source directory.
 # Requires Linux x86_64, CPython 3.14, PyPI Torch 2.10.0+cu128, CUDA toolkit 12.9.
-# Output is a local linux_x86_64 wheel. PyPI requires a separate manylinux audit.
+# Default output is a local linux_x86_64 wheel in dist/. --pypi performs a real
+# auditwheel repair and writes the final tested manylinux artifact to dist/pypi/.
 set -euo pipefail
 
+PYPI_BUILD=0
+if [[ "${1:-}" == "--pypi" && "$#" == "1" ]]; then
+  PYPI_BUILD=1
+elif [[ "$#" != "0" ]]; then
+  echo "usage: $0 [--pypi]" >&2
+  exit 2
+fi
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SOURCE_ROOT"
 GIT_STATUS="$(git status --porcelain --untracked-files=all 2>/dev/null)"
@@ -66,6 +74,17 @@ WHEEL="${WHEELS[0]}"
 VALIDATOR_ARGS=()
 if [[ "$TURBOPAIRFORMER_AOT_GIT_DIRTY" == "1" ]]; then VALIDATOR_ARGS+=(--allow-dirty); fi
 "$PYTHON_BIN" tools/validate_wheel.py "$WHEEL" "${VALIDATOR_ARGS[@]}" > "$BUILD_ROOT/validation.json"
+OUTPUT_DIR="$SOURCE_ROOT/dist"
+if [[ "$PYPI_BUILD" == "1" ]]; then
+  # The repair command rejects dirty receipts even for a development build.
+  "$PYTHON_BIN" tools/repair_wheel.py "$WHEEL" \
+    --plat "${TURBOPAIRFORMER_MANYLINUX_PLATFORM:-manylinux_2_28_x86_64}" \
+    --output-dir "$BUILD_ROOT/pypi" > "$BUILD_ROOT/validation.json"
+  mapfile -t WHEELS < <(find "$BUILD_ROOT/pypi" -maxdepth 1 -type f -name 'turbopairformer-*.whl')
+  [[ "${#WHEELS[@]}" == "1" ]]
+  WHEEL="${WHEELS[0]}"
+  OUTPUT_DIR="$SOURCE_ROOT/dist/pypi"
+fi
 
 # Clean target install, imported outside the checkout with no compiler or JIT.
 "$PYTHON_BIN" -m pip install --no-deps --no-compile --target "$BUILD_ROOT/site" "$WHEEL"
@@ -85,9 +104,9 @@ for name in modules:
     importlib.import_module(f"turbopairformer.{name}").load_extension()
 print(json.dumps({"version": turbopairformer.__version__, "loaded": modules}, indent=2))
 PY
-mkdir -p "$SOURCE_ROOT/dist"
-cp "$WHEEL" "$SOURCE_ROOT/dist/"
-cp "$BUILD_ROOT/validation.json" "$SOURCE_ROOT/dist/$(basename "$WHEEL").validation.json"
-cd "$SOURCE_ROOT/dist"
+mkdir -p "$OUTPUT_DIR"
+cp "$WHEEL" "$OUTPUT_DIR/"
+cp "$BUILD_ROOT/validation.json" "$OUTPUT_DIR/$(basename "$WHEEL").validation.json"
+cd "$OUTPUT_DIR"
 sha256sum "$(basename "$WHEEL")" > "$(basename "$WHEEL").sha256"
-echo "$SOURCE_ROOT/dist/$(basename "$WHEEL")"
+echo "$OUTPUT_DIR/$(basename "$WHEEL")"

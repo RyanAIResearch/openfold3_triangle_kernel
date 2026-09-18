@@ -16,9 +16,9 @@ Other Python, Torch, CUDA runtime, GPU and platform combinations are not covered
 by this wheel. The loader verifies the installed ABI and binary hashes before
 loading an extension and reports mismatches instead of silently compiling.
 
-A newly named TurboPairFormer AOT wheel has not yet been built or GPU-validated.
-The previous StableFold H100 results do not certify this renamed artifact.
-H200 execution remains unverified.
+Each public wheel is built from a clean commit and released with its own H100
+installation and numerical-test receipts. Historical wheels under other names
+do not certify TurboPairFormer artifacts. H200 execution remains unverified.
 
 GPU eligibility uses compute capability 9.0; it does not require the device
 name to contain H100. NVIDIA lists both H100 and H200 as
@@ -29,23 +29,33 @@ bits across different GPU models.
 
 ## Install
 
-The intended public installation command, once a release has been published, is:
+Use a fresh Python 3.14 environment on Linux x86-64 (glibc 2.28 or newer):
 
 ```bash
-python -m pip install turbopairformer
+python3.14 -m venv .venv-turbopairformer
+source .venv-turbopairformer/bin/activate
+python -m pip install TurboPairFormer
 ```
 
-This branch does not itself publish a PyPI release. For local validation, install
-the wheel produced by the build command below into the supported environment:
+The Python import is `turbopairformer`; PyPI package names are case-insensitive.
+Pip installs the PyPI Torch 2.10.0 CUDA 12.8 runtime dependencies. An existing
+Conda Torch build or a Torch wheel from a different CUDA index is not compatible;
+use a fresh environment instead of mixing these distributions.
+Pip resolves dependencies in the active environment and can replace an existing
+Torch version. The dedicated venv above keeps other environments unchanged. The
+OpenFold3 integration also supports a project-local Pixi environment; from this
+branch run `pixi install -e openfold3-cuda12` and use `pixi run -e openfold3-cuda12`
+for its commands. Do not install into a shared training or system Python prefix.
+
+Before publication, install the candidate wheel produced by the build command:
 
 ```bash
-python -m pip install /absolute/path/to/turbopairformer-0.1.0-cp314-cp314-linux_x86_64.whl
+python -m pip install /absolute/path/to/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl
 ```
 
-A locally installable Linux wheel still needs portability auditing and a
-manylinux release artifact before PyPI upload. Installing from the repository
-without enabling AOT building is rejected; it does not create an apparently
-working package with missing CUDA binaries.
+Public wheels contain all five precompiled CUDA extensions. No local CUDA toolkit
+or JIT compilation is needed. Installing from the repository without enabling AOT
+building is rejected because it would omit these binaries.
 
 ## Triangle Attention
 
@@ -93,6 +103,21 @@ and first-order gradients are supported. See `tools/smoke_installed.py` for a
 complete host-independent module and forward/backward example.
 
 ## Build and verify
+
+The public builder requires Docker with GPU access on Linux x86-64. It uses a pinned manylinux
+2.28 base, PyPI Torch 2.10.0 / CUDA 12.8 and CUDA toolkit 12.9:
+
+```bash
+bash tools/build_manylinux_wheel.sh /absolute/path/to/empty-wheel-output
+```
+
+The build runs `auditwheel repair`, verifies the allowed external Torch/CUDA
+runtime dependencies, and records the final extension hashes after repair.
+The release workflow also requires installed-wheel H100 execution and numerical
+test evidence for the exact wheel digest. See the repository's
+`scripts/turbopairformer/` release instructions.
+
+For development builds without the manylinux container:
 
 In a Linux CPython 3.14 environment with `torch==2.10.0` installed from PyPI:
 
@@ -144,9 +169,8 @@ The optional `turbopairformer.distributed.TurboPairFormerKernelDDPCallback` has 
 wheel/rank contract. Full multi-GPU OpenFold3 integration of this new pip wheel
 has not been qualified; use the supported single-GPU package path for this work.
 
-The predecessor StableFold wheel passed fixed-configuration Triangle Attention
-bitwise replay checks. These results remain historical until the renamed AOT
-wheel is built and tested. The retained FP64-oracle test bounds
+The release tests check fixed-configuration Triangle Attention bitwise replay.
+The retained FP64-oracle test bounds
 relative error to at most 1.1 times its stock BF16 reference's relative error
 plus `1e-6`. This FP64-oracle test does not cover TriMul or establish end-to-end
 model accuracy. Historical training speedups from the host

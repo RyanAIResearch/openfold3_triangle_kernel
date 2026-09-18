@@ -129,7 +129,9 @@ def test_notice_is_self_contained():
 def test_candidate_wheel_has_a_completed_validated_receipt():
     candidate = os.environ.get("TURBOPAIRFORMER_TEST_WHEEL")
     if candidate is None:
-        pytest.skip("set TURBOPAIRFORMER_TEST_WHEEL to validate an actual candidate wheel")
+        pytest.skip(
+            "set TURBOPAIRFORMER_TEST_WHEEL to validate an actual candidate wheel"
+        )
     module = _wheel_validator()
     result = module.validate_wheel(
         Path(candidate),
@@ -232,7 +234,9 @@ def test_default_source_build_refuses_an_unusable_install(source_copy, command):
 def test_explicit_source_only_wheel_excludes_editable_receipts_and_binaries(
     source_copy,
 ):
-    (source_copy / "turbopairformer/_build_manifest.local.json").write_text('{"built":true}')
+    (source_copy / "turbopairformer/_build_manifest.local.json").write_text(
+        '{"built":true}'
+    )
     (source_copy / "turbopairformer/_ext/stale.so").write_bytes(b"stale binary")
     result = _setup(source_copy, "bdist_wheel", source_only=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -311,7 +315,9 @@ def test_trimul_custom_ops_use_the_package_namespace():
 def test_sdist_excludes_generated_artifacts(source_copy):
     import tarfile
 
-    (source_copy / "turbopairformer/_build_manifest.local.json").write_text('{"built":true}')
+    (source_copy / "turbopairformer/_build_manifest.local.json").write_text(
+        '{"built":true}'
+    )
     (source_copy / "turbopairformer/_ext/stale.so").write_bytes(b"stale binary")
     result = _setup(source_copy, "sdist")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -480,6 +486,101 @@ def test_wheel_validator_rejects_local_receipt_leak(synthetic_aot_wheel):
 def test_wheel_validator_refuses_linux_tag_for_pypi(synthetic_aot_wheel):
     with pytest.raises(ValueError, match="audited manylinux"):
         _wheel_validator().validate_wheel(synthetic_aot_wheel(), require_pypi=True)
+
+
+def test_wheel_validator_rejects_retagging_without_an_audit(synthetic_aot_wheel):
+    with pytest.raises(ValueError, match="auditwheel repair receipt"):
+        _wheel_validator().validate_wheel(
+            synthetic_aot_wheel(platform="manylinux_2_28_x86_64"), require_pypi=True
+        )
+
+
+@pytest.fixture
+def wheel_repair(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPOSITORY / "tools"))
+    spec = importlib.util.spec_from_file_location(
+        "turbopairformer_wheel_repair", REPOSITORY / "tools/repair_wheel.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(module.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "test-audit")
+    monkeypatch.setattr(module, "_providers", lambda _: {})
+
+    def audit(source, destination, target, exclusions):
+        assert not exclusions
+        members = module._members(source)
+        manifest = json.loads(members[module.MANIFEST])
+        if "repair" not in manifest:
+            # Exercise a real binary transformation without claiming that this
+            # CPU fixture is an actual successful auditwheel policy audit.
+            for record in manifest["extensions"].values():
+                members[record["filename"]] += b"repaired fixture"
+        metadata = "turbopairformer-0.1.0.dist-info/"
+        members[metadata + "WHEEL"] = (
+            f"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: cp314-cp314-{target}\n"
+        ).encode()
+        members[metadata + "RECORD"] = b""
+        output = destination / f"turbopairformer-0.1.0-cp314-cp314-{target}.whl"
+        module._write_wheel(output, members)
+        return output, "synthetic audit test only"
+
+    monkeypatch.setattr(module, "_audit", audit)
+    return module
+
+
+def test_repair_preserves_original_and_final_binary_hashes(
+    synthetic_aot_wheel, wheel_repair, tmp_path
+):
+    original = synthetic_aot_wheel()
+    result = wheel_repair.repair_wheel(
+        original, tmp_path / "releases", "manylinux_2_28_x86_64"
+    )
+    output = tmp_path / "releases" / result["wheel"]
+    manifest = json.loads(wheel_repair._members(output)[wheel_repair.MANIFEST])
+    for key, final in manifest["extensions"].items():
+        before = manifest["repair"]["input_extensions"][key]
+        assert before["sha256"] != final["sha256"]
+        assert before["size_bytes"] < final["size_bytes"]
+    assert manifest["repair"]["input_sha256"] != result["sha256"]
+    assert wheel_repair.check_wheel(output)["sha256"] == result["sha256"]
+
+
+def test_release_record_detects_nonbinary_metadata_tampering(
+    synthetic_aot_wheel, wheel_repair, tmp_path
+):
+    result = wheel_repair.repair_wheel(
+        synthetic_aot_wheel(), tmp_path / "releases", "manylinux_2_28_x86_64"
+    )
+    output = tmp_path / "releases" / result["wheel"]
+    members = wheel_repair._members(output)
+    members["turbopairformer-0.1.0.dist-info/METADATA"] += b"Summary: tampered\n"
+    with zipfile.ZipFile(output, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+    with pytest.raises(ValueError, match="RECORD mismatch"):
+        _wheel_validator().validate_wheel(output, require_pypi=True)
+
+
+def test_release_audit_rejects_unexpected_bundled_library(
+    synthetic_aot_wheel, wheel_repair, monkeypatch, tmp_path
+):
+    audit = wheel_repair._audit
+
+    def bundle(*args):
+        output, log = audit(*args)
+        members = wheel_repair._members(output)
+        members["turbopairformer.libs/libunreviewed.so"] = _elf_fixture()
+        wheel_repair._write_wheel(output, members)
+        return output, log
+
+    monkeypatch.setattr(wheel_repair, "_audit", bundle)
+    with pytest.raises(ValueError, match="unexpected bundled library"):
+        wheel_repair.repair_wheel(
+            synthetic_aot_wheel(), tmp_path / "releases", "manylinux_2_28_x86_64"
+        )
+    assert not list((tmp_path / "releases").glob("*.whl"))
 
 
 def test_wheel_validator_binds_artifact_to_selected_source(synthetic_aot_wheel):

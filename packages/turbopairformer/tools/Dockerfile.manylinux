@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1.7
+# Build the public wheel against glibc 2.28; runtime tests use a separate stage.
+FROM --platform=linux/amd64 quay.io/pypa/manylinux_2_28_x86_64@sha256:0536c364004fa2a3c5041120b6fe35d84fc5bfe31f04c6a6304f13eac4a67b63 AS runtime
+ENV PATH=/opt/python/cp314-cp314/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+RUN python -m pip install --no-cache-dir \
+        "torch==2.10.0" "pytorch-lightning==2.6.1" "pytest==9.1.1" \
+        "setuptools==80.9.0" "wheel==0.45.1" "packaging==25.0" \
+        "auditwheel==6.8.2" "twine==6.2.0" \
+    && python -c 'import sys, torch; assert sys.version_info[:2] == (3, 14); assert torch.__version__ == "2.10.0+cu128"; assert torch.version.cuda == "12.8"'
+
+FROM --platform=linux/amd64 nvidia/cuda:12.9.1-devel-rockylinux8@sha256:8d75fca3fc684919d806956e1fd2e197ee71a578af8106a61b4db24248fbe9be AS cuda
+FROM runtime AS builder
+COPY --from=cuda /usr/local/cuda-12.9 /usr/local/cuda-12.9
+RUN dnf install -y gcc-toolset-11-binutils gcc-toolset-11-gcc gcc-toolset-11-gcc-c++ \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+ENV CC=/opt/rh/gcc-toolset-11/root/usr/bin/gcc \
+    CXX=/opt/rh/gcc-toolset-11/root/usr/bin/g++ \
+    CUDA_HOME=/usr/local/cuda-12.9 \
+    CUDACXX=/usr/local/cuda-12.9/bin/nvcc \
+    PATH=/usr/local/cuda-12.9/bin:/opt/rh/gcc-toolset-11/root/usr/bin:/opt/python/cp314-cp314/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    TURBOPAIRFORMER_MANYLINUX_PLATFORM=manylinux_2_28_x86_64
+RUN "$CC" --version | grep -F '11.2.1' \
+    && nvcc --version | grep -F 'release 12.9' \
+    && auditwheel --version | grep -F 'auditwheel 6.8.2' \
+    && command -v patchelf

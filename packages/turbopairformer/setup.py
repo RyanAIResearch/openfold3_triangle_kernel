@@ -121,6 +121,9 @@ PACKAGED_REPO_FILES = (
     "MANIFEST.in",
     "README.md",
     "tools/build_sm90_wheel.sh",
+    "tools/build_manylinux_wheel.sh",
+    "tools/Dockerfile.manylinux",
+    "tools/repair_wheel.py",
     "tools/validate_wheel.py",
 )
 

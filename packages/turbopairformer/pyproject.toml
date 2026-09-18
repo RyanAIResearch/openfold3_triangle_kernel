@@ -20,6 +20,11 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 
+[project.urls]
+Repository = "https://github.com/RyanAIResearch/openfold3_triangle_kernel"
+Documentation = "https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/README.md"
+Issues = "https://github.com/RyanAIResearch/openfold3_triangle_kernel/issues"
+
 [project.optional-dependencies]
 # The DDP kernel preflight callback (turbopairformer.distributed) needs Lightning.
 lightning = ["pytorch-lightning==2.6.1"]

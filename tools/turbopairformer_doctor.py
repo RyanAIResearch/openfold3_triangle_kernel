@@ -11,6 +11,7 @@ turbopairformer. A CPU-only check verifies imports, not CUDA execution or binari
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -130,12 +131,14 @@ def _check_package(provider_name: str) -> dict[str, Any]:
 
 def _check_extensions(provider_name: str) -> dict[str, Any]:
     runtime_name = (
-        "turbopairformer._aot_runtime" if provider_name == "turbopairformer"
+        "turbopairformer._aot_runtime"
+        if provider_name == "turbopairformer"
         else "openfold3.core.kernels.cuda._aot_runtime"
     )
     runtime = importlib.import_module(runtime_name)
     manifest_path = (
-        runtime._manifest_path() if hasattr(runtime, "_manifest_path")
+        runtime._manifest_path()
+        if hasattr(runtime, "_manifest_path")
         else Path(runtime.__file__).with_name("_build_manifest.json")
     )
     try:
@@ -163,6 +166,7 @@ def _check_extensions(provider_name: str) -> dict[str, Any]:
         loaded[key] = getattr(module, "__file__", "<builtin>")
     return {
         "manifest": str(manifest_path),
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
         "git": manifest.get("git", {}),
         "abi": manifest.get("abi", {}),
         "extensions": loaded,
@@ -173,7 +177,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expect-provider", choices=("turbopairformer", "intree"))
     parser.add_argument(
-        "--allow-no-gpu", action="store_true",
+        "--allow-no-gpu",
+        action="store_true",
         help="check imports on CPU; this does not validate CUDA binaries",
     )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
