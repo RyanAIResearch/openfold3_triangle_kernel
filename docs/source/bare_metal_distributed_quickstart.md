@@ -284,7 +284,7 @@ training failures.
 
 ### Compare Backend Training Time and Loss
 
-For every new published comparison, first update to the current public `main`
+For every new published comparison, first update to the current `main`
 and record the exact revision. `git status --short` must print nothing before
 the benchmark starts:
 

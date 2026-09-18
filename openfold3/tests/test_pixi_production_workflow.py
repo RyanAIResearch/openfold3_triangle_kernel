@@ -355,7 +355,15 @@ def test_prebuilt_wheel_keeps_diffusion_on_the_aqlab_path():
     assert isinstance(high_precision, ast.Constant) and high_precision.value is True
 
 
-def test_prebuilt_is_the_only_path_allowed_to_decouple_checkout_docs():
+def test_prebuilt_is_the_only_path_allowed_to_decouple_checkout_docs(monkeypatch):
+    sha256_file = artifact_manager.sha256_file
+    monkeypatch.setattr(
+        artifact_manager,
+        "sha256_file",
+        lambda path: (
+            "0" * 64 if path == REPOSITORY / "README.md" else sha256_file(path)
+        ),
+    )
     with pytest.raises(ArtifactError, match="packaged source receipt mismatch"):
         discover_bundle(
             artifact_manager.PREBUILT_ARTIFACT_DIR,

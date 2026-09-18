@@ -8,11 +8,13 @@ import base64
 import csv
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_DIR = ROOT / "dist"
 PREBUILT_COMMIT = "87ebe22da13c657d36997dedb4ec398fbd62c6b7"
 PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "turbopairformer-h100-20260918"
+PREBUILT_WHEEL = "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
 PREBUILT_FILE_SHA256 = {
     "RECEIPT.json": (
         "1f967eae4e19abce1e5ed90ffcb3263da416ed2c57f8230fa4523942f9ff73a8"
@@ -302,7 +305,7 @@ def discover_bundle(
 
 
 def prebuilt_bundle() -> ArtifactBundle:
-    """Return the repository-pinned, qualified H100 runtime bundle."""
+    """Return the pinned bundle with fresh single-H100 kernel qualification."""
 
     if not PREBUILT_ARTIFACT_DIR.is_dir():
         raise ArtifactError(
@@ -319,25 +322,151 @@ def prebuilt_bundle() -> ArtifactBundle:
     for name, expected_sha256 in PREBUILT_FILE_SHA256.items():
         path = PREBUILT_ARTIFACT_DIR / name
         if sha256_file(path) != expected_sha256:
-            raise ArtifactError(f"prebuilt TurboPairFormer artifact digest mismatch: {name}")
+            raise ArtifactError(
+                f"prebuilt TurboPairFormer artifact digest mismatch: {name}"
+            )
 
     receipt = _read_json(PREBUILT_ARTIFACT_DIR / "RECEIPT.json")
-    if receipt.get("schema_version") != 2:
+    if receipt.get("schema_version") != 3:
         raise ArtifactError("unsupported prebuilt TurboPairFormer receipt schema")
-    if receipt.get("status") != "PASS_SINGLE_NODE_2XH100_PRODUCTION":
+    if receipt.get("status") != "PASS_SINGLE_H100_KERNEL_QUALIFIED":
         raise ArtifactError("prebuilt TurboPairFormer artifact is not qualified")
     if receipt.get("git_commit") != PREBUILT_COMMIT:
         raise ArtifactError("prebuilt TurboPairFormer receipt names another commit")
     wheel_receipt = receipt.get("wheel", {})
-    if wheel_receipt.get("name") not in PREBUILT_FILE_SHA256 or wheel_receipt.get(
+    if wheel_receipt.get("name") != PREBUILT_WHEEL or wheel_receipt.get(
         "sha256"
     ) != PREBUILT_FILE_SHA256.get(wheel_receipt.get("name")):
         raise ArtifactError("prebuilt TurboPairFormer receipt names another wheel")
-    return discover_bundle(
+    bundle = discover_bundle(
         PREBUILT_ARTIFACT_DIR,
         expected_commit=PREBUILT_COMMIT,
         verify_checkout_sources=False,
     )
+    validate_single_h100_qualification(receipt, bundle)
+    return bundle
+
+
+def validate_single_h100_qualification(
+    receipt: dict[str, Any], bundle: ArtifactBundle
+) -> None:
+    """Check fresh numerical and real-GPU evidence for this kernel bundle."""
+
+    if receipt.get("qualification") != {
+        "scope": "single_h100_kernels",
+        "gpu_count": 1,
+        "multi_gpu_qualified": False,
+        "end_to_end_training_qualified": False,
+    }:
+        raise ArtifactError("qualification must state the single-H100 kernel scope")
+    if receipt.get("evidence") != {
+        "clean_install": "aot_clean_install_smoke.json",
+        "numeric_smoke": "single_h100_numerics.json",
+        "gpu_tests": "single_h100_tests.xml",
+    }:
+        raise ArtifactError("qualification must name all three fresh evidence files")
+    directory = bundle.wheel.parent
+    smoke = _read_json(bundle.smoke)
+    if "H100" not in str(smoke.get("device")) or smoke.get("compute_capability") != [
+        9,
+        0,
+    ]:
+        raise ArtifactError("clean-install evidence must execute on an H100")
+    numeric = _read_json(directory / "single_h100_numerics.json")
+    if (
+        numeric.get("schema_version") != 1
+        or numeric.get("status") != "PASS"
+        or numeric.get("gpu_count") != 1
+        or "H100" not in str(numeric.get("device"))
+        or numeric.get("compute_capability") != [9, 0]
+    ):
+        raise ArtifactError("numeric evidence must pass on one H100")
+    if (
+        numeric.get("git_commit") != bundle.manifest["git"]["commit"]
+        or numeric.get("wheel_sha256") != bundle.wheel_sha256
+        or _canonical_aot_identity(numeric.get("aot_identity", {}))
+        != _canonical_aot_identity(_expected_aot_identity(bundle))
+        or any(
+            numeric.get("installed_distribution", {}).get(key) != value
+            for key, value in bundle.installed_distribution.items()
+        )
+    ):
+        raise ArtifactError("numeric evidence names another installed wheel")
+    if numeric.get("validator") != {
+        "path": "tools/aot_numeric_smoke.py",
+        "sha256": sha256_file(ROOT / "tools/aot_numeric_smoke.py"),
+    }:
+        raise ArtifactError("numeric evidence names another oracle validation script")
+    attention = numeric.get("attention", [])
+    if len(attention) != 9 or len({case.get("name") for case in attention}) != 9:
+        raise ArtifactError("numeric evidence requires all nine Attention oracle cases")
+    for case in attention:
+        if (
+            case.get("status") != "PASS"
+            or case.get("bitwise_replay") is not True
+            or case.get("finite") is not True
+            or (
+                case.get("shape", {}).get("full_planes", 0)
+                and case.get("fully_masked_zero") is not True
+            )
+            or set(case.get("errors", {})) != {"out", "dq", "dk", "dv", "dbias"}
+        ):
+            raise ArtifactError("Attention oracle case is incomplete or failed")
+        for error in case["errors"].values():
+            actual = error.get("relative_l2", float("nan"))
+            baseline = error.get("stock_relative_l2", float("nan"))
+            limit = 1.1 * baseline + 1e-6
+            if (
+                not all(
+                    math.isfinite(value) and value >= 0 for value in (actual, baseline)
+                )
+                or actual > limit
+                or error.get("limit") != limit
+            ):
+                raise ArtifactError(
+                    "Attention error exceeds the fixed FP64 oracle gate"
+                )
+    folds = numeric.get("trimul_fp32_fold", [])
+    if len(folds) != 4 or {case.get("channels") for case in folds} != {32, 64, 96, 128}:
+        raise ArtifactError("numeric evidence requires all four TriMul FP32 fold cases")
+    if any(
+        case.get("status") != "PASS" or case.get("bitwise_equal") is not True
+        for case in folds
+    ):
+        raise ArtifactError("TriMul fold differs from its exact FP32 reference")
+    try:
+        tests = ET.parse(directory / "single_h100_tests.xml").getroot()
+    except (OSError, ET.ParseError) as error:
+        raise ArtifactError("invalid single-H100 GPU test evidence") from error
+    cases = list(tests.iter("testcase"))
+    if (
+        not cases
+        or any(True for _ in tests.iter("failure"))
+        or any(True for _ in tests.iter("error"))
+        or any(
+            int(suite.get(key, "0")) != 0
+            for suite in tests.iter("testsuite")
+            for key in ("failures", "errors")
+        )
+    ):
+        raise ArtifactError("single-H100 GPU tests are empty or failed")
+    passed = [case for case in cases if case.find("skipped") is None]
+    for prefix in (
+        "test_all_eight_production_symbols_accept_valid_inputs",
+        "test_wgrad_fold_matches_strict_ascending_reference",
+    ):
+        required = {f"{prefix}[{channels}]" for channels in (32, 64, 96, 128)}
+        actual = {
+            case.get("name")
+            for case in passed
+            if case.get("classname", "").endswith(
+                "test_turbopairformer_trimul_cpp_contract"
+            )
+        }
+        if not required.issubset(actual):
+            raise ArtifactError(
+                "GPU test evidence skips required TriMul execution cases"
+            )
 
 
 def _expected_aot_identity(bundle: ArtifactBundle) -> dict[str, Any]:
@@ -438,7 +567,9 @@ def verify_installed(
             "OPENFOLD3_TRIANGLE_ALLOW_JIT": "0",
         }
     )
-    with tempfile.TemporaryDirectory(prefix="turbopairformer-wheel-verify-") as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="turbopairformer-wheel-verify-"
+    ) as directory:
         result = subprocess.run(
             (sys.executable, "-c", _verification_program(bundle, expected_commit)),
             cwd=directory,
@@ -448,9 +579,7 @@ def verify_installed(
         )
     if result.returncode != 0:
         detail = (
-            result.stderr.strip()
-            or result.stdout.strip()
-            or "no diagnostic output"
+            result.stderr.strip() or result.stdout.strip() or "no diagnostic output"
         )
         raise ArtifactError(f"installed-wheel verification failed:\n{detail}")
     try:
@@ -606,6 +735,10 @@ def main() -> None:
         "wheel": str(bundle.wheel),
         "wheel_sha256": bundle.wheel_sha256,
     }
+    if is_prebuilt:
+        result["qualification"] = _read_json(PREBUILT_ARTIFACT_DIR / "RECEIPT.json")[
+            "qualification"
+        ]
     if args.action in ("install-prebuilt", "build-install", "install"):
         result["runtime"] = install_bundle(bundle, expected_commit)
     elif args.action == "ensure":

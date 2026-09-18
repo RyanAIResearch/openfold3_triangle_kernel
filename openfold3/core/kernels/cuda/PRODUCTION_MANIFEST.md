@@ -9,13 +9,13 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；TurboP
 
 **状态：production candidate（尚未 production-ready）。**
 
-当前已经具备：
+当前实现与测试接口包括（新二进制的实测范围以随包回执为准）：
 
 - package-owned public autograd facade 与 CUDA 源码；
 - 四个互不冲突的 AOT CUDA extension module 与 production fail-closed loader；
 - online-softmax forward；
 - zero-atomics recompute backward；
-- 同一输入的逐 bit self-replay；
+- 同一输入的逐 bit self-replay 检查；
 - CUDA device、dtype、shape、grid 与 stream 的 fail-closed 检查；
 - generic runtime sequence/head 路径与非整 tile 尾块保护；
 - 将任意正 prefix flatten 为一个 CUDA batch；broadcast dBias 由固定顺序
@@ -23,7 +23,6 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；TurboP
 - 以 query slab、batch chunk 和 leaf wave 限定临时显存，同时保持同一条
   全局 dBias 归约顺序；
 - fully-masked real `-inf` 行的零输出、零梯度契约；
-- H100 Compute Sanitizer component smoke。
 - DDP 首步前的全 rank AOT/ABI/SO 哈希、GPU、环境和设备绑定一致性预检；
 - distributed strict route：Attention 不允许隐式回退，TriMul 只允许
   `N<=100` 的声明式 stock 路由；
@@ -32,7 +31,7 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；TurboP
 
 正式放行仍缺少：
 
-1. 完整 Compute Sanitizer release suite；
+1. 新二进制的 Compute Sanitizer release suite；
 2. 2-GPU 与多节点 DDP kernel 正确性和扩展效率证据；
 3. 长期训练轨迹、validation quality 与 time-to-quality。
 
@@ -99,8 +98,8 @@ TurboPairFormer 与官方 PyTorch 使用相同实数公式，但浮点执行契�
 - mask 以 FP32 加入；pair bias 从 BF16 内核存储提升到 FP32 后加入；
 - forward 使用在线 softmax；
 - backward 由保存的 LSE 重算概率；
-- dQ/dBias 使用重算的 `T=sum(P*dP)` 行标量；基于实测
-  `sum(P)=1 ± 1.3e-6`，当前执行契约省略 `T/Z` 的除法；
+- dQ/dBias 使用重算的 `T=sum(P*dP)` 行标量，当前执行契约省略
+  `T/Z` 的除法；相应数值误差必须由当前二进制的参考对照验证；
 - dQ/dBias 的每个 CTA 将四个 outer 共用的 `32x32` BF16 bias tile 只读取
   一次，存入 Q shared tile 未参与 MMA 的 `+8` padding；下一 tile 的 bias 与
   各 warp 私有 K/V 在现有 dBias 尾部 barrier 前预取，不增加 dynamic shared
@@ -112,7 +111,7 @@ TurboPairFormer 与官方 PyTorch 使用相同实数公式，但浮点执行契�
 - workspace planner 的默认目标是 256 MiB（目前不是公开配置项）。若一个
   最小 `batch x 32-query x leaf` tile 本身超过目标，允许使用该不可约下限。
 
-因此当前承诺是**同后端、同输入、同环境下的逐 bit self-replay**，而不是对
+逐 bit self-replay 的验证限定于**同后端、同输入、同环境和回执所列形状**，不表示对
 PyTorch、AQLab 或 cuEq 的逐 bit 一致。训练可用性必须由长期 trajectory、
 optimizer/EMA 状态、validation quality 与 time-to-quality 裁决，不能仅由一次
 operator replay 推断；这些长期证据目前尚未完成。
