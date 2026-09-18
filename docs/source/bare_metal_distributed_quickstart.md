@@ -368,8 +368,10 @@ using a device.
 The model remains in `bf16-mixed` precision. `--use-tf32` enables TF32 only for
 the remaining FP32 matrix multiplications and is passed to every backend so the
 comparison is matched. The repository pins all three cuEquivariance
-distributions to `0.10.0`; its full-training triangle-attention backward sees
-an FP32 bias and requires TF32. Keeping this setting explicit prevents a backend
+distributions to `0.10.0`; its Triangle Attention backward with FP32 Q/K/V
+requires TF32 because full-precision FP32 backward is not implemented. BF16
+Q/K/V do not require TF32 merely because the pair bias is FP32. Keeping this
+setting explicit prevents a backend
 arm from silently selecting a different FP32 matmul policy. It is a benchmark
 protocol choice, not the current AQLab training CLI default.
 
