@@ -29,13 +29,25 @@ PREBUILT_FILE_SHA256 = {
     "README.md": "75f0f71a2c0f1804504f4db3d4c532be3a6b20389002abffec8f0583d36607c6",
     "RECEIPT.json": "9da89fbdb5b1aaa4901a239b6fc625a115fa7e733dd618b8a0dae4038c1cfdc8",
     "SHA256SUMS": "e65e2a0ff95413e8923fca5745af3a0935f20e963e21afa41b61c50fe5de55ef",
-    "aot_clean_install_smoke.json": "389676fce854a4ff167556dbc6d639e617b87535a2db3c9e5eaf3955ba938792",
-    "openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl": "5a7c8915f0d9be2534c85809f6b32aa9ab9404e930d0b1ea72fafd1c09aa318b",
-    "openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl.attestation.json": "589b974070abc92575152e49d7c89cf0f1a63c0399cb79834ec378d4abe66d7e",
-    "openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl.sha256": "64928adbe64a1a2b5a542e4a9e38c2048a372fd9ef79f18343eb8c6543cdc302",
-    "single_h100_numerics.json": "5152eccd243de36fd41f785675f5751d02dc76bc39a5e0c639af18bde0343ea6",
-    "single_h100_tests.xml": "32ebae7289890dd7d6a45a181ee6a269ec474be3f41faa8599838271c545bf75",
-    "source_equivalence.json": "d1c71c9e147617bb4696c8f7f152d1a6c31c3d44852fc6eb521f400af843a77c",
+    "aot_clean_install_smoke.json": (
+        "389676fce854a4ff167556dbc6d639e617b87535a2db3c9e5eaf3955ba938792"
+    ),
+    PREBUILT_WHEEL: "5a7c8915f0d9be2534c85809f6b32aa9ab9404e930d0b1ea72fafd1c09aa318b",
+    PREBUILT_WHEEL + ".attestation.json": (
+        "589b974070abc92575152e49d7c89cf0f1a63c0399cb79834ec378d4abe66d7e"
+    ),
+    PREBUILT_WHEEL + ".sha256": (
+        "64928adbe64a1a2b5a542e4a9e38c2048a372fd9ef79f18343eb8c6543cdc302"
+    ),
+    "single_h100_numerics.json": (
+        "5152eccd243de36fd41f785675f5751d02dc76bc39a5e0c639af18bde0343ea6"
+    ),
+    "single_h100_tests.xml": (
+        "32ebae7289890dd7d6a45a181ee6a269ec474be3f41faa8599838271c545bf75"
+    ),
+    "source_equivalence.json": (
+        "d1c71c9e147617bb4696c8f7f152d1a6c31c3d44852fc6eb521f400af843a77c"
+    ),
 }
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 MODULE_KEYS = (
