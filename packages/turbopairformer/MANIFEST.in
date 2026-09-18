@@ -1,6 +1,7 @@
 include setup.py
 include pyproject.toml
 include README.md
+include DEVELOPMENT.md
 include LICENSE
 include NOTICE
 recursive-include tools *.sh *.py

@@ -7,9 +7,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turbopairformer"
-version = "0.1.0"
-authors = [{ name = "TurboPairFormer contributors" }]
-description = "TurboPairFormer: deterministic Hopper (sm_90a) Triangle Attention and Triangle Multiplicative Update kernels for AlphaFold3-style models"
+version = "0.1.0.post1"
+authors = [
+    { name = "Yide Ran" },
+    { name = "Chelsea Lowman" },
+    { name = "Jan Domanski" },
+    { name = "David Hartmann" },
+    { name = "Jenke Scheen" },
+    { name = "Jennifer Wei" },
+    { name = "Chuan Li" },
+    { name = "Jianwen Xie" },
+    { name = "Zhaozhuo Xu" },
+]
+description = "Fast CUDA kernels for Triangle Attention and Triangle Multiplicative Update in protein folding models."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = "==3.14.*"
