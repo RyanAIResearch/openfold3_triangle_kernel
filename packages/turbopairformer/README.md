@@ -21,9 +21,6 @@ attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
 trimul_output = turbo_trimul(module, z, pair_mask)
 ```
 
-This branch migrates the previously named StableFold package;
-existing StableFold wheels and validation receipts retain their original identities.
-
 ## Supported build
 
 The first wheel targets Linux x86-64, CPython 3.14, PyTorch 2.10.0 with its CUDA
@@ -47,8 +44,7 @@ bits across different GPU models.
 
 ## Install
 
-PyPI publication is pending. After publication, use a fresh Python 3.14
-environment on Linux x86-64 (glibc 2.28 or newer):
+Use a fresh Python 3.14 environment on Linux x86-64 (glibc 2.28 or newer):
 
 ```bash
 python3.14 -m venv .venv-turbopairformer
@@ -62,11 +58,12 @@ Conda Torch build or a Torch wheel from a different CUDA index is not compatible
 use a fresh environment instead of mixing these distributions.
 Pip resolves dependencies in the active environment and can replace an existing
 Torch version. The dedicated venv above keeps other environments unchanged. The
-OpenFold3 integration also supports a project-local Pixi environment; from this
-branch run `pixi install -e openfold3-cuda12` and use `pixi run -e openfold3-cuda12`
+OpenFold3 integration also supports a project-local Pixi environment for users
+with access to the repository; from the packaging branch run
+`pixi install -e openfold3-cuda12` and use `pixi run -e openfold3-cuda12`
 for its commands. Do not install into a shared training or system Python prefix.
 
-Before publication, install the candidate wheel produced by the build command:
+To install a wheel produced by the build command:
 
 ```bash
 python -m pip install /absolute/path/to/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl
@@ -196,6 +193,11 @@ relative error to at most 1.1 times its stock BF16 reference's relative error
 plus `1e-6`. This FP64-oracle test does not cover TriMul or establish end-to-end
 model accuracy. Historical training speedups from the host
 repository are not automatically results for this standalone wheel.
+
+## Developers
+
+TurboPairFormer contributors, including contributors from Lambda.
+Individual developer names and credit order will be added after confirmation.
 
 ## License and attribution
 

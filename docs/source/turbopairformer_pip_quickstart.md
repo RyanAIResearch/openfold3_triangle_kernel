@@ -18,16 +18,14 @@ shapes and the TriMul weight interface.
 
 ## Install the standalone package
 
-PyPI publication is pending. The tested candidate is bundled in this private
-repository; from a checkout with repository access, install it into a dedicated
-environment below. After publication, use `python -m pip install turbopairformer`.
+Install the PyPI package into a dedicated environment:
 
 On Linux x86-64 with glibc 2.28+, CPython 3.14, and a Hopper GPU (H100/H200):
 
 ```bash
 python3.14 -m venv .venv-turbopairformer
 source .venv-turbopairformer/bin/activate
-python -m pip install release_artifacts/turbopairformer/0.1.0/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl
+python -m pip install turbopairformer
 ```
 
 The dedicated virtual environment keeps the pinned Torch dependency separate
@@ -37,8 +35,8 @@ OpenFold3 installation is needed for direct operator calls.
 
 ## Install OpenFold3 and TurboPairFormer with Pixi
 
-With Pixi 0.80 or newer, use a separate checkout so an existing project's
-training environment is not updated:
+With repository access and Pixi 0.80 or newer, use a separate checkout so an
+existing project's training environment is not updated:
 
 ```bash
 git clone --branch feat/turbopairformer-pip-package --single-branch \

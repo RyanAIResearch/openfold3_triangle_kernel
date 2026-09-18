@@ -8,6 +8,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "turbopairformer"
 version = "0.1.0"
+authors = [{ name = "TurboPairFormer contributors" }]
 description = "TurboPairFormer: deterministic Hopper (sm_90a) Triangle Attention and Triangle Multiplicative Update kernels for AlphaFold3-style models"
 readme = "README.md"
 license = { file = "LICENSE" }

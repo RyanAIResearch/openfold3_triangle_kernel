@@ -2,10 +2,7 @@
 
 ## Install TurboPairFormer
 
-PyPI publication is pending. The tested 0.1.0 candidate wheel is bundled in
-this repository, which currently requires repository access. From a checkout,
-install it into a dedicated environment with the command below. After the
-PyPI upload, `pip install turbopairformer` will be available directly.
+Install TurboPairFormer into a dedicated Python 3.14 environment:
 
 The standalone package provides Triangle Attention and Triangle Multiplicative
 Update without requiring an OpenFold3 installation:
@@ -13,7 +10,7 @@ Update without requiring an OpenFold3 installation:
 ```bash
 python3.14 -m venv .venv-turbopairformer
 source .venv-turbopairformer/bin/activate
-python -m pip install release_artifacts/turbopairformer/0.1.0/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl
+python -m pip install turbopairformer
 ```
 
 ```python
@@ -23,7 +20,8 @@ attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
 trimul_output = turbo_trimul(module, z)
 ```
 
-For the complete OpenFold3 environment, create a separate checkout:
+For the complete OpenFold3 environment, users with repository access can create
+a separate checkout:
 
 ```bash
 git clone --branch feat/turbopairformer-pip-package --single-branch \
@@ -36,7 +34,7 @@ pixi run -e openfold3-cuda12 doctor-turbopairformer
 The virtual environment and the new checkout's `.pixi/envs/openfold3-cuda12`
 keep these dependencies separate from existing training environments.
 
-Both installation paths use the same bundled **TurboPairFormer 0.1.0** wheel and
+Both installation paths use the same **TurboPairFormer 0.1.0** wheel and
 **PyPI Torch 2.10.0 / CUDA runtime 12.8**. The target is Linux x86-64 with
 glibc 2.28 or newer, CPython 3.14, and Hopper compute capability 9.0
 (H100/H200). Installing the prebuilt kernels requires no nvcc.
