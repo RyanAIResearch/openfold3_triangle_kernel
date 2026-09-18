@@ -8,6 +8,15 @@ not require OpenFold3. The distribution and Python import are both
 ```python
 from turbopairformer import turbo_attention, turbo_trimul
 
+attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
+trimul_output = turbo_trimul(module, z)
+```
+
+Both masks default to `None`: every position is valid, with no causal mask.
+`pair_bias` remains required; pass it by keyword when omitting the attention
+mask. For padded inputs, pass explicit masks:
+
+```python
 attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
 trimul_output = turbo_trimul(module, z, pair_mask)
 ```
@@ -89,7 +98,10 @@ out = turbo_attention(q, k, v, mask, bias)
 out.float().square().mean().backward()
 ```
 
-The mask is additive: zero keeps a key and negative infinity masks it. The facade
+The attention mask is additive: zero keeps a key and negative infinity masks it.
+Omitting it (or passing `None`) means no masked keys and no causal restriction.
+Use an explicit mask to exclude padded or invalid positions. `pair_bias` must
+still be supplied, including an explicit zero tensor if the model has no bias. The facade
 checks supported shapes, dtypes and layouts; unsupported inputs raise. A host
 model can call `turbopairformer.is_triangle_attention_supported` first and choose
 its own fallback.

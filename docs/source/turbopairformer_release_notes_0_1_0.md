@@ -10,9 +10,12 @@ The package name is `turbopairformer`. Its public entry points are:
 ```python
 from turbopairformer import turbo_attention, turbo_trimul
 
-attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
-trimul_output = turbo_trimul(module, z, pair_mask)
+attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
+trimul_output = turbo_trimul(module, z)
 ```
+
+Both masks are optional and default to `None` (all positions valid, noncausal).
+`pair_bias` remains required. Explicit masks are supported for padded inputs.
 
 The standalone package can be used without installing OpenFold3. It includes precompiled Hopper kernels, so users do not need a CUDA compiler or a runtime JIT build.
 

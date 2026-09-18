@@ -6,9 +6,12 @@ without an OpenFold3 installation:
 ```python
 from turbopairformer import turbo_attention, turbo_trimul
 
-attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
-trimul_output = turbo_trimul(module, z, pair_mask)
+attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
+trimul_output = turbo_trimul(module, z)
 ```
+
+Both masks default to `None` (all positions valid, noncausal). `pair_bias` is
+required. For padded inputs, supply `attention_mask` and `pair_mask` explicitly.
 
 See the [operator examples](../../packages/turbopairformer/README.md) for tensor
 shapes and the TriMul weight interface.

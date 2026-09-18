@@ -26,6 +26,12 @@ REQUIRED_GPU_CASES = {
     "TriMul execution": "test_all_eight_production_symbols_accept_valid_inputs",
     "TriMul numerics": "test_wgrad_fold_matches_strict_ascending_reference",
     "public API": "test_public_functions_survive_internal_import_order",
+    "default attention mask": (
+        "test_attention_omitted_mask_matches_zero_outputs_and_gradients"
+    ),
+    "default TriMul mask": (
+        "test_trimul_omitted_mask_matches_ones_outputs_and_gradients"
+    ),
 }
 EXTENSIONS = {
     "stablefold_forward",

@@ -19,8 +19,8 @@ python -m pip install release_artifacts/turbopairformer/0.1.0/turbopairformer-0.
 ```python
 from turbopairformer import turbo_attention, turbo_trimul
 
-attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
-trimul_output = turbo_trimul(module, z, pair_mask)
+attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
+trimul_output = turbo_trimul(module, z)
 ```
 
 For the complete OpenFold3 environment, create a separate checkout:
@@ -309,11 +309,13 @@ The standalone `turbopairformer` package exposes both operators directly:
 ```python
 from turbopairformer import turbo_attention, turbo_trimul
 
-attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
-trimul_output = turbo_trimul(module, z, pair_mask)
+attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
+trimul_output = turbo_trimul(module, z)
 ```
 
-Both calls validate supported inputs and provide PyTorch autograd integration.
+Masks default to `None` (all positions valid, noncausal); supply explicit masks
+for padded inputs. `pair_bias` remains required. Both calls validate supported
+inputs and provide PyTorch autograd integration.
 `module` supplies the TriMul weights from your model. See the
 [operator examples](packages/turbopairformer/README.md) for input shapes and the
 weight interface. Direct calls require only the standalone package.

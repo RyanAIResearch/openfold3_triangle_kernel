@@ -63,12 +63,11 @@ def attention_run():
     bias = torch.randn(
         (1, 1, 4, 128, 128), device="cuda", dtype=torch.bfloat16, requires_grad=True
     )
-    mask = torch.zeros((1, 8, 1, 1, 128), device="cuda", dtype=torch.bfloat16)
     supported, reason = turbopairformer.is_triangle_attention_supported(
-        q, k, v, mask, bias
+        q, k, v, pair_bias=bias
     )
     assert supported, reason
-    out = turbo_attention(q, k, v, mask, bias)
+    out = turbo_attention(q, k, v, pair_bias=bias)
     gradients = torch.autograd.grad(out.float().square().mean(), (q, k, v, bias))
     return (out.detach(), *(gradient.detach() for gradient in gradients))
 
@@ -79,10 +78,9 @@ def trimul_run(outgoing):
     z = torch.randn(
         (1, 128, 128, 32), device="cuda", dtype=torch.bfloat16, requires_grad=True
     )
-    mask = torch.ones((1, 128, 128), device="cuda", dtype=torch.bfloat16)
-    support = turbopairformer.check_trimul_support(module, z, mask)
+    support = turbopairformer.check_trimul_support(module, z, None)
     assert support, support.reason
-    out = turbo_trimul(module, z, mask)
+    out = turbo_trimul(module, z)
     gradients = torch.autograd.grad(
         out.float().square().mean(), (z, *module.parameters())
     )

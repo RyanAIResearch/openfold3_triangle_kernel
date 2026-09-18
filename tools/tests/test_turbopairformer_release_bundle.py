@@ -99,7 +99,15 @@ def test_changed_gpu_evidence_is_rejected(bundle):
         release.validate_receipt(output, info, COMMIT)
 
 
-@pytest.mark.parametrize("scope", ("attention support", "public API"))
+@pytest.mark.parametrize(
+    "scope",
+    (
+        "attention support",
+        "public API",
+        "default attention mask",
+        "default TriMul mask",
+    ),
+)
 def test_gpu_tests_must_execute_each_required_scope(bundle, scope):
     output, _, _ = bundle
     path = output / "standalone-gpu.xml"

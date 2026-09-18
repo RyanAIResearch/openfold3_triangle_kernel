@@ -75,14 +75,19 @@ def is_triangle_attention_supported(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    res_mask: torch.Tensor,
-    pair_bias: torch.Tensor,
+    res_mask: torch.Tensor | None = None,
+    pair_bias: torch.Tensor | None = None,
 ) -> tuple[bool, str]:
-    """Metadata-only support check for the TurboPairFormer path (memoized)."""
+    """Check metadata without allocation; ``None`` means no additive mask.
+
+    ``pair_bias`` is required, including when the optional mask is omitted.
+    """
 
     try:
         key = tuple(
-            (
+            None
+            if tensor is None
+            else (
                 tuple(tensor.shape),
                 tensor.dtype,
                 tensor.device,
@@ -108,20 +113,25 @@ def _is_triangle_attention_supported_uncached(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    res_mask: torch.Tensor,
-    pair_bias: torch.Tensor,
+    res_mask: torch.Tensor | None,
+    pair_bias: torch.Tensor | None,
 ) -> tuple[bool, str]:
+    if pair_bias is None:
+        return False, "pair_bias is required; pass it explicitly as a tensor"
     named = {
         "q": q,
         "k": k,
         "v": v,
-        "res_mask": res_mask,
         "pair_bias": pair_bias,
     }
+    if res_mask is not None:
+        named["res_mask"] = res_mask
     if any(not isinstance(tensor, torch.Tensor) for tensor in named.values()):
         return False, "all inputs must be torch.Tensor instances"
     if not q.is_cuda:
         return False, "q/k/v, res_mask, and pair_bias must be CUDA tensors"
+    if len({tensor.device for tensor in named.values()}) != 1:
+        return False, "q/k/v, res_mask, and pair_bias must share one device"
     capability = _CAPABILITY_CACHE.get(q.device.index)
     if capability is None:
         capability = torch.cuda.get_device_capability(q.device)
@@ -155,18 +165,18 @@ def _is_triangle_attention_supported_uncached(
             return False, f"{name} shape must match q"
     if any(tensor.dtype != torch.bfloat16 for tensor in (q, k, v)):
         return False, "q/k/v must be BF16"
-    if res_mask.dtype not in (torch.float32, torch.bfloat16, torch.float16):
-        return False, "res_mask must be a floating additive mask"
-    if tuple(res_mask.shape[-4:]) != (outer, 1, 1, sequence):
-        return False, "res_mask tail must be (N,1,1,N)"
+    if res_mask is not None:
+        if res_mask.dtype not in (torch.float32, torch.bfloat16, torch.float16):
+            return False, "res_mask must be a floating additive mask"
+        if tuple(res_mask.shape[-4:]) != (outer, 1, 1, sequence):
+            return False, "res_mask tail must be (N,1,1,N)"
     if tuple(pair_bias.shape[-4:]) != (1, heads, sequence, sequence):
         return False, "pair_bias tail must be (1,H,N,N)"
     if pair_bias.dtype not in (torch.bfloat16, torch.float32):
         return False, "pair_bias must be BF16 or FP32"
-    devices = {tensor.device for tensor in (q, k, v, res_mask, pair_bias)}
-    if len(devices) != 1:
-        return False, "q/k/v, res_mask, and pair_bias must share one device"
     for name, tensor in {"res_mask": res_mask, "pair_bias": pair_bias}.items():
+        if tensor is None:
+            continue
         try:
             broadcast_prefix = torch.broadcast_shapes(prefix, tuple(tensor.shape[:-4]))
         except RuntimeError:
@@ -184,7 +194,7 @@ def _is_triangle_attention_supported_uncached(
             False,
             "pair_bias broadcast supports at most 16 target-prefix dimensions",
         )
-    if res_mask.requires_grad:
+    if res_mask is not None and res_mask.requires_grad:
         return False, "res_mask must not require gradients"
     return True, "supported"
 
@@ -387,14 +397,26 @@ def turbo_attention(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    res_mask: torch.Tensor,
-    pair_bias: torch.Tensor,
+    res_mask: torch.Tensor | None = None,
+    pair_bias: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Run one TurboPairFormer Triangle Attention call (raw q; no fallback)."""
+    """Run Triangle Attention with raw q and a required explicit pair bias.
+
+    ``res_mask=None`` means unmasked, noncausal attention. Omit the mask with
+    ``turbo_attention(q, k, v, pair_bias=bias)``; the original five-positional
+    argument call remains valid. Unsupported inputs raise before allocation.
+    """
 
     supported, reason = is_triangle_attention_supported(q, k, v, res_mask, pair_bias)
     if not supported:
         raise ValueError(f"unsupported TurboPairFormer case: {reason}")
+    assert pair_bias is not None  # the metadata contract above requires it
+    if res_mask is None:
+        # A single zero supplies all valid keys. The padding path below still
+        # assigns -inf to new keys, so padded tokens never enter the softmax.
+        res_mask = torch.zeros((), device=q.device, dtype=torch.float32).expand(
+            int(q.shape[-4]), 1, 1, int(q.shape[-2])
+        )
     global _INVOCATIONS
     _INVOCATIONS += 1
     # Hopper kernels store the bias tile as BF16. Accept the model's native
