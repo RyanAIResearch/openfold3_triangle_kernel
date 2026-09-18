@@ -449,7 +449,7 @@ setuptools-scm = ">=8"
 wheel = "*"
 
 [feature.turbopairformer-h100.pypi-dependencies]
-openfold3 = { path = "release_artifacts/turbopairformer-h100-20260918/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl" }
+openfold3 = { path = "release_artifacts/turbopairformer-h100-20260918/openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl" }
 
 [feature.turbopairformer-h100.activation]
 env.PYTHONNOUSERSITE = "1"

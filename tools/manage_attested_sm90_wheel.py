@@ -22,45 +22,20 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_DIR = ROOT / "dist"
-PREBUILT_COMMIT = "87ebe22da13c657d36997dedb4ec398fbd62c6b7"
+PREBUILT_COMMIT = "84f96a31e96f27324a93df7e0485a8326a15fd40"
 PREBUILT_ARTIFACT_DIR = ROOT / "release_artifacts" / "turbopairformer-h100-20260918"
-PREBUILT_WHEEL = "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
+PREBUILT_WHEEL = "openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl"
 PREBUILT_FILE_SHA256 = {
-    "RECEIPT.json": (
-        "1f967eae4e19abce1e5ed90ffcb3263da416ed2c57f8230fa4523942f9ff73a8"
-    ),
-    "SHA256SUMS": ("d00a086f56136733047e7183f579c081c084b9c70a03ba79e468aaa04d9c0799"),
-    "aot_clean_install_smoke.json": (
-        "762fbbbe8b3ebc13d4510cdfa944652f6e8477836e0f043ec2c1a7e3b76a3297"
-    ),
-    "ema_ddp_post_init_audit.json": (
-        "5fc1e9e0d591a8431f22f91beb0b74d8e07f0e01a7cc6dc7c2ee9fd4dadaab29"
-    ),
-    (
-        "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl"
-    ): "ad9042dcf1f301ac42edcc30566537b5b971bc9933f62a50cda8f5f45a090738",
-    (
-        "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-"
-        "linux_x86_64.whl.attestation.json"
-    ): "34a3e3072066fa0f56be30e53acab192e6b3f7b5cb3aac112696893028ecceca",
-    (
-        "openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl.sha256"
-    ): "0884c190aa94d2195e3d9dbe129abad1a1ffc2ea8246b901bcd5d9248bf90e2b",
-    "two_h100_backend_comparison.json": (
-        "144c7e8dbb57dfc710694b008cc14b9d38a76afaaa9d8fb8a159e7c8e08a10d3"
-    ),
-    "two_h100_ddp_receipt.json": (
-        "3124d668e70765acb9d6eb5cadb7ec59ccec8246188e296471b0e67459cd728d"
-    ),
-    "two_h100_smoke_summary.json": (
-        "fe77dcca3e808a4d8b05874462d399fa94dca59ec3540270c4de476350fceb06"
-    ),
-    "two_h100_three_backend_cueq010_receipt.json": (
-        "f98278e18a64fc3942fab43b6c28a405fd5bdca7292d68696a06e5130b881e93"
-    ),
-    "two_h100_three_backend_tf32_receipt.json": (
-        "9385e505bae985fc8e5ae1aabe47fa377c6d26955de9f5c267780ca90c3f2970"
-    ),
+    "README.md": "75f0f71a2c0f1804504f4db3d4c532be3a6b20389002abffec8f0583d36607c6",
+    "RECEIPT.json": "9da89fbdb5b1aaa4901a239b6fc625a115fa7e733dd618b8a0dae4038c1cfdc8",
+    "SHA256SUMS": "e65e2a0ff95413e8923fca5745af3a0935f20e963e21afa41b61c50fe5de55ef",
+    "aot_clean_install_smoke.json": "389676fce854a4ff167556dbc6d639e617b87535a2db3c9e5eaf3955ba938792",
+    "openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl": "5a7c8915f0d9be2534c85809f6b32aa9ab9404e930d0b1ea72fafd1c09aa318b",
+    "openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl.attestation.json": "589b974070abc92575152e49d7c89cf0f1a63c0399cb79834ec378d4abe66d7e",
+    "openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl.sha256": "64928adbe64a1a2b5a542e4a9e38c2048a372fd9ef79f18343eb8c6543cdc302",
+    "single_h100_numerics.json": "5152eccd243de36fd41f785675f5751d02dc76bc39a5e0c639af18bde0343ea6",
+    "single_h100_tests.xml": "32ebae7289890dd7d6a45a181ee6a269ec474be3f41faa8599838271c545bf75",
+    "source_equivalence.json": "d1c71c9e147617bb4696c8f7f152d1a6c31c3d44852fc6eb521f400af843a77c",
 }
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 MODULE_KEYS = (

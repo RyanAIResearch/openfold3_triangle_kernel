@@ -1,0 +1,44 @@
+{
+  "abi": {
+    "python_soabi": "cpython-314-x86_64-linux-gnu",
+    "python_version": "3.14.7",
+    "torch_cuda_version": "12.9",
+    "torch_cxx11_abi": true,
+    "torch_version": "2.10.0"
+  },
+  "attention_reference_cases": 9,
+  "evidence": {
+    "clean_install": "aot_clean_install_smoke.json",
+    "gpu_tests": "single_h100_tests.xml",
+    "numeric_smoke": "single_h100_numerics.json"
+  },
+  "git_commit": "84f96a31e96f27324a93df7e0485a8326a15fd40",
+  "limitations": [
+    "No new multi-GPU, end-to-end training, checkpoint/resume, or performance qualification",
+    "No fresh Compute Sanitizer qualification"
+  ],
+  "pinned_aqlab_upstream": "7de748b7bc93adb5af0a4032d5e9f208b6e1325f",
+  "qualification": {
+    "end_to_end_training_qualified": false,
+    "gpu_count": 1,
+    "multi_gpu_qualified": false,
+    "scope": "single_h100_kernels"
+  },
+  "schema_version": 3,
+  "sealed_utc": "2026-09-18T16:25:19.701266+00:00",
+  "status": "PASS_SINGLE_H100_KERNEL_QUALIFIED",
+  "target": {
+    "cuda_arch": "sm_90a",
+    "ptx_embedded": false,
+    "torch_cuda_arch_list": "9.0a"
+  },
+  "test_counts": {
+    "passed": 258,
+    "skipped": 0
+  },
+  "trimul_fp32_fold_cases": 4,
+  "wheel": {
+    "name": "openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl",
+    "sha256": "5a7c8915f0d9be2534c85809f6b32aa9ab9404e930d0b1ea72fafd1c09aa318b"
+  }
+}
