@@ -314,7 +314,14 @@ class AccuracyRegressionTest(unittest.TestCase):
                 first = self._kernel(implementations[provider], *case)
                 second = self._kernel(implementations[provider], *case)
                 for left, right in zip(first[1:], second[1:], strict=True):
-                    self.assertTrue(torch.equal(left, right))
+                    self.assertEqual(left.shape, right.shape)
+                    self.assertEqual(left.dtype, right.dtype)
+                    self.assertTrue(
+                        torch.equal(
+                            left.contiguous().reshape(-1).view(torch.uint8),
+                            right.contiguous().reshape(-1).view(torch.uint8),
+                        )
+                    )
 
 
 if __name__ == "__main__":

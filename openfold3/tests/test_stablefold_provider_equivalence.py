@@ -222,13 +222,31 @@ class TriMulProviderEquivalenceTest(unittest.TestCase):
     C_HIDDEN = 128
     SEQ = 256
 
-    def _module(self):
+    def _module(self, outgoing):
         from openfold3.core.model.layers.triangular_multiplicative_update import (
+            TriangleMultiplicationIncoming,
             TriangleMultiplicationOutgoing,
         )
 
         torch.manual_seed(3)
-        module = TriangleMultiplicationOutgoing(self.C_Z, self.C_HIDDEN)
+        module_cls = (
+            TriangleMultiplicationOutgoing
+            if outgoing
+            else TriangleMultiplicationIncoming
+        )
+        module = module_cls(self.C_Z, self.C_HIDDEN)
+        # The host initializes linear_z to zero, which would make forward/dz
+        # and most parameter gradients trivially equal. Exercise every path.
+        with torch.no_grad():
+            for name in (
+                "linear_a_p",
+                "linear_a_g",
+                "linear_b_p",
+                "linear_b_g",
+                "linear_g",
+                "linear_z",
+            ):
+                getattr(module, name).weight.normal_(mean=0.0, std=0.02)
         # The fused path takes a BF16 pair tensor against FP32 weights, which
         # is how the training stack invokes it; casting the module to BF16
         # would have the support check reject the call outright.
@@ -249,19 +267,32 @@ class TriMulProviderEquivalenceTest(unittest.TestCase):
         return z, mask
 
     def _run(self, run_supported, module, z, mask, weight):
-        z.grad = None
-        for parameter in module.parameters():
-            parameter.grad = None
+        named_parameters = tuple(module.named_parameters())
+        self.assertEqual(len(named_parameters), 10)
         out = run_supported(module, z, mask)
-        (out.float() * weight).sum().backward()
+        gradients = torch.autograd.grad(
+            (out.float() * weight).sum(),
+            (z, *(parameter for _, parameter in named_parameters)),
+            allow_unused=False,
+        )
+        names = ("out", "dz", *(name for name, _ in named_parameters))
+        for name, value in zip(names, (out, *gradients), strict=True):
+            self.assertTrue(torch.isfinite(value).all().item(), f"nonfinite {name}")
+            self.assertGreater(
+                torch.count_nonzero(value).item(), 0, f"degenerate {name}"
+            )
         grads = {
-            name: parameter.grad.detach().clone()
-            for name, parameter in module.named_parameters()
-            if parameter.grad is not None
+            name: gradient.detach().clone()
+            for (name, _), gradient in zip(named_parameters, gradients[1:], strict=True)
         }
-        return out.detach().clone(), z.grad.detach().clone(), grads
+        return out.detach().clone(), gradients[0].detach().clone(), grads
 
     def test_forward_and_gradients_are_bitwise_identical(self):
+        for outgoing in (False, True):
+            with self.subTest(direction="outgoing" if outgoing else "incoming"):
+                self._assert_direction_equivalent(outgoing)
+
+    def _assert_direction_equivalent(self, outgoing):
         from stablefold.trimul import _run_supported_trimul
         from stablefold.trimul_support import check_trimul_support
 
@@ -272,7 +303,7 @@ class TriMulProviderEquivalenceTest(unittest.TestCase):
             check_stable_trimul_support,
         )
 
-        module = self._module()
+        module = self._module(outgoing)
         z, mask = self._inputs()
         weight = torch.randn(
             z.shape,
