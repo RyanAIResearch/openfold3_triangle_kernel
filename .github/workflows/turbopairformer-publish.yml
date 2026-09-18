@@ -1,0 +1,78 @@
+name: TurboPairFormer release validation and publication
+
+# This workflow consumes a separately built and GPU-tested release wheel.
+# It never rebuilds the root OpenFold3 project or rewrites wheel platform tags.
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Run ID containing the reviewed turbopairformer-release-wheel artifact
+        required: true
+        type: string
+      publish:
+        description: Publish the validated wheel to PyPI
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate:
+    if: github.repository == 'RyanAIResearch/openfold3_triangle_kernel'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Install archive validation tools
+        run: python -m pip install twine auditwheel
+      - uses: actions/download-artifact@v4
+        with:
+          name: turbopairformer-release-wheel
+          path: release-input
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+      - name: Validate the exact release artifact
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          mapfile -t wheels < <(find release-input -type f -name 'turbopairformer-*.whl')
+          test "${#wheels[@]}" -eq 1
+          wheel="${wheels[0]}"
+          python packages/turbopairformer/tools/validate_wheel.py "$wheel" \
+            --require-pypi --expected-commit "$RELEASE_COMMIT"
+          python -m twine check --strict "$wheel"
+          auditwheel show "$wheel"
+          mkdir -p dist
+          cp "$wheel" dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turbopairformer-validated-pypi-wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    needs: validate
+    if: inputs.publish && startsWith(github.ref, 'refs/tags/turbopairformer-v')
+    runs-on: ubuntu-latest
+    # Configure a PyPI trusted publisher for this workflow and environment.
+    # Repository administrators can put the final release approval here.
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: turbopairformer-validated-pypi-wheel
+          path: dist
+      - name: Publish TurboPairFormer to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

@@ -4,9 +4,10 @@
 
 Two providers expose the same facade:
 
-``stablefold``
-    the installed ``stablefold`` pip package, built from ``packages/stablefold``
-    in this repository (install a built wheel with ``pip install <wheel>``).
+``turbopairformer``
+    the installed ``turbopairformer`` pip package, built from
+    ``packages/turbopairformer`` in this repository (install a built wheel
+    with ``pip install <wheel>``).
 ``intree``
     the kernel copy vendored under ``openfold3/core/kernels/cuda``.
 
@@ -16,8 +17,8 @@ asserts that forward outputs and gradients match bitwise.
 
 Selection is explicit and logged once:
 
-* ``OPENFOLD3_TRIANGLE_PROVIDER=stablefold`` requires the package and fails closed
-  if it cannot be imported.
+* ``OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer`` requires the package and
+  fails closed if it cannot be imported.
 * ``OPENFOLD3_TRIANGLE_PROVIDER=intree`` always uses the vendored copy.
 * Unset, the vendored copy serves. Installing the standalone package never
   changes an existing OpenFold3 run's kernel provider.
@@ -37,9 +38,9 @@ from collections.abc import Callable
 from typing import Any
 
 PROVIDER_ENV = "OPENFOLD3_TRIANGLE_PROVIDER"
-STABLEFOLD = "stablefold"
+TURBOPAIRFORMER = "turbopairformer"
 INTREE = "intree"
-PROVIDERS = (STABLEFOLD, INTREE)
+PROVIDERS = (TURBOPAIRFORMER, INTREE)
 
 _logger = logging.getLogger(__name__)
 
@@ -48,12 +49,12 @@ class ProviderError(RuntimeError):
     """Raised when the requested kernel provider cannot serve the route."""
 
 
-def _stablefold_available() -> bool:
+def _turbopairformer_available() -> bool:
     """Require a regular package, not a stray namespace directory on sys.path."""
 
     try:
-        spec = importlib.util.find_spec(STABLEFOLD)
-    except (ImportError, ValueError):
+        spec = importlib.util.find_spec(TURBOPAIRFORMER)
+    except ImportError, ValueError:
         return False
     # A namespace package has no origin and no loader; a real one has both.
     return spec is not None and spec.origin is not None
@@ -74,16 +75,23 @@ def active_provider() -> str:
         return resolved
 
     requested = requested.strip().lower()
+    if requested in ("stablefold", "trionce"):
+        raise ProviderError(
+            f"{PROVIDER_ENV}={requested!r} uses a retired package name; "
+            f"select {PROVIDER_ENV}=turbopairformer and install a compatible "
+            "TurboPairFormer wheel"
+        )
     if requested not in PROVIDERS:
         raise ProviderError(
             f"{PROVIDER_ENV}={requested!r} is not a known provider; "
             f"choose one of {', '.join(PROVIDERS)}"
         )
-    if requested == STABLEFOLD and not _stablefold_available():
+    if requested == TURBOPAIRFORMER and not _turbopairformer_available():
         raise ProviderError(
-            f"{PROVIDER_ENV}=stablefold was requested but the 'stablefold' package is "
-            "not importable; install a compatible StableFold wheel with "
-            "'pip install /path/to/stablefold.whl'"
+            f"{PROVIDER_ENV}=turbopairformer was requested but the "
+            "'turbopairformer' package is "
+            "not importable; install a compatible TurboPairFormer wheel with "
+            "'pip install /path/to/turbopairformer.whl'"
         )
     _logger.info("serving stable triangle kernels from the %s provider", requested)
     return requested
@@ -105,24 +113,24 @@ def _import(module_name: str) -> Any:
 # which the routing tests and any instrumentation rely on.
 @functools.lru_cache(maxsize=3)
 def _module(kind: str) -> Any:
-    stablefold_serving = active_provider() == STABLEFOLD
+    turbopairformer_serving = active_provider() == TURBOPAIRFORMER
     names = {
         "attention": (
             # The package, not the private implementation module: the public
             # names are what the package guarantees.
-            STABLEFOLD,
+            TURBOPAIRFORMER,
             "openfold3.core.kernels.cuda.stablefold_triangle_attention",
         ),
         "trimul_support": (
-            "stablefold.trimul_support",
+            "turbopairformer.trimul_support",
             "openfold3.core.kernels.cuda.stablefold_trimul_support",
         ),
         "trimul_runner": (
-            "stablefold.trimul",
+            "turbopairformer.trimul",
             "openfold3.core.kernels.cuda.stablefold_trimul",
         ),
     }[kind]
-    return _import(names[0] if stablefold_serving else names[1])
+    return _import(names[0] if turbopairformer_serving else names[1])
 
 
 def triangle_attention_facade() -> tuple[Callable[..., Any], Callable[..., Any]]:
@@ -134,7 +142,7 @@ def triangle_attention_facade() -> tuple[Callable[..., Any], Callable[..., Any]]
     """
 
     module = _module("attention")
-    if active_provider() == STABLEFOLD:
+    if active_provider() == TURBOPAIRFORMER:
         return module.is_triangle_attention_supported, module.triangle_attention
     return module.is_stablefold_supported, module.stablefold_triangle_attention
 
@@ -143,7 +151,7 @@ def trimul_support_check() -> Callable[..., Any]:
     """Return ``check_support(module, z, mask)`` from the active provider."""
 
     module = _module("trimul_support")
-    if active_provider() == STABLEFOLD:
+    if active_provider() == TURBOPAIRFORMER:
         return module.check_trimul_support
     return module.check_stable_trimul_support
 
@@ -158,7 +166,7 @@ def trimul_runner() -> Callable[..., Any]:
     """
 
     module = _module("trimul_runner")
-    if active_provider() == STABLEFOLD:
+    if active_provider() == TURBOPAIRFORMER:
         return module._run_supported_trimul
     return module._run_supported_stable_trimul
 
@@ -166,8 +174,8 @@ def trimul_runner() -> Callable[..., Any]:
 def strict_fallback_enabled() -> bool:
     """Return whether an unexpected model-level fallback must raise.
 
-    The host DDP preflight and the ``stablefold`` package keep independent strict
-    flags; either one arming the contract makes a fallback fatal.
+    The host DDP preflight and the ``turbopairformer`` package keep independent
+    strict flags; either one arming the contract makes a fallback fatal.
     """
 
     from openfold3.core.utils.distributed_contract import (
@@ -176,8 +184,8 @@ def strict_fallback_enabled() -> bool:
 
     if stablefold_distributed_strict_enabled():
         return True
-    if active_provider() == STABLEFOLD:
-        return bool(_import("stablefold.policy").distributed_strict_enabled())
+    if active_provider() == TURBOPAIRFORMER:
+        return bool(_import("turbopairformer.policy").distributed_strict_enabled())
     return False
 
 
@@ -189,10 +197,10 @@ def provider_identity() -> dict[str, Any]:
         "provider": provider,
         "env": os.environ.get(PROVIDER_ENV),
     }
-    if provider == STABLEFOLD:
-        package = _import("stablefold")
-        identity["stablefold_version"] = package.__version__
-        identity["stablefold_path"] = package.__file__
+    if provider == TURBOPAIRFORMER:
+        package = _import("turbopairformer")
+        identity["turbopairformer_version"] = package.__version__
+        identity["turbopairformer_path"] = package.__file__
     return identity
 
 
@@ -207,7 +215,7 @@ __all__ = [
     "INTREE",
     "PROVIDERS",
     "PROVIDER_ENV",
-    "STABLEFOLD",
+    "TURBOPAIRFORMER",
     "ProviderError",
     "active_provider",
     "provider_identity",

@@ -458,12 +458,15 @@ class TrainingExperimentRunner(ExperimentRunner):
 
         stablefold_modules = stablefold_aot_modules_from_config(self.model_config)
         if stablefold_modules:
-            from openfold3.core.kernels.cuda.provider import STABLEFOLD, active_provider
+            from openfold3.core.kernels.cuda.provider import (
+                TURBOPAIRFORMER,
+                active_provider,
+            )
 
             selected_provider = active_provider()
-            if self.is_distributed and selected_provider == STABLEFOLD:
+            if self.is_distributed and selected_provider == TURBOPAIRFORMER:
                 raise ValueError(
-                    "The standalone StableFold pip provider currently supports "
+                    "The standalone TurboPairFormer pip provider currently supports "
                     "single-GPU OpenFold3 training only. Its host DDP integration "
                     "has not been validated; use the separately certified intree "
                     "distributed workflow."

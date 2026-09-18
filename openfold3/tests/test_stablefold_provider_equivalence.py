@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``stablefold`` pip package must be indistinguishable from the in-tree copy.
+"""The ``turbopairformer`` pip package must be indistinguishable from the in-tree copy.
 
 ``openfold3/core/kernels/cuda/provider.py`` lets the stable triangle routes be
-served either by the installed ``stablefold`` package or by the kernel copy
+served either by the installed ``turbopairformer`` package or by the kernel copy
 vendored under ``openfold3/core/kernels/cuda``.  Both providers build the same
 ``.cu`` sources, so switching between them must not move a single bit: these
 tests compare the raw bytes of forward outputs and every input gradient.
 
 The two implementations register their ``torch.library`` ops in different
-namespaces (``stablefold::`` and ``openfold3_stablefold::``), so a single process
+namespaces (``turbopairformer::`` and ``openfold3_stablefold::``), so a single process
 can hold both and compare them directly.
 """
 
@@ -36,46 +36,46 @@ def _bitwise_equal(left: torch.Tensor, right: torch.Tensor) -> bool:
     )
 
 
-def _has_real_stablefold() -> bool:
-    """A bare ``stablefold`` directory on sys.path imports as an empty namespace.
+def _has_real_turbopairformer() -> bool:
+    """A bare ``turbopairformer`` directory on sys.path imports as an empty namespace.
 
-    Interpreters started in the repository root see the package's own project
-    folder that way, so ``find_spec`` alone would report an install that has no
-    modules in it.  A real distribution has a spec origin.
+    Adding ``packages`` to sys.path exposes the package's project folder that
+    way, so ``find_spec`` alone would report an install that has no modules in
+    it. A real distribution has a spec origin.
     """
 
     try:
-        spec = importlib.util.find_spec("stablefold")
+        spec = importlib.util.find_spec("turbopairformer")
     except ImportError, ValueError:
         return False
     return spec is not None and spec.origin is not None
 
 
-def _stablefold_distribution_installed() -> bool:
+def _turbopairformer_distribution_installed() -> bool:
     try:
-        importlib.metadata.distribution("stablefold")
+        importlib.metadata.distribution("turbopairformer")
     except importlib.metadata.PackageNotFoundError:
         return False
     return True
 
 
-HAS_STABLEFOLD = _has_real_stablefold()
+HAS_TURBOPAIRFORMER = _has_real_turbopairformer()
 
 # Skipping is the right answer when the package is genuinely absent.  It is the
 # wrong answer when it is installed but shadowed: every equivalence test would
 # skip, the run would report success, and nothing would have been compared.
-if _stablefold_distribution_installed() and not HAS_STABLEFOLD:
+if _turbopairformer_distribution_installed() and not HAS_TURBOPAIRFORMER:
     raise RuntimeError(
-        "the 'stablefold' distribution is installed but 'import stablefold' resolves "
-        "to a namespace package -- the repository root is on sys.path and its "
-        "stablefold/ project folder shadows the install. Re-run with "
+        "the 'turbopairformer' distribution is installed but "
+        "'import turbopairformer' resolves to a namespace package -- the "
+        "packages/turbopairformer/ project folder shadows the install. Re-run with "
         "--import-mode=importlib, or from outside the checkout."
     )
 IS_HOPPER = torch.cuda.is_available() and torch.cuda.get_device_capability() == (9, 0)
 
 requires_both = unittest.skipUnless(
-    HAS_STABLEFOLD and IS_HOPPER,
-    "needs the stablefold package and a Hopper sm_90a GPU",
+    HAS_TURBOPAIRFORMER and IS_HOPPER,
+    "needs the turbopairformer package and a Hopper sm_90a GPU",
 )
 
 # [batch, outer, heads, sequence, head_dim] with the pair-stack shapes the
@@ -128,7 +128,7 @@ class TriangleAttentionProviderEquivalenceTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from stablefold import (
+        from turbopairformer import (
             is_triangle_attention_supported,
             triangle_attention,
         )
@@ -143,7 +143,7 @@ class TriangleAttentionProviderEquivalenceTest(unittest.TestCase):
         # kernel a bound method and pass the test case itself as ``q``.
         cls.facades = {
             "intree": (is_stablefold_supported, stablefold_triangle_attention),
-            "stablefold": (is_triangle_attention_supported, triangle_attention),
+            "turbopairformer": (is_triangle_attention_supported, triangle_attention),
         }
 
     def test_support_verdicts_agree(self):
@@ -151,7 +151,7 @@ class TriangleAttentionProviderEquivalenceTest(unittest.TestCase):
             with self.subTest(shape=shape):
                 inputs = _attention_inputs(shape, seed=17)
                 intree = self.facades["intree"][0](*inputs)
-                stablefold = self.facades["stablefold"][0](*inputs)
+                stablefold = self.facades["turbopairformer"][0](*inputs)
                 self.assertEqual(intree[0], stablefold[0])
                 self.assertTrue(intree[0], intree[1])
 
@@ -173,7 +173,7 @@ class TriangleAttentionProviderEquivalenceTest(unittest.TestCase):
                     self.facades["intree"][1], inputs, weight
                 )
                 stablefold_out, stablefold_grads = _run_attention(
-                    self.facades["stablefold"][1], inputs, weight
+                    self.facades["turbopairformer"][1], inputs, weight
                 )
 
                 self.assertEqual(intree_out.dtype, stablefold_out.dtype)
@@ -293,8 +293,8 @@ class TriMulProviderEquivalenceTest(unittest.TestCase):
                 self._assert_direction_equivalent(outgoing)
 
     def _assert_direction_equivalent(self, outgoing):
-        from stablefold.trimul import _run_supported_trimul
-        from stablefold.trimul_support import check_trimul_support
+        from turbopairformer.trimul import _run_supported_trimul
+        from turbopairformer.trimul_support import check_trimul_support
 
         from openfold3.core.kernels.cuda.stablefold_trimul import (
             _run_supported_stable_trimul,
@@ -339,8 +339,10 @@ class TriMulProviderEquivalenceTest(unittest.TestCase):
             )
 
 
-@unittest.skipUnless(HAS_STABLEFOLD and IS_HOPPER, "needs stablefold on a Hopper GPU")
-class StableFoldAotProvenanceTest(unittest.TestCase):
+@unittest.skipUnless(
+    HAS_TURBOPAIRFORMER and IS_HOPPER, "needs turbopairformer on a Hopper GPU"
+)
+class TurboPairFormerAotProvenanceTest(unittest.TestCase):
     """The package must serve its own compiled artifacts, not a JIT rebuild.
 
     Development JIT may be enabled explicitly for the in-tree copy, but the
@@ -349,20 +351,20 @@ class StableFoldAotProvenanceTest(unittest.TestCase):
     """
 
     FACADES = (
-        "stablefold.triangle_forward",
-        "stablefold.triangle_delta",
-        "stablefold.triangle_dkdv",
-        "stablefold.triangle_dq_dbias",
-        "stablefold.trimul_cuda",
+        "turbopairformer.triangle_forward",
+        "turbopairformer.triangle_delta",
+        "turbopairformer.triangle_dkdv",
+        "turbopairformer.triangle_dq_dbias",
+        "turbopairformer.trimul_cuda",
     )
 
     def test_extensions_load_from_the_installed_package(self):
         import importlib
         import os
 
-        import stablefold
+        import turbopairformer
 
-        package_dir = os.path.dirname(os.path.realpath(stablefold.__file__))
+        package_dir = os.path.dirname(os.path.realpath(turbopairformer.__file__))
         for name in self.FACADES:
             with self.subTest(facade=name):
                 extension = importlib.import_module(name).load_extension()
@@ -420,6 +422,16 @@ class ProviderResolutionTest(unittest.TestCase):
         with self.assertRaises(self.provider.ProviderError):
             self.provider.active_provider()
 
+    def test_retired_package_names_fail_with_migration_guidance(self):
+        for name in ("stablefold", "trionce"):
+            with self.subTest(provider=name):
+                self._with_env(name)
+                with self.assertRaisesRegex(
+                    self.provider.ProviderError,
+                    "OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer",
+                ):
+                    self.provider.active_provider()
+
     def test_value_is_normalized(self):
         self._with_env("  InTree  ")
         self.assertEqual(self.provider.active_provider(), self.provider.INTREE)
@@ -427,26 +439,67 @@ class ProviderResolutionTest(unittest.TestCase):
     def test_default_stays_intree_even_when_package_is_available(self):
         self._with_env(None)
         with mock.patch.object(
-            self.provider, "_stablefold_available", return_value=True
+            self.provider, "_turbopairformer_available", return_value=True
         ):
             self.assertEqual(self.provider.active_provider(), self.provider.INTREE)
 
     def test_explicit_missing_package_fails_closed(self):
-        self._with_env("stablefold")
+        self._with_env("turbopairformer")
         with (
             mock.patch.object(
-                self.provider, "_stablefold_available", return_value=False
+                self.provider, "_turbopairformer_available", return_value=False
             ),
             self.assertRaisesRegex(self.provider.ProviderError, "not importable"),
         ):
             self.provider.active_provider()
 
     def test_explicit_package_is_honoured(self):
-        self._with_env("stablefold")
+        self._with_env("turbopairformer")
         with mock.patch.object(
-            self.provider, "_stablefold_available", return_value=True
+            self.provider, "_turbopairformer_available", return_value=True
         ):
-            self.assertEqual(self.provider.active_provider(), self.provider.STABLEFOLD)
+            self.assertEqual(
+                self.provider.active_provider(), self.provider.TURBOPAIRFORMER
+            )
+
+    def test_package_routes_use_the_new_import_namespace(self):
+        self._with_env("turbopairformer")
+        package = SimpleNamespace(
+            is_triangle_attention_supported=mock.sentinel.support,
+            triangle_attention=mock.sentinel.attention,
+            check_trimul_support=mock.sentinel.trimul_support,
+            _run_supported_trimul=mock.sentinel.trimul_runner,
+            __version__="test-version",
+            __file__="/installed/turbopairformer/__init__.py",
+        )
+        with (
+            mock.patch.object(
+                self.provider, "_turbopairformer_available", return_value=True
+            ),
+            mock.patch.object(
+                self.provider, "_import", return_value=package
+            ) as importer,
+        ):
+            self.assertEqual(
+                self.provider.triangle_attention_facade(),
+                (mock.sentinel.support, mock.sentinel.attention),
+            )
+            self.assertIs(
+                self.provider.trimul_support_check(), mock.sentinel.trimul_support
+            )
+            self.assertIs(self.provider.trimul_runner(), mock.sentinel.trimul_runner)
+            identity = self.provider.provider_identity()
+            self.assertEqual(identity["turbopairformer_version"], "test-version")
+            self.assertEqual(identity["turbopairformer_path"], package.__file__)
+            self.assertEqual(
+                importer.call_args_list,
+                [
+                    mock.call("turbopairformer"),
+                    mock.call("turbopairformer.trimul_support"),
+                    mock.call("turbopairformer.trimul"),
+                    mock.call("turbopairformer"),
+                ],
+            )
 
     def test_failed_import_does_not_change_provider(self):
         self._with_env("intree")
@@ -479,17 +532,19 @@ class ProviderResolutionTest(unittest.TestCase):
             )
             importer.assert_called_once()
 
-    @unittest.skipUnless(HAS_STABLEFOLD, "needs the stablefold package")
+    @unittest.skipUnless(HAS_TURBOPAIRFORMER, "needs the turbopairformer package")
     def test_identity_reports_the_installed_package(self):
-        self._with_env("stablefold")
+        self._with_env("turbopairformer")
         identity = self.provider.provider_identity()
-        self.assertEqual(identity["provider"], "stablefold")
-        self.assertIn("stablefold_version", identity)
+        self.assertEqual(identity["provider"], "turbopairformer")
+        self.assertIn("turbopairformer_version", identity)
 
     def test_resolution_is_memoized(self):
         self._with_env("intree")
         first = self.provider.active_provider()
-        with mock.patch.dict("os.environ", {self.provider.PROVIDER_ENV: "stablefold"}):
+        with mock.patch.dict(
+            "os.environ", {self.provider.PROVIDER_ENV: "turbopairformer"}
+        ):
             self.assertEqual(first, self.provider.active_provider())
 
 

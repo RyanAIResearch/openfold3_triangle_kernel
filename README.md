@@ -1,21 +1,37 @@
-# StableFold for OpenFold3
+# TurboPairFormer for OpenFold3
 
 ## Standalone pip package (work in progress)
 
-The independent package remains named **stablefold**. Its source is in
-[`packages/stablefold`](packages/stablefold/README.md). This packaging branch is
-preparing the eventual `pip install stablefold` release; it does not itself
-publish a PyPI package.
+The independent package is **TurboPairFormer**, with Python distribution and
+import name **`turbopairformer`**. Its source is in
+[`packages/turbopairformer`](packages/turbopairformer/README.md). This branch
+prepares the eventual `pip install turbopairformer` release; the renamed package
+has not been published to PyPI.
+
+Development continues on `feat/turbopairformer-pip-package`. The original
+`feat/trionce-pip-package` branch is retained. [`main`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/main/openfold3/core/kernels/cuda)
+remains the production code line. This branch includes the subsequent pip and
+Hopper compatibility fixes from `9354b966`.
+
+```python
+from turbopairformer import triangle_attention, run_trimul
+
+output = triangle_attention(q, k, v, mask, pair_bias)
+```
+
+The package name, public imports, provider selection, scripts, and release
+workflow use the new name. CUDA source and internal `stablefold_*` export
+symbols retain their existing identity.
 
 The standalone wheel targets Linux x86-64, CPython 3.14, H100/H200, and
 **PyPI Torch 2.10.0 with CUDA runtime 12.8**. Building uses CUDA toolkit 12.9;
 users of a prebuilt wheel do not need nvcc or OpenFold3. The older production
 OpenFold3 environment documented below uses a different, pinned Conda ABI.
 
-Follow the [package installation and Python examples](packages/stablefold/README.md)
-and [single-GPU host integration guide](docs/source/stablefold_pip_quickstart.md).
+Follow the [package installation and Python examples](packages/turbopairformer/README.md)
+and [single-GPU host integration guide](docs/source/turbopairformer_pip_quickstart.md).
 The host defaults to `OPENFOLD3_TRIANGLE_PROVIDER=intree`. Select
-`OPENFOLD3_TRIANGLE_PROVIDER=stablefold` explicitly to use the independent package.
+`OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer` explicitly to use the independent package.
 Its full OpenFold3 DDP integration is not qualified and fails early rather than
 writing a receipt for a different implementation.
 
@@ -23,6 +39,12 @@ The production results and historical receipts below keep their original
 artifact and H100 hardware scope; they do not establish H200 measurements
 or performance claims for the new pip wheel.
 
+## Existing main production workflow (StableFold)
+
+The following production instructions and measurements describe the existing
+`main` implementation and its historical artifacts. Their StableFold names,
+configuration flags, and binary identities are preserved. The renamed pip
+package requires its own wheel build and validation before deployment.
 
 StableFold is a Hopper-optimized Triangle Attention and Triangle
 Multiplicative Update backend integrated directly into OpenFold3. It keeps the

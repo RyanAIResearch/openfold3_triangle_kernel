@@ -589,7 +589,7 @@ precision, TF32 enabled for the common FP32 matmuls, seed/data seed 42, 10 data
 workers per rank, five excluded warmup steps, and 20 measured optimizer steps.
 The historical standalone `stablefold-0.1.0` artifact was not installed by
 this Pixi environment and is not the binary measured in this table. The
-current standalone package is documented in `packages/stablefold/README.md`;
+current TurboPairFormer package is documented in `packages/turbopairformer/README.md`;
 its pip wheel does not inherit this table's certification.
 
 The source purified cache SHA256 is

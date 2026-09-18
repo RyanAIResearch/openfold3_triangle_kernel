@@ -1,0 +1,57 @@
+[build-system]
+# CUDAExtension imports the exact runtime Torch ABI, so the sm_90a wheel is
+# built with ``--no-build-isolation`` inside the pinned Python 3.14 /
+# Torch 2.10 (CUDA 12.8) / CUDA 12.9 toolkit environment (see tools/build_sm90_wheel.sh).
+requires = ["setuptools>=68", "wheel", "patchelf>=0.17; sys_platform == 'linux'"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "turbopairformer"
+version = "0.1.0"
+description = "TurboPairFormer: deterministic Hopper (sm_90a) Triangle Attention and Triangle Multiplicative Update kernels for AlphaFold3-style models"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = "==3.14.*"
+dependencies = ["torch==2.10.0"]
+classifiers = [
+    "Programming Language :: Python :: 3.14",
+    "License :: OSI Approved :: Apache Software License",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.optional-dependencies]
+# The DDP kernel preflight callback (turbopairformer.distributed) needs Lightning.
+lightning = ["pytorch-lightning==2.6.1"]
+test = ["pytest>=8", "pytorch-lightning==2.6.1"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["turbopairformer*"]
+
+[tool.setuptools.package-data]
+turbopairformer = ["*.cu", "_build_manifest.json", "*.md"]
+
+[tool.setuptools.exclude-package-data]
+turbopairformer = ["*.local.json"]
+
+[tool.ruff]
+# Keep the standalone sdist independent of the host repository configuration.
+line-length = 88
+extend-exclude = ["integration"]
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "SIM", "I", "TID"]
+ignore = ["E741", "SIM108", "B905"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

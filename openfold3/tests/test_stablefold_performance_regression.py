@@ -49,37 +49,36 @@ MIN_SPEEDUP_OVER_STOCK = 2.0
 MAX_PACKAGING_COST = 1.25
 
 
-def _has_real_stablefold() -> bool:
+def _has_real_turbopairformer() -> bool:
     try:
-        spec = importlib.util.find_spec("stablefold")
-    except (ImportError, ValueError):
+        spec = importlib.util.find_spec("turbopairformer")
+    except ImportError, ValueError:
         return False
     return spec is not None and spec.origin is not None
 
 
-def _stablefold_distribution_installed() -> bool:
+def _turbopairformer_distribution_installed() -> bool:
     try:
-        importlib.metadata.distribution("stablefold")
+        importlib.metadata.distribution("turbopairformer")
     except importlib.metadata.PackageNotFoundError:
         return False
     return True
 
 
-HAS_STABLEFOLD = _has_real_stablefold()
-IS_HOPPER = (
-    torch.cuda.is_available() and torch.cuda.get_device_capability() == (9, 0)
-)
+HAS_TURBOPAIRFORMER = _has_real_turbopairformer()
+IS_HOPPER = torch.cuda.is_available() and torch.cuda.get_device_capability() == (9, 0)
 
-if _stablefold_distribution_installed() and not HAS_STABLEFOLD:
+if _turbopairformer_distribution_installed() and not HAS_TURBOPAIRFORMER:
     raise RuntimeError(
-        "the 'stablefold' distribution is installed but 'import stablefold' resolves "
+        "the 'turbopairformer' distribution is installed but "
+        "'import turbopairformer' resolves "
         "to a namespace package -- run with --import-mode=importlib, or from "
         "outside the checkout"
     )
 
 requires_both = unittest.skipUnless(
-    HAS_STABLEFOLD and IS_HOPPER,
-    "needs the stablefold package and a Hopper sm_90a GPU",
+    HAS_TURBOPAIRFORMER and IS_HOPPER,
+    "needs the turbopairformer package and a Hopper sm_90a GPU",
 )
 
 
@@ -103,20 +102,20 @@ def _inputs(shape, *, grad: bool):
 def _stock_attention(q, k, v, mask, bias):
     from openfold3.core.model.primitives.attention import _attention
 
-    return _attention(
-        q * (1.0 / math.sqrt(q.shape[-1])), k, v, [mask, bias]
-    ).transpose(-2, -3)
+    return _attention(q * (1.0 / math.sqrt(q.shape[-1])), k, v, [mask, bias]).transpose(
+        -2, -3
+    )
 
 
 def _implementations():
-    from stablefold import triangle_attention
+    from turbopairformer import triangle_attention
 
     from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
         stablefold_triangle_attention,
     )
 
     return {
-        "stablefold": triangle_attention,
+        "turbopairformer": triangle_attention,
         "intree": stablefold_triangle_attention,
         "stock": _stock_attention,
     }
@@ -168,7 +167,7 @@ class SpeedRegressionTest(unittest.TestCase):
     def test_kernels_stay_faster_than_stock(self):
         for name in SHAPES:
             timing = self.timings[name]
-            for provider in ("stablefold", "intree"):
+            for provider in ("turbopairformer", "intree"):
                 with self.subTest(layout=name, provider=provider):
                     speedup = timing["stock"] / timing[provider]
                     self.assertGreater(
@@ -184,12 +183,12 @@ class SpeedRegressionTest(unittest.TestCase):
         for name in SHAPES:
             with self.subTest(layout=name):
                 timing = self.timings[name]
-                cost = timing["stablefold"] / timing["intree"]
+                cost = timing["turbopairformer"] / timing["intree"]
                 self.assertLess(
                     cost,
                     MAX_PACKAGING_COST,
                     f"the pip package is {cost:.2f}x the in-tree build at "
-                    f"{name} ({timing['stablefold']:.3f} ms against "
+                    f"{name} ({timing['turbopairformer']:.3f} ms against "
                     f"{timing['intree']:.3f} ms)",
                 )
 
@@ -215,9 +214,9 @@ class AccuracyRegressionTest(unittest.TestCase):
         bias = (torch.randn(1, 1, heads, seq, seq, device="cuda") * 2).to(
             torch.bfloat16
         )
-        d_out = torch.randn(
-            batch, outer, seq, heads, head_dim, device="cuda"
-        ).to(torch.bfloat16)
+        d_out = torch.randn(batch, outer, seq, heads, head_dim, device="cuda").to(
+            torch.bfloat16
+        )
         return q, k, v, mask, bias, d_out
 
     def _oracle(self, q, k, v, mask, bias, d_out):
@@ -232,9 +231,7 @@ class AccuracyRegressionTest(unittest.TestCase):
     def _stock(self, q, k, v, mask, bias, d_out):
         q_, k_, v_ = (t.detach().clone().requires_grad_(True) for t in (q, k, v))
         b_ = bias.detach().clone().requires_grad_(True)
-        scores = torch.matmul(q_, k_.transpose(-1, -2)).float() / math.sqrt(
-            q.shape[-1]
-        )
+        scores = torch.matmul(q_, k_.transpose(-1, -2)).float() / math.sqrt(q.shape[-1])
         scores = scores + mask + b_.float()
         out = torch.matmul(torch.softmax(scores, dim=-1).to(torch.bfloat16), v_)
         out = out.transpose(-2, -3)
@@ -263,7 +260,7 @@ class AccuracyRegressionTest(unittest.TestCase):
         reference = self._oracle(q, k, v, mask, bias, d_out)
 
         errors = {}
-        for provider in ("stablefold", "intree"):
+        for provider in ("turbopairformer", "intree"):
             results = self._kernel(
                 implementations[provider], q, k, v, mask, bias, d_out
             )
@@ -272,7 +269,7 @@ class AccuracyRegressionTest(unittest.TestCase):
                 for value, ref in zip(results[1:], reference[1:], strict=True)
             ]
         self.assertEqual(
-            errors["stablefold"],
+            errors["turbopairformer"],
             errors["intree"],
             "packaging moved the numerical error; the two builds should be "
             "bitwise identical",
@@ -287,7 +284,7 @@ class AccuracyRegressionTest(unittest.TestCase):
         reference = self._oracle(q, k, v, mask, bias, d_out)
         stock = self._stock(q, k, v, mask, bias, d_out)
         stablefold = self._kernel(
-            implementations["stablefold"], q, k, v, mask, bias, d_out
+            implementations["turbopairformer"], q, k, v, mask, bias, d_out
         )
 
         for name, kernel_value, stock_value, ref in zip(
@@ -309,7 +306,7 @@ class AccuracyRegressionTest(unittest.TestCase):
         implementations = _implementations()
         shape = SHAPES["trunk_n384_d32"]
         case = self._case(shape)
-        for provider in ("stablefold", "intree"):
+        for provider in ("turbopairformer", "intree"):
             with self.subTest(provider=provider):
                 first = self._kernel(implementations[provider], *case)
                 second = self._kernel(implementations[provider], *case)

@@ -3,7 +3,7 @@
 
 """Compare two OpenFold3 checkpoints tensor by tensor.
 
-Moving the stable triangle routes onto the ``stablefold`` pip package is meant to
+Moving the stable triangle routes onto the ``turbopairformer`` pip package is meant to
 change packaging only.  Running the same runner YAML with the same seed under
 each provider and diffing the resulting checkpoints is the end-to-end form of
 that claim: every parameter after the optimizer step must match exactly, not

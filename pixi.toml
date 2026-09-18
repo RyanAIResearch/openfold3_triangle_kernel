@@ -196,16 +196,16 @@ openfold3-msa = { no-default-feature = true, features = [
 [feature.openfold3-editable.pypi-dependencies]
 openfold3 = { path = ".", editable = true }
 
-# StableFold is installed by a task, not a pypi path dependency: its AOT build
-# needs STABLEFOLD_BUILD_AOT=1, TORCH_CUDA_ARCH_LIST=9.0a and --no-build-isolation
+# TurboPairFormer is installed by a task, not a pypi path dependency: its AOT build
+# needs TURBOPAIRFORMER_BUILD_AOT=1, TORCH_CUDA_ARCH_LIST=9.0a and --no-build-isolation
 # (the extension links the exact runtime Torch ABI), none of which a declarative
-# dependency can express. Use STABLEFOLD_PYTHON for the standalone PyPI Torch
+# dependency can express. Use TURBOPAIRFORMER_PYTHON for the standalone PyPI Torch
 # environment; the existing Conda production runtime retains its own ABI.
 [feature.openfold3-editable.tasks]
-install-stablefold.cmd = ["bash", "scripts/stablefold/install_stablefold.sh"]
-install-stablefold.description = "Build and install a standalone StableFold wheel (requires STABLEFOLD_PYTHON with PyPI Torch)"
-doctor-stablefold.cmd = ["bash", "scripts/stablefold/doctor_stablefold.sh"]
-doctor-stablefold.description = "Preflight the stablefold install: GPU, package, AOT binaries, provider"
+install-turbopairformer.cmd = ["bash", "scripts/turbopairformer/install_turbopairformer.sh"]
+install-turbopairformer.description = "Build and install a standalone TurboPairFormer wheel (requires TURBOPAIRFORMER_PYTHON with PyPI Torch)"
+doctor-turbopairformer.cmd = ["bash", "scripts/turbopairformer/doctor_turbopairformer.sh"]
+doctor-turbopairformer.description = "Preflight the turbopairformer install: GPU, package, AOT binaries, provider"
 
 [feature.openfold3-editable-full.pypi-dependencies]
 openfold3 = { path = ".", editable = true, extras = ["deepspeed", "dev"] }

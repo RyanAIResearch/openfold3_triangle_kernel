@@ -1,9 +1,0 @@
-include setup.py
-include pyproject.toml
-include README.md
-include LICENSE
-include NOTICE
-recursive-include tools *.sh *.py
-recursive-include stablefold *.cu *.py *.json *.md
-exclude stablefold/*.local.json
-global-exclude *.so *.pyc

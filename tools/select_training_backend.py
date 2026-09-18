@@ -34,7 +34,7 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_deepspeed_evo_attention": False,
         "use_lma": False,
     },
-    "stablefold": {
+    "turbopairformer": {
         "use_triton_triangle_kernels": False,
         "use_cueq_triangle_kernels": False,
         "use_stable_triangle_attention": True,
@@ -51,10 +51,14 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_lma": False,
     },
 }
+# Preserve the historical CLI backend spelling used by production tooling.
+# The YAML flags above remain the host's existing stable-triangle settings.
+BACKEND_FLAGS["stablefold"] = BACKEND_FLAGS["turbopairformer"]
 
 # Backends served by the stable triangle kernels, mapped to the provider the
 # launcher must export so the run cannot silently pick the other build.
 BACKEND_KERNEL_PROVIDER: dict[str, str] = {
+    "turbopairformer": "turbopairformer",
     "stablefold": "intree",
 }
 
@@ -122,8 +126,9 @@ def main() -> None:
     parser.add_argument("--backend", required=True, choices=tuple(BACKEND_FLAGS))
     parser.add_argument(
         "--provider",
-        choices=("intree", "stablefold"),
-        help="kernel provider for --backend stablefold (default: intree); "
+        choices=("intree", "turbopairformer"),
+        help="kernel provider for --backend turbopairformer "
+        "(default: turbopairformer; legacy stablefold backend defaults to intree); "
         "prints the required export because provider selection is outside YAML",
     )
     parser.add_argument(
@@ -137,8 +142,8 @@ def main() -> None:
         help="also configure one validation-free BF16 training step on one GPU",
     )
     args = parser.parse_args()
-    if args.provider is not None and args.backend != "stablefold":
-        parser.error("--provider requires --backend stablefold")
+    if args.provider is not None and args.backend not in BACKEND_KERNEL_PROVIDER:
+        parser.error("--provider requires --backend turbopairformer or stablefold")
 
     with args.runner_yaml.open() as source:
         config = yaml.safe_load(source)

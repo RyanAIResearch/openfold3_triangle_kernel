@@ -499,6 +499,21 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _select_kernel_provider(backend: str) -> None:
+    """Keep the standalone backend label tied to the installed package."""
+    if backend != "turbopairformer":
+        return
+    variable = "OPENFOLD3_TRIANGLE_PROVIDER"
+    requested = os.environ.get(variable, "turbopairformer").strip().lower()
+    if requested != "turbopairformer":
+        raise ValueError(
+            "--backend turbopairformer requires "
+            "OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer; "
+            f"got {requested!r}"
+        )
+    os.environ[variable] = "turbopairformer"
+
+
 def main() -> None:
     args = _parser().parse_args()
     if args.warmup_steps < 1:
@@ -511,6 +526,7 @@ def main() -> None:
         raise ValueError("--devices must be at least 1")
     if args.num_nodes < 1:
         raise ValueError("--num-nodes must be at least 1")
+    _select_kernel_provider(args.backend)
 
     source_root = Path(__file__).resolve().parents[1]
     import openfold3
