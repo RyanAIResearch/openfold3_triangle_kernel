@@ -5,7 +5,7 @@
 #
 # Build args:
 #   BASE_IMAGE   - Base Docker image (default: ubuntu:22.04)
-#   PIXI_VERSION - Pixi version to install (default: v0.68.0)
+#   PIXI_VERSION - Pixi version to install (default: v0.80.0)
 #   PIXI_ENV     - Pixi development environment name (default: openfold3-cuda12-dev)
 #
 # Example:
@@ -17,8 +17,15 @@ ARG BASE_IMAGE=ubuntu:22.04
 # === Builder stage: install pixi and resolve environment ===
 FROM ${BASE_IMAGE} AS builder
 
-ARG PIXI_VERSION=v0.76.0
+ARG PIXI_VERSION=v0.80.0
 ARG PIXI_ENV=openfold3-cuda12-dev
+
+# This image installs the checkout in editable mode. The production environment
+# instead installs an attested wheel and must not be overwritten by that step.
+RUN if [ "${PIXI_ENV}" = "openfold3-cuda12" ]; then \
+        echo "Use openfold3-cuda12-dev for Docker development builds; see README.md for the pinned production workflow." >&2; \
+        exit 1; \
+    fi
 
 # Install minimal system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -53,7 +60,7 @@ RUN case "${PIXI_ENV}" in \
 # === Devel stage: lean runtime image with pixi activation ===
 FROM ${BASE_IMAGE} AS devel
 
-ARG PIXI_VERSION=v0.76.0
+ARG PIXI_VERSION=v0.80.0
 ARG PIXI_ENV=openfold3-cuda12-dev
 
 # Install runtime system dependencies

@@ -13,7 +13,13 @@ gradients. A fixed-order `dBias` reduction replaces floating-point atomics, and
 an optional forward rounding residual improves the row-scalar used by the
 backward without changing the public BF16 output.
 
-## OpenBind-0
+## Parameters available in OpenFold3
+
+![OpenFold3 parameter sets and the OpenFold3 versions they are compatible with](docs/imgs/openfold3_parameter_table.png)
+
+Each parameter set is compatible with a specific range of OpenFold3 releases. See [OpenFold3 Parameters](https://openfold-3.readthedocs.io/en/latest/parameters_reference.html) in our documentation for checkpoint file names and details on how parameters are resolved at inference time.
+
+### OpenBind-0
 The default parameters shipped with OpenFold3 `>=0.5.0` are [OpenBind-0](https://openbind.uk/news/blog-openbind-0-advancing-open-molecular-structure-prediction/), which is trained using the forthcoming OpenFold3 architecture with a June 2025 training cutoff. See the [announcement blog post](https://openbind.uk/news/blog-openbind-0-advancing-open-molecular-structure-prediction/) for benchmarks and details. We reccomend using the OpenBind-0 model over OpenFold3-preview2 for everyday usage.
 
 If you want to keep using the OpenFold3-preview2 weights, install an older release of OpenFold3 - see [how do I use an older set of parameters](https://openfold-3.readthedocs.io/en/latest/parameters_reference.html#how-do-i-use-an-older-set-of-parameters) in our documentation.
@@ -33,6 +39,16 @@ A technical description of the OpenFold3-preview2 model version is available [he
 The prebuilt Triangle Attention extensions contain Hopper-specific SASS and no
 PTX fallback. An ABI or device mismatch is an error, not a reason to load the
 binary anyway.
+
+## Upstream synchronization
+
+The source tree includes AQLab `main` through
+[`7de748b7`](https://github.com/aqlaboratory/openfold-3/commit/7de748b7bc93adb5af0a4032d5e9f208b6e1325f)
+(2026-09-18), including template-server reliability, inference intermediate
+management, and memory-efficient metrics updates. See [`UPSTREAM.md`](UPSTREAM.md).
+The production environment below still installs the separately qualified
+`87ebe22da` wheel. Updating this checkout does not rebuild that wheel or claim
+GPU qualification of the newly merged host code.
 
 ## Pixi production workflow
 
