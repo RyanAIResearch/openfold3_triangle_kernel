@@ -259,11 +259,13 @@ The standalone `turbopairformer` package exposes both operators directly:
 ```python
 from turbopairformer import turbo_attention, turbo_trimul
 
-attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
-trimul_output = turbo_trimul(module, z, pair_mask)
+attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
+trimul_output = turbo_trimul(module, z)
 ```
 
-Both calls validate supported inputs and provide PyTorch autograd integration.
+Masks default to `None` (all positions valid, noncausal); supply explicit masks
+for padded inputs. `pair_bias` remains required. Both calls validate supported
+inputs and provide PyTorch autograd integration.
 `module` supplies the TriMul weights from your model. See the
 [standalone package examples](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/README.md)
 for input shapes and the weight interface.
