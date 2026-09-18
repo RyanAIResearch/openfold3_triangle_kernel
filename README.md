@@ -254,18 +254,25 @@ been relabeled as measurements of this renamed release.
 
 ## Direct operator entry point
 
-Users integrating below the OpenFold3 model router can call:
+The standalone `turbopairformer` package exposes both operators directly:
 
 ```python
-from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
-    turbopairformer_triangle_attention,
-)
+from turbopairformer import turbo_attention, turbo_trimul
 
-output = turbopairformer_triangle_attention(q, k, v, mask, pair_bias)
+attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
+trimul_output = turbo_trimul(module, z, pair_mask)
 ```
 
-Use the public facade rather than importing private extension symbols. The facade
-validates the tensor/device contract and supplies PyTorch autograd integration.
+Both calls validate supported inputs and provide PyTorch autograd integration.
+`module` supplies the TriMul weights from your model. See the
+[standalone package examples](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/README.md)
+for input shapes and the weight interface.
+
+PyPI publication is pending. Install the candidate package in its dedicated
+environment using the
+[package installation guide](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/docs/source/turbopairformer_pip_quickstart.md).
+This package uses PyPI Torch / CUDA 12.8; the integrated production environment
+on `main` uses Conda Torch / CUDA 12.9.
 
 ## License and attribution
 
