@@ -1538,6 +1538,9 @@ __global__ void turbopairformer_sr_dq_reduce_kernel(
 }
 
 // dbias[h,q,k] = ((plane0 + plane1) + plane2) + ... in leaf order.
+// A thread owns up to eight adjacent keys, with independent FP32 folds.
+// Vectors never cross a row: workspace capacity can exceed the active slab.
+// Unaligned rows and row tails retain scalar memory accesses and the same fold.
 __global__ void turbopairformer_dq_dbias_finalize_kernel(
     const __nv_bfloat16* __restrict__ workspace,
     float* __restrict__ out_dbias,
@@ -1552,14 +1555,17 @@ __global__ void turbopairformer_dq_dbias_finalize_kernel(
     int query_capacity,
     int wave_leaves,
     bool continue_root) {
-  const int64_t linear =
+  constexpr int kElements = 8;
+  const int64_t vectors_per_row =
+      (static_cast<int64_t>(sequence) + kElements - 1) / kElements;
+  const int64_t vector =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (linear >= active_elements) {
+  const int64_t active_rows = active_elements / sequence;
+  if (vector >= active_rows * vectors_per_row) {
     return;
   }
-  int64_t remaining = linear;
-  const int key = static_cast<int>(remaining % sequence);
-  remaining /= sequence;
+  const int key = static_cast<int>(vector % vectors_per_row) * kElements;
+  int64_t remaining = vector / vectors_per_row;
   const int query_local = static_cast<int>(remaining % query_rows);
   remaining /= query_rows;
   const int head = static_cast<int>(remaining % heads);
@@ -1580,19 +1586,89 @@ __global__ void turbopairformer_dq_dbias_finalize_kernel(
         query_base + query_local) *
            sequence +
        key);
-  float root = continue_root
-      ? out_dbias[output_linear]
-      : __bfloat162float(workspace[workspace_linear]);
+  const int active_keys =
+      sequence - key < kElements ? sequence - key : kElements;
+  const bool full_vector = active_keys == kElements;
+  const bool vector_workspace = full_vector &&
+      workspace_plane_elements % kElements == 0 &&
+      (reinterpret_cast<uintptr_t>(workspace + workspace_linear) & 15U) == 0;
+  const bool vector_output = full_vector &&
+      (reinterpret_cast<uintptr_t>(out_dbias + output_linear) & 15U) == 0;
+  float root[kElements];
+  if (continue_root) {
+    if (vector_output) {
+#pragma unroll
+      for (int chunk = 0; chunk < 2; ++chunk) {
+        const float4 values = *reinterpret_cast<const float4*>(
+            out_dbias + output_linear + chunk * 4);
+        root[chunk * 4] = values.x;
+        root[chunk * 4 + 1] = values.y;
+        root[chunk * 4 + 2] = values.z;
+        root[chunk * 4 + 3] = values.w;
+      }
+    } else {
+#pragma unroll
+      for (int element = 0; element < kElements; ++element) {
+        if (element < active_keys) {
+          root[element] = out_dbias[output_linear + element];
+        }
+      }
+    }
+  } else if (vector_workspace) {
+    const uint4 first = *reinterpret_cast<const uint4*>(
+        workspace + workspace_linear);
+    const __nv_bfloat16* values =
+        reinterpret_cast<const __nv_bfloat16*>(&first);
+#pragma unroll
+    for (int element = 0; element < kElements; ++element) {
+      root[element] = __bfloat162float(values[element]);
+    }
+  } else {
+#pragma unroll
+    for (int element = 0; element < kElements; ++element) {
+      if (element < active_keys) {
+        root[element] = __bfloat162float(workspace[workspace_linear + element]);
+      }
+    }
+  }
   const int first_leaf = continue_root ? 0 : 1;
 #pragma unroll 1
   for (int leaf = first_leaf; leaf < wave_leaves; ++leaf) {
-    root = __fadd_rn(
-        root,
-        __bfloat162float(
-            workspace[static_cast<int64_t>(leaf) * workspace_plane_elements +
-                      workspace_linear]));
+    const __nv_bfloat16* leaf_values = workspace +
+        static_cast<int64_t>(leaf) * workspace_plane_elements + workspace_linear;
+    if (vector_workspace) {
+      const uint4 chunk = *reinterpret_cast<const uint4*>(leaf_values);
+      const __nv_bfloat16* values =
+          reinterpret_cast<const __nv_bfloat16*>(&chunk);
+#pragma unroll
+      for (int element = 0; element < kElements; ++element) {
+        root[element] = __fadd_rn(root[element], __bfloat162float(values[element]));
+      }
+    } else {
+#pragma unroll
+      for (int element = 0; element < kElements; ++element) {
+        if (element < active_keys) {
+          root[element] = __fadd_rn(
+              root[element], __bfloat162float(leaf_values[element]));
+        }
+      }
+    }
   }
-  out_dbias[output_linear] = root;
+  if (vector_output) {
+#pragma unroll
+    for (int chunk = 0; chunk < 2; ++chunk) {
+      *reinterpret_cast<float4*>(out_dbias + output_linear + chunk * 4) =
+          make_float4(root[chunk * 4], root[chunk * 4 + 1],
+                      root[chunk * 4 + 2], root[chunk * 4 + 3]);
+    }
+  } else {
+#pragma unroll
+    for (int element = 0; element < kElements; ++element) {
+      if (element < active_keys) {
+        out_dbias[output_linear + element] = root[element];
+      }
+    }
+  }
 }
 
 // Reduce the public per-batch BF16 gradient in flattened batch order. Every
@@ -1747,8 +1823,11 @@ void launch(
           active_elements, query_rows, "active dBias slab");
       active_elements = checked_positive_product(
           active_elements, sequence, "active dBias slab");
+      const int64_t finalize_vectors = checked_positive_product(
+          active_elements / sequence, positive_ceil_div(sequence, 8),
+          "dBias slab vectors");
       const int64_t finalize_blocks =
-          positive_ceil_div(active_elements, finalize_threads);
+          positive_ceil_div(finalize_vectors, finalize_threads);
       TORCH_CHECK(
           finalize_blocks > 0 && finalize_blocks <= 2147483647LL,
           "dBias slab finalizer exceeds the CUDA grid-x contract");
@@ -1945,8 +2024,11 @@ void launch_wg(
           active_elements, query_rows, "active dBias slab");
       active_elements = checked_positive_product(
           active_elements, sequence, "active dBias slab");
+      const int64_t finalize_vectors = checked_positive_product(
+          active_elements / sequence, positive_ceil_div(sequence, 8),
+          "dBias slab vectors");
       const int64_t finalize_blocks =
-          positive_ceil_div(active_elements, finalize_threads);
+          positive_ceil_div(finalize_vectors, finalize_threads);
       TORCH_CHECK(
           finalize_blocks > 0 && finalize_blocks <= 2147483647LL,
           "dBias slab finalizer exceeds the CUDA grid-x contract");
@@ -2135,8 +2217,11 @@ void launch_sr(
           active_elements, query_rows, "active dBias slab");
       active_elements = checked_positive_product(
           active_elements, sequence, "active dBias slab");
+      const int64_t finalize_vectors = checked_positive_product(
+          active_elements / sequence, positive_ceil_div(sequence, 8),
+          "dBias slab vectors");
       const int64_t finalize_blocks =
-          positive_ceil_div(active_elements, finalize_threads);
+          positive_ceil_div(finalize_vectors, finalize_threads);
       TORCH_CHECK(
           finalize_blocks > 0 && finalize_blocks <= 2147483647LL,
           "dBias slab finalizer exceeds the CUDA grid-x contract");
