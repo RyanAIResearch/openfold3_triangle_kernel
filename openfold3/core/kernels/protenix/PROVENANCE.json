@@ -39,8 +39,8 @@
       "upstream_sha256": "4da7f146f0c7e399b624ed818354c6e5044213ff873a3b995f66d3af988f0de8",
       "upstream_git_blob_sha1": "4d9a05f5b53c2de9c854bbd7ba6137cffdf7c731",
       "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/autotune.py",
-      "vendored_sha256": "b3309b75337f2b86d6ea8a5a0485747a4104980ba2b56539d0301c93446eb1d0",
-      "adaptation": "Private imports; cache selected at launch for actual device/rank and writable user cache; isolated in-memory caches and lazy disk loading. Autotune keys/configs/benchmark selection preserved."
+      "vendored_sha256": "1757b28b7a920161d3af462b6bc314f92b7bb784ed7c9f4c37113fdaa6110e35",
+      "adaptation": "Private imports; cache selected at launch for actual device/rank and writable user cache; isolated in-memory caches and lazy disk loading. Autotune keys/configs/benchmark selection preserved. Types-only annotations for cache/arguments and precise ignores for unchanged upstream Triton metadata/min constructs; no runtime or autotune-policy changes from typing edits."
     },
     {
       "path": "_vendor/autotune_helpers.py",

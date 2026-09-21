@@ -283,13 +283,13 @@ from turbopairformer import turbo_attention, turbo_trimul
 B, N, H, D = 1, 128, 4, 32
 # q/k/v: [batch, outer, heads, sequence, head_dim]; here outer = N.
 q, k, v = [
-    torch.randn(B, N, H, N, D, device="cuda", dtype=torch.bfloat16,
-                requires_grad=True)
+    torch.randn(B, N, H, N, D, device="cuda", dtype=torch.bfloat16, requires_grad=True)
     for _ in range(3)
 ]
 # Pair bias is shared across the outer dimension.
-pair_bias = torch.randn(B, 1, H, N, N, device="cuda", dtype=torch.bfloat16,
-                        requires_grad=True)
+pair_bias = torch.randn(
+    B, 1, H, N, N, device="cuda", dtype=torch.bfloat16, requires_grad=True
+)
 
 attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
 attention_output.float().square().mean().backward()

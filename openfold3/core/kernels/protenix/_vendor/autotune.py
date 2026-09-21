@@ -13,6 +13,7 @@
 # limitations under the License.
 
 # OpenFold adaptation: private package imports; kernel arithmetic is unchanged.
+# Type annotations and two precise ignores describe unchanged upstream constructs.
 
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ import logging
 import os
 import time
 from multiprocessing import Lock
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import triton
@@ -64,8 +66,8 @@ class Autotuner(triton.runtime.Autotuner):
         arg_names: List[str],
         configs: List[triton.Config],
         key: List[str],
-        reset_to_zero: List[str],
-        restore_value: List[str],
+        reset_to_zero: Optional[List[str]],
+        restore_value: Optional[List[str]],
         pre_hook: Optional[Callable] = None,
         post_hook: Optional[Callable] = None,
         prune_configs_by: Optional[Dict] = None,
@@ -89,8 +91,10 @@ class Autotuner(triton.runtime.Autotuner):
         )
         # OpenFold adaptation: resolve the actual tensor device at launch time.
         # Importing this private module does not initialize CUDA or create files.
-        self.cache_file = None
-        self._device_caches = {}
+        self.cache_file: Path | None = None
+        self.cache: dict[str, triton.Config]
+        self._device_caches: dict[Path, dict[str, triton.Config]] = {}
+        self.nargs: Optional[Dict[str, Any]]
 
     def _select_cache(self, args: Any, kwargs: Any) -> None:
         device = next(
@@ -153,7 +157,7 @@ class Autotuner(triton.runtime.Autotuner):
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
             _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
-            key = [_args[key] for key in self.keys if key in _args]
+            key: Any = [_args[key] for key in self.keys if key in _args]
             for _, arg in _args.items():
                 if hasattr(arg, "dtype"):
                     key.append(str(arg.dtype))
@@ -169,7 +173,8 @@ class Autotuner(triton.runtime.Autotuner):
                 }
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
-                self.cache[key] = builtins.min(timings, key=timings.get)
+                # Every key visited by min belongs to timings, so get cannot be None.
+                self.cache[key] = builtins.min(timings, key=timings.get)  # type: ignore[arg-type]
                 full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
                 self.pre_hook(full_nargs, reset_only=True)
                 self.configs_timings = timings
@@ -267,7 +272,7 @@ def autotune(
     def decorator(fn: Callable) -> Autotuner:
         return Autotuner(
             fn,
-            fn.arg_names,
+            fn.arg_names,  # type: ignore[attr-defined]  # Triton JITFunction metadata.
             configs,
             key,
             reset_to_zero,
