@@ -43,7 +43,8 @@ A technical description of the OpenFold3-preview2 model version is available [he
 ## Requirements
 
 - Linux x86-64
-- NVIDIA H100 80 GB, compute capability 9.0 (`sm_90a`)
+- NVIDIA H100 or H200, compute capability 9.0 (`sm_90a`); H100 validated,
+  H200 enabled in the source runtime with device validation pending
 - CPython 3.14
 - PyTorch 2.10.0 built for CUDA 12.9
 - NVIDIA driver compatible with the locked CUDA 12.9 runtime; users do not need NVCC
@@ -52,6 +53,11 @@ A technical description of the OpenFold3-preview2 model version is available [he
 The prebuilt Triangle Attention extensions contain Hopper-specific SASS and no
 PTX fallback. An ABI or device mismatch is an error, not a reason to load the
 binary anyway.
+
+The source runtime accepts H100 and H200 for both Triangle Attention and TriMul.
+The pinned Pixi wheel below remains the separately validated H100 artifact; this
+source change does not rebuild or replace that installed runtime. H200 timing
+and numerical results have not yet been measured.
 
 ## Upstream synchronization
 
@@ -89,9 +95,13 @@ run them independently on every host because Pixi does not synchronize nodes.
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
 pixi install -e openfold3-cuda12
-pixi run -e openfold3-cuda12 doctor-h100
+pixi run -e openfold3-cuda12 doctor-hopper
 pixi run -e openfold3-cuda12 verify-aot
 ```
+
+`doctor-hopper` checks H100/H200 hardware and the locked runtime prerequisites;
+`doctor-h100` remains an alias. Passing this preflight does not qualify an
+installed wheel on H200.
 
 The production Pixi environment deliberately contains no editable OpenFold3
 dependency. `pixi install` installs the repository-pinned wheel directly from

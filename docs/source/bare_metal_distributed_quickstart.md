@@ -8,6 +8,10 @@ The prebuilt OpenFold3 runtime with TurboPairFormer kernels supports full
 NVIDIA H100 80 GB GPUs on Linux x86-64. It does not require a system CUDA Toolkit
 or local kernel build.
 
+The current source runtime also accepts H200 for Triangle Attention and TriMul.
+H200 execution validation is pending. This source update does not replace the
+pinned H100 wheel used by the installation steps below.
+
 This `main` workflow installs a pinned OpenFold3 binary with Conda PyTorch
 2.10.0, CUDA 12.9 and CPython 3.14. The installed package remains `openfold3`;
 its kernel modules, extension identities and receipt names use TurboPairFormer.
@@ -50,9 +54,13 @@ command or local kernel build is required.
 To optionally check the GPU, environment, and all five AOT kernel modules, run:
 
 ```bash
-pixi run -e openfold3-cuda12 doctor-h100
+pixi run -e openfold3-cuda12 doctor-hopper
 pixi run -e openfold3-cuda12 verify-aot
 ```
+
+`doctor-hopper` accepts full H100/H200 GPUs with compute capability 9.0 and
+checks the locked runtime prerequisites. The existing `doctor-h100` command
+remains an alias. These checks do not constitute H200 execution validation.
 
 If verification reports `TurboPairFormer AOT artifacts require a clean Git checkout`, first
 inspect the checkout:

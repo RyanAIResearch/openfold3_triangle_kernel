@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host and data preflight for the TurboPairFormer H100 Pixi environment.
+"""Host and data preflight for the TurboPairFormer Hopper Pixi environment.
 
 This module intentionally does not launch training or modify an OpenFold3 runner
 configuration. Training remains owned by AQLab's ``run_openfold`` entry point and
@@ -74,8 +74,8 @@ def prepare_data(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def doctor_h100(_: argparse.Namespace) -> dict[str, Any]:
-    """Verify the exact local H100 runtime prerequisites."""
+def doctor_hopper(_: argparse.Namespace) -> dict[str, Any]:
+    """Verify runtime prerequisites for full H100 or H200 GPUs."""
 
     import pytorch_lightning as pl
     import torch
@@ -95,14 +95,16 @@ def doctor_h100(_: argparse.Namespace) -> dict[str, Any]:
     for index in range(torch.cuda.device_count()):
         properties = torch.cuda.get_device_properties(index)
         capability = torch.cuda.get_device_capability(index)
-        if capability != (9, 0) or "H100" not in properties.name:
+        if capability != (9, 0) or not any(
+            model in properties.name.upper() for model in ("H100", "H200")
+        ):
             raise WorkflowError(
-                f"device {index} is not a qualified full H100: "
+                f"device {index} requires an H100 or H200 with compute capability 9.0: "
                 f"{properties.name}, cc={capability}"
             )
         if properties.total_memory < 75 * 1024**3:
             raise WorkflowError(
-                f"device {index} exposes too little memory for full H100: "
+                f"device {index} exposes less than the required 75 GiB: "
                 f"{properties.total_memory}"
             )
         devices.append(
@@ -115,7 +117,7 @@ def doctor_h100(_: argparse.Namespace) -> dict[str, Any]:
             }
         )
     if not devices:
-        raise WorkflowError("the H100 Pixi environment exposes no CUDA devices")
+        raise WorkflowError("the Hopper Pixi environment exposes no CUDA devices")
 
     return {
         "status": "PASS",
@@ -128,10 +130,16 @@ def doctor_h100(_: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def doctor_h100(args: argparse.Namespace) -> dict[str, Any]:
+    """Compatibility entry point for the existing doctor-h100 command."""
+
+    return doctor_hopper(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("doctor-h100")
+    subparsers.add_parser("doctor-hopper", aliases=["doctor-h100"])
     data = subparsers.add_parser("prepare-training-data")
     data.add_argument("--work-root", default=str(DEFAULT_WORK_ROOT))
     data.add_argument("--data-uri", default=DEFAULT_DATA_URI)
@@ -141,8 +149,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    if args.command == "doctor-h100":
-        result = doctor_h100(args)
+    if args.command in ("doctor-hopper", "doctor-h100"):
+        result = doctor_hopper(args)
     elif args.command == "prepare-training-data":
         result = prepare_data(args)
     else:  # pragma: no cover - argparse owns the command choices.

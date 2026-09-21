@@ -304,15 +304,16 @@ def _local_kernel_record(
             raise DistributedContractError("CUDA device UUID is unavailable")
         if (
             capability != (9, 0)
-            or "H100" not in device_name
+            or not any(model in device_name.upper() for model in ("H100", "H200"))
             or "MIG" in device_name.upper()
             or device_uuid.upper().startswith("MIG")
             or int(properties.total_memory) < 75 * 1024**3
             or int(properties.multi_processor_count) < 100
         ):
             raise DistributedContractError(
-                "TurboPairFormer kernel DDP requires full H100 80GB-class GPUs "
-                "with MIG disabled"
+                "TurboPairFormer kernel DDP requires full H100 or H200 GPUs "
+                "with compute capability 9.0, at least 75 GiB and 100 SMs, "
+                "and MIG disabled"
             )
 
         from openfold3.core.kernels.cuda._aot_runtime import (

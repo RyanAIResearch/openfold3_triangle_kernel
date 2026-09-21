@@ -3,8 +3,8 @@
 """Metadata-only support contract for the TurboPairFormer TriMul fast path.
 
 This module deliberately does not import :mod:`turbopairformer_trimul`, load an
-extension, or launch a kernel.  It separates the currently validated H100
-fast-path domain from future selector/fallback policy.
+extension, or launch a kernel.  It defines the H100/H200 fast-path domain
+separately from selector/fallback policy; H200 execution validation is pending.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ def _accepted(batch: int, sequence: int, channels: int) -> SupportResult:
         True,
         "supported",
         (
-            "supported H100 sm90 BF16 TriMul fast path: "
+            "supported H100/H200 sm90 BF16 TriMul fast path: "
             f"batch={batch}, N={sequence}, C_z=C_hidden={channels}"
         ),
         batch=batch,
@@ -147,15 +147,17 @@ def evaluate_stable_trimul_support(
 ) -> SupportResult:
     """Evaluate the TurboPairFormer TriMul contract without CUDA/JIT side effects."""
 
-    if metadata.capability != (9, 0) or "H100" not in metadata.device_name.upper():
+    if metadata.capability != (9, 0) or not any(
+        model in metadata.device_name.upper() for model in ("H100", "H200")
+    ):
         return _rejected(
             "architecture",
-            "TurboPairFormer TriMul fast path requires an NVIDIA H100 with sm90",
+            "TurboPairFormer TriMul requires an NVIDIA H100 or H200 with sm90",
         )
     if metadata.multiprocessor_count <= 0:
         return _rejected(
             "device_metadata",
-            "H100 multiprocessor_count must be a positive integer",
+            "Hopper multiprocessor_count must be a positive integer",
         )
 
     z = metadata.z
@@ -276,7 +278,8 @@ def evaluate_stable_trimul_support(
     ):
         return _rejected(
             "module_parameters",
-            "module must expose exactly the TurboPairFormer TriMul weight/LN parameters",
+            "module must expose exactly the TurboPairFormer TriMul "
+            "weight/LN parameters",
         )
     for name, expected_shape in expected_shapes.items():
         tensor = named_weights[name]

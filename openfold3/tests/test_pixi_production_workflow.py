@@ -93,6 +93,7 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
     tasks = _manifest()["feature"]["turbopairformer-h100"]["tasks"]
     assert set(tasks) == {
         "doctor-h100",
+        "doctor-hopper",
         "download-pdb-subset",
         "generate-pdb-subset",
         "purify-pdb-subset",
@@ -113,6 +114,8 @@ def test_h100_pixi_tasks_keep_training_in_official_launchers():
         "plot-backend-comparison",
     }
     commands = {name: value["cmd"] for name, value in tasks.items() if "cmd" in value}
+    assert commands["doctor-hopper"][-1] == "doctor-hopper"
+    assert commands["doctor-h100"][-1] == "doctor-h100"
     assert commands["train-single-gpu"][-1] == "run_openfold"
     assert commands["train-single-node"][-1] == "run_openfold"
     assert commands["train-multinode"][-1] == "torchrun"

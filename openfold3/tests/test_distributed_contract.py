@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openfold3.core.utils import distributed_contract
 from openfold3.core.utils.distributed_contract import (
     DistributedContractError,
     TurboPairFormerKernelDDPCallback,
@@ -165,6 +166,131 @@ def _kernel_record(rank: int) -> dict:
             "modules": {"turbopairformer_forward": {"sha256": "c" * 64}},
         },
     }
+
+
+@pytest.fixture
+def collect_mocked_kernel_record(monkeypatch):
+    """Exercise the actual per-rank gate without CUDA or a process group."""
+    from openfold3.core.kernels.cuda import _aot_runtime
+
+    monkeypatch.setattr(distributed_contract.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(distributed_contract.dist, "get_world_size", lambda: 2)
+    monkeypatch.setattr(distributed_contract.dist, "get_backend", lambda: "nccl")
+    monkeypatch.setattr(distributed_contract.pl, "__version__", "2.6.1")
+    monkeypatch.setattr(distributed_contract, "_runtime_identity", lambda: {})
+    for name, value in _kernel_record(0)["execution_environment"].items():
+        monkeypatch.setenv(name, value)
+
+    aot_calls = []
+
+    def aot_identity(modules):
+        aot_calls.append(modules)
+        return {"modules": list(modules)}
+
+    monkeypatch.setattr(_aot_runtime, "distributed_aot_identity", aot_identity)
+    cuda = distributed_contract.torch.cuda
+    monkeypatch.setattr(cuda, "is_available", lambda: True)
+    monkeypatch.setattr(cuda, "current_device", lambda: 0)
+
+    def collect(
+        *,
+        device_name="NVIDIA H200",
+        capability=(9, 0),
+        memory_gib=141,
+        multiprocessors=132,
+        device_uuid="GPU-00000000-0000-0000-0000-000000000001",
+    ):
+        properties = SimpleNamespace(
+            name=device_name,
+            total_memory=memory_gib * 1024**3,
+            multi_processor_count=multiprocessors,
+            uuid=device_uuid,
+        )
+        monkeypatch.setattr(cuda, "get_device_properties", lambda index: properties)
+        monkeypatch.setattr(cuda, "get_device_capability", lambda index: capability)
+        monkeypatch.setattr(cuda, "get_device_name", lambda index: device_name)
+        module = SimpleNamespace(
+            config=_config(train_attention=True, train_trimul=True)
+        )
+        trainer = SimpleNamespace(
+            global_rank=0,
+            local_rank=0,
+            node_rank=0,
+            world_size=2,
+            strategy=distributed_contract.DDPStrategy(),
+        )
+        return distributed_contract._local_kernel_record(
+            trainer,
+            module,
+            expected_world_size=2,
+            expected_num_nodes=1,
+            expected_devices_per_node=2,
+            expected_aot_modules=required_turbopairformer_aot_modules(module),
+        )
+
+    return collect, aot_calls
+
+
+@pytest.mark.parametrize(
+    ("device_name", "memory_gib"),
+    (("NVIDIA H100 80GB HBM3", 80), ("NVIDIA H200", 141), ("NVIDIA H200 NVL", 141)),
+)
+def test_local_kernel_record_accepts_full_h100_and_h200(
+    collect_mocked_kernel_record, device_name, memory_gib
+):
+    collect, aot_calls = collect_mocked_kernel_record
+    record = collect(device_name=device_name, memory_gib=memory_gib)
+
+    assert record["ok"], record.get("error")
+    assert record["device_name"] == device_name
+    assert record["compute_capability"] == [9, 0]
+    assert len(aot_calls) == 1
+    assert set(aot_calls[0]) == {
+        "turbopairformer_forward",
+        "turbopairformer_delta",
+        "turbopairformer_dkdv",
+        "turbopairformer_dq_dbias",
+        "turbopairformer_trimul",
+    }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"capability": (8, 0)},
+        {"capability": (10, 0)},
+        {"device_name": "NVIDIA H800"},
+        {"device_name": "NVIDIA B200"},
+        {"device_name": "NVIDIA H200 MIG 7g.141gb"},
+        {"device_uuid": "MIG-00000000-0000-0000-0000-000000000001"},
+        {"device_uuid": ""},
+        {"memory_gib": 74},
+        {"multiprocessors": 99},
+    ),
+)
+def test_local_kernel_record_retains_device_rejections(
+    collect_mocked_kernel_record, changes
+):
+    collect, aot_calls = collect_mocked_kernel_record
+    record = collect(**changes)
+
+    assert not record["ok"]
+    assert "DistributedContractError" in record["error"]
+    assert aot_calls == []
+
+
+def test_kernel_rank_identity_accepts_h200_and_rejects_mixed_models():
+    first, second = _kernel_record(0), _kernel_record(1)
+    for record in (first, second):
+        record.update(
+            device_name="NVIDIA H200",
+            device_total_memory_bytes=141 * 1024**3,
+            device_multiprocessor_count=132,
+        )
+    _validate_kernel_records([first, second])
+
+    with pytest.raises(DistributedContractError, match="device_name"):
+        _validate_kernel_records([first, _kernel_record(1)])
 
 
 def test_kernel_rank_identity_accepts_one_rank_per_gpu():

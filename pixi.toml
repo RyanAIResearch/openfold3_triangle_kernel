@@ -459,6 +459,7 @@ env.OPENFOLD3_SR_BACKWARD = "1"
 env.OPENFOLD3_SR_SHADOW = "1"
 
 [feature.turbopairformer-h100.tasks]
+doctor-hopper.cmd = ["python", "-m", "tools.production_training", "doctor-hopper"]
 doctor-h100.cmd = ["python", "-m", "tools.production_training", "doctor-h100"]
 prepare-training-data.cmd = [
     "python",
