@@ -107,6 +107,7 @@ model_config = mlc.ConfigDict(
                     # Default-off fixed-tree H100 Triangle Attention research
                     # backend for the main MSA and Pairformer pair blocks only.
                     "use_stable_triangle_attention": False,
+                    "use_protenix_triangle_attention": False,
                     "use_stable_triangle_multiplicative": False,
                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
                     # exclusive with use_deepspeed_evo_attention.
@@ -122,6 +123,7 @@ model_config = mlc.ConfigDict(
                     "use_deepspeed_evo_attention": False,
                     "use_cueq_triangle_kernels": False,
                     "use_stable_triangle_attention": False,
+                    "use_protenix_triangle_attention": False,
                     "use_stable_triangle_multiplicative": False,
                     "use_triton_triangle_kernels": True,
                     "use_lma": False,

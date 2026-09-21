@@ -39,11 +39,13 @@ BACKEND_ORDER = (
     "triton",
     "cueq",
     "turbopairformer",
+    "protenix",
     "deepspeed-evo",
 )
 # Keep machine-readable backend keys distinct from their display labels.
 BACKEND_LABELS = {
     "turbopairformer": "TurboPairFormer",
+    "protenix": "Protenix Attention + cuEq TriMul",
 }
 MATCHED_PROTOCOL_FIELDS = (
     "seed",

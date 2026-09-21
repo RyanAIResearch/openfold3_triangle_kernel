@@ -367,6 +367,7 @@ class Attention(nn.Module):
         lma_q_chunk_size: int = DEFAULT_LMA_Q_CHUNK_SIZE,
         lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
         use_high_precision: bool = False,
+        use_protenix_triangle_attention: bool = False,
     ) -> torch.Tensor:
         """
         Args:
@@ -386,6 +387,9 @@ class Attention(nn.Module):
             use_triton_triangle_kernels:
                 Whether to use Triton-based memory-efficient attention kernel.
                 Mutually exclusive with other kernel options.
+            use_protenix_triangle_attention:
+                Use Protenix for BF16 triangle attention, with host Q scaling.
+                FP32 sites retain stock attention. cuEq may still own TriMul.
             use_stable_triangle_attention:
                 Whether to use the default-off, fixed-tree H100 Triangle
                 Attention backend. Mutually exclusive with every other
@@ -409,6 +413,17 @@ class Attention(nn.Module):
                 "If use_lma is specified, lma_q_chunk_size and "
                 "lma_kv_chunk_size must be provided"
             )
+
+        if use_protenix_triangle_attention:
+            if any((use_stable_triangle_attention, use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels, use_lma, use_high_precision)):
+                raise ValueError(
+                    "use_protenix_triangle_attention is mutually exclusive with "
+                    "other attention backends and high-precision attention"
+                )
+            # cuEq still owns TriMul; the Protenix request owns this attention
+            # site, including its FP32 stock path, so cuEq cannot take over.
+            use_cueq_triangle_kernels = False
 
         # Product precedence: TurboPairFormer owns attention whenever its flag is
         # on; a simultaneous cuEq/Triton request (the "cuEq keeps trimul"
@@ -515,7 +530,18 @@ class Attention(nn.Module):
             ),
         )
 
-        if use_stable_triangle_attention:
+        if use_protenix_triangle_attention and q.dtype != torch.float32:
+            if len(biases) != 2:
+                raise ValueError(
+                    "Protenix Triangle Attention requires mask and pair biases"
+                )
+            # This optional provider is loaded only by an explicit BF16 request.
+            # _prep_qkv has already applied the scale exactly once. Provider
+            # failures propagate instead of silently selecting another backend.
+            from openfold3.core.kernels.protenix import attention_scaled
+
+            o = attention_scaled(q, k, v, biases[0], biases[1])
+        elif use_stable_triangle_attention:
             # Keep CPU imports and every default/official backend independent of
             # the research extension. Explicit selection is fail-closed: import,
             # build, support, launch, and backward failures propagate unchanged.

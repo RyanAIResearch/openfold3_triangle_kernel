@@ -136,6 +136,7 @@ class PairFormerBlock(nn.Module):
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         _attn_chunk_size: int | None = None,
+        use_protenix_triangle_attention: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -177,6 +178,21 @@ class PairFormerBlock(nn.Module):
                 [*, N_token, N_token, C_z] Pair embedding
         """
 
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            if (chunk_size is not None or _attn_chunk_size is not None or inplace_safe):
+                raise ValueError(
+                    "Protenix requires unchunked, non-inplace execution "
+                    "without inference offload"
+                )
+
         single_trans_mask = single_mask if _mask_trans else None
 
         z = self.pair_stack(
@@ -187,6 +203,7 @@ class PairFormerBlock(nn.Module):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
@@ -338,6 +355,7 @@ class PairFormerStack(nn.Module):
         use_lma: bool,
         inplace_safe: bool,
         _mask_trans: bool,
+        use_protenix_triangle_attention: bool = False,
     ):
         """
         Partially initialize the PairFormer blocks. Optionally add cache clearing
@@ -357,6 +375,7 @@ class PairFormerStack(nn.Module):
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_protenix_triangle_attention=use_protenix_triangle_attention,
                 use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
@@ -421,6 +440,7 @@ class PairFormerStack(nn.Module):
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
+        use_protenix_triangle_attention: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -454,6 +474,21 @@ class PairFormerStack(nn.Module):
             z:
                 [*, N_token, N_token, C_z] Pair embedding
         """
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            if (chunk_size is not None or inplace_safe):
+                raise ValueError(
+                    "Protenix requires unchunked, non-inplace execution "
+                    "without inference offload"
+                )
+
         if use_stable_triangle_attention and chunk_size is not None:
             raise ValueError(
                 "stable Triangle Attention does not support chunked Pairformer stacks"
@@ -469,6 +504,7 @@ class PairFormerStack(nn.Module):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
             use_lma=use_lma,
             inplace_safe=inplace_safe,

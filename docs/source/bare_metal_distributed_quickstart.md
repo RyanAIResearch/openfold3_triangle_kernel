@@ -198,6 +198,7 @@ pixi run -e openfold3-cuda12 select-training-backend \
 | `triton` | OpenFold3 Triton triangle attention with the stock PyTorch training TMU path |
 | `cueq` | NVIDIA cuEquivariance triangle kernels |
 | `turbopairformer` | TurboPairFormer triangle attention and triangle multiplicative kernels |
+| `protenix` | ByteDance Protenix triangle attention + cuEq TriMul; [single-H100 scope and installation](protenix_backend.md) |
 | `deepspeed-evo` | DeepSpeed Evo attention operator; this does not enable ZeRO |
 
 The selector first disables every mutually exclusive route and then enables the

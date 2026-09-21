@@ -123,6 +123,7 @@ class TemplatePairBlock(PairBlock):
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         _attn_chunk_size: int | None = None,
+        use_protenix_triangle_attention: bool = False,
     ):
         """
         Helper function to process exactly one template slice.
@@ -144,6 +145,7 @@ class TemplatePairBlock(PairBlock):
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_protenix_triangle_attention=use_protenix_triangle_attention,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
             )
@@ -157,6 +159,7 @@ class TemplatePairBlock(PairBlock):
                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                     use_triton_triangle_kernels=use_triton_triangle_kernels,
                     use_stable_triangle_attention=use_stable_triangle_attention,
+                    use_protenix_triangle_attention=use_protenix_triangle_attention,
                     use_lma=use_lma,
                     inplace_safe=inplace_safe,
                 ),
@@ -192,6 +195,7 @@ class TemplatePairBlock(PairBlock):
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         _attn_chunk_size: int | None = None,
+        use_protenix_triangle_attention: bool = False,
     ):
         """
         Args:
@@ -220,6 +224,21 @@ class TemplatePairBlock(PairBlock):
             [*, N_templ, N_res, N_res, C_t] Template embedding update
         """
 
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            if (chunk_size is not None or _attn_chunk_size is not None or inplace_safe):
+                raise ValueError(
+                    "Protenix requires unchunked, non-inplace execution "
+                    "without inference offload"
+                )
+
         if _attn_chunk_size is None:
             _attn_chunk_size = chunk_size
 
@@ -234,6 +253,7 @@ class TemplatePairBlock(PairBlock):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
@@ -384,6 +404,7 @@ class TemplatePairStack(nn.Module):
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
+        use_protenix_triangle_attention: bool = False,
     ):
         blocks = [
             partial(
@@ -394,6 +415,7 @@ class TemplatePairStack(nn.Module):
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_protenix_triangle_attention=use_protenix_triangle_attention,
                 use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
@@ -451,6 +473,7 @@ class TemplatePairStack(nn.Module):
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
+        use_protenix_triangle_attention: bool = False,
     ):
         """
         Args:
@@ -476,6 +499,21 @@ class TemplatePairStack(nn.Module):
         Returns:
             [*, N_templ, N_res, N_res, C_t] template embedding update
         """
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            if (chunk_size is not None or inplace_safe):
+                raise ValueError(
+                    "Protenix requires unchunked, non-inplace execution "
+                    "without inference offload"
+                )
+
         if mask.shape[-3] == 1:
             expand_idx = list(mask.shape)
             expand_idx[-3] = t.shape[-4]
@@ -489,6 +527,7 @@ class TemplatePairStack(nn.Module):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
@@ -545,6 +584,7 @@ class TemplateEmbedderAllAtom(nn.Module):
         use_stable_triangle_multiplicative: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
+        use_protenix_triangle_attention: bool = False,
     ) -> torch.Tensor:
         """
         Args:
@@ -571,6 +611,17 @@ class TemplateEmbedderAllAtom(nn.Module):
             t:
                 [*, N_token, N_token, C_z] Template embedding
         """
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            raise ValueError("Protenix does not support inference offload")
+
         batch_dims = z.shape[:-3]
         n_token = z.shape[-2]
         out_device = z.device
@@ -606,6 +657,7 @@ class TemplateEmbedderAllAtom(nn.Module):
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_protenix_triangle_attention=use_protenix_triangle_attention,
                 use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
@@ -636,6 +688,7 @@ class TemplateEmbedderAllAtom(nn.Module):
         use_stable_triangle_multiplicative: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
+        use_protenix_triangle_attention: bool = False,
     ) -> torch.Tensor:
         # [*, N_templ, N_token, N_token, C_t]
         t = self.template_pair_embedder(batch, z)
@@ -652,6 +705,7 @@ class TemplateEmbedderAllAtom(nn.Module):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
@@ -675,6 +729,7 @@ class TemplateEmbedderAllAtom(nn.Module):
         use_lma: bool = False,
         inplace_safe: bool = False,
         offload_inference: bool = False,
+        use_protenix_triangle_attention: bool = False,
     ) -> torch.Tensor:
         """
         Args:
@@ -705,6 +760,21 @@ class TemplateEmbedderAllAtom(nn.Module):
             t:
                 [*, N_token, N_token, C_z] Template embedding
         """
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            if (chunk_size is not None or inplace_safe or offload_inference):
+                raise ValueError(
+                    "Protenix requires unchunked, non-inplace execution "
+                    "without inference offload"
+                )
+
         n_templ = batch["template_restype"].shape[-3]
 
         if offload_inference:
@@ -718,6 +788,7 @@ class TemplateEmbedderAllAtom(nn.Module):
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_protenix_triangle_attention=use_protenix_triangle_attention,
                 use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
@@ -733,6 +804,7 @@ class TemplateEmbedderAllAtom(nn.Module):
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_protenix_triangle_attention=use_protenix_triangle_attention,
                 use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,

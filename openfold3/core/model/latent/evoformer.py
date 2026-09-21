@@ -104,7 +104,25 @@ class EvoformerBlock(MSABlock):
         _attn_chunk_size: int | None = None,
         _offload_inference: bool = False,
         _offloadable_inputs: Sequence[torch.Tensor] | None = None,
+        use_protenix_triangle_attention: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            if (
+                chunk_size is not None or _attn_chunk_size is not None
+                or inplace_safe or _offload_inference
+            ):
+                raise ValueError(
+                    "Protenix requires unchunked, non-inplace execution "
+                    "without inference offload"
+                )
+
         msa_trans_mask = msa_mask if _mask_trans else None
 
         if _attn_chunk_size is None:
@@ -138,7 +156,10 @@ class EvoformerBlock(MSABlock):
                     mask=msa_mask,
                     chunk_size=_attn_chunk_size,
                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-                    use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                    use_cueq_triangle_kernels=(
+                        use_cueq_triangle_kernels
+                        and not use_protenix_triangle_attention
+                    ),
                     use_stable_triangle_attention=use_stable_triangle_attention,
                     use_triton_triangle_kernels=use_triton_triangle_kernels,
                     use_lma=use_lma,
@@ -168,7 +189,10 @@ class EvoformerBlock(MSABlock):
                     mask=msa_mask,
                     chunk_size=chunk_size,
                     use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-                    use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                    use_cueq_triangle_kernels=(
+                        use_cueq_triangle_kernels
+                        and not use_protenix_triangle_attention
+                    ),
                     use_stable_triangle_attention=use_stable_triangle_attention,
                     use_triton_triangle_kernels=use_triton_triangle_kernels,
                     use_lma=use_lma,
@@ -222,6 +246,7 @@ class EvoformerBlock(MSABlock):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_lma=use_lma,
             inplace_safe=inplace_safe,

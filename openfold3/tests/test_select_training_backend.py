@@ -80,9 +80,11 @@ def test_each_accelerated_backend_has_exactly_one_operator_family():
         if name == "aqlab":
             continue
         # Every accelerated backend enables exactly one operator family; the
-        # TurboPairFormer family spans its attention and TriMul flags.
+        # TurboPairFormer spans two flags; Protenix composes with cuEq TriMul.
         families = {
-            "cueq": flags["use_cueq_triangle_kernels"],
+            "cueq": flags["use_cueq_triangle_kernels"]
+            and not flags["use_protenix_triangle_attention"],
+            "protenix": flags["use_protenix_triangle_attention"],
             "triton": flags["use_triton_triangle_kernels"],
             "deepspeed-evo": flags["use_deepspeed_evo_attention"],
             "turbopairformer": flags["use_stable_triangle_attention"]
@@ -121,3 +123,19 @@ def test_single_gpu_smoke_is_one_validation_free_training_step(base_config):
         "num_sanity_val_steps": 0,
         "log_every_n_steps": 1,
     }
+
+
+def test_protenix_selects_attention_plus_cueq_trimul():
+    flags = BACKEND_FLAGS["protenix"]
+    assert flags["use_protenix_triangle_attention"]
+    assert flags["use_cueq_triangle_kernels"]
+    assert sum(flags.values()) == 2
+
+
+@pytest.mark.parametrize("backend", tuple(BACKEND_FLAGS))
+def test_switching_backend_clears_the_previous_protenix_selection(backend):
+    config = configure_training_backend({}, backend="protenix")
+    configure_training_backend(config, backend=backend)
+    assert config["model_update"]["custom"]["settings"]["memory"]["train"] == (
+        BACKEND_FLAGS[backend]
+    )

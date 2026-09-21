@@ -195,12 +195,36 @@ class OpenFold3(nn.Module):
                 [*, N_token, N_token, C_z] Pair representation
         """
         mode_mem_settings = self._get_mode_mem_settings()
+        use_protenix_triangle_attention = bool(
+            mode_mem_settings.get("use_protenix_triangle_attention", False)
+        )
         use_stable_triangle_attention = bool(
             mode_mem_settings.get("use_stable_triangle_attention", False)
         )
         use_stable_triangle_multiplicative = bool(
             mode_mem_settings.get("use_stable_triangle_multiplicative", False)
         )
+
+        if use_protenix_triangle_attention:
+            conflicts = [
+                name for name in (
+                    "use_stable_triangle_attention",
+                    "use_stable_triangle_multiplicative",
+                    "use_deepspeed_evo_attention",
+                    "use_triton_triangle_kernels",
+                    "use_lma",
+                ) if mode_mem_settings.get(name, False)
+            ]
+            if conflicts:
+                raise ValueError(
+                    "use_protenix_triangle_attention is mutually exclusive with: "
+                    + ", ".join(conflicts)
+                )
+            if mode_mem_settings.chunk_size is not None or inplace_safe:
+                raise ValueError(
+                    "use_protenix_triangle_attention requires chunk_size=None "
+                    "and inplace_safe=False"
+                )
 
         if use_stable_triangle_attention:
             # use_cueq_triangle_kernels composes: it keeps accelerating the
@@ -240,6 +264,13 @@ class OpenFold3(nn.Module):
         ):
             raise ValueError(
                 "use_stable_triangle_attention does not support inference offload"
+            )
+
+        if use_protenix_triangle_attention and (
+            offload_msa_module or offload_template_module
+        ):
+            raise ValueError(
+                "use_protenix_triangle_attention does not support inference offload"
             )
 
         s_input, s_init, z_init = self.input_embedder(
@@ -286,8 +317,12 @@ class OpenFold3(nn.Module):
                         _mask_trans=True,
                         use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
-                        use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
+                        use_cueq_triangle_kernels=(
+                            mode_mem_settings.use_cueq_triangle_kernels
+                            and not use_protenix_triangle_attention
+                        ),
                         use_stable_triangle_attention=use_stable_triangle_attention,
+                        use_protenix_triangle_attention=use_protenix_triangle_attention,
                         use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                         use_lma=mode_mem_settings.use_lma,
                         inplace_safe=inplace_safe,
@@ -341,6 +376,7 @@ class OpenFold3(nn.Module):
                         use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                         use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
                         use_stable_triangle_attention=use_stable_triangle_attention,
+                        use_protenix_triangle_attention=use_protenix_triangle_attention,
                         use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                         use_lma=mode_mem_settings.use_lma,
                         inplace_safe=inplace_safe,
@@ -360,6 +396,7 @@ class OpenFold3(nn.Module):
                     use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
                     use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
                     use_stable_triangle_attention=use_stable_triangle_attention,
+                    use_protenix_triangle_attention=use_protenix_triangle_attention,
                     use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                     use_lma=mode_mem_settings.use_lma,
                     inplace_safe=inplace_safe,
@@ -477,7 +514,12 @@ class OpenFold3(nn.Module):
                     chunk_size=mode_mem_settings.chunk_size,
                     use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                     use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
-                    use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
+                    use_cueq_triangle_kernels=(
+                        mode_mem_settings.use_cueq_triangle_kernels
+                        and not mode_mem_settings.get(
+                            "use_protenix_triangle_attention", False
+                        )
+                    ),
                     use_stable_triangle_attention=bool(
                         mode_mem_settings.get("use_stable_triangle_attention", False)
                     ),

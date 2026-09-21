@@ -1,0 +1,82 @@
+{
+  "repository": "https://github.com/bytedance/Protenix",
+  "commit": "4c355be4553512f72453ecbfb65e69f4c35d1413",
+  "algorithm_changes": false,
+  "files": [
+    {
+      "path": "_vendor/op.py",
+      "upstream_path": "protenix/model/tri_attention/op.py",
+      "upstream_sha256": "e0942e6d6b06607ad399ee972465edbcb868fa1328cf39322730f3b3e4a4135b",
+      "upstream_git_blob_sha1": "291ad69763320c515b5114c34a7ea8a2fd4eee88",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/op.py",
+      "vendored_sha256": "199e1428c1b419af6506bcec773aaf3ce6d74daf3283bffb23addc178f92ad0e",
+      "algorithm_ast_sha256": "89fee57bcfde5630e1696fa3ccde35522e832a27b57494ca1a618b0f4d18c85f",
+      "adaptation": "Private import namespace and explicit adaptation comment only; all function/class ASTs unchanged."
+    },
+    {
+      "path": "_vendor/forward.py",
+      "upstream_path": "protenix/model/tri_attention/forward.py",
+      "upstream_sha256": "42fc170c998d3170fbf5781837a71b7d7b9f7e569be7554f39287236a7d4ae93",
+      "upstream_git_blob_sha1": "e7cd8a3135980203e871e368a7469c2a7273151e",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/forward.py",
+      "vendored_sha256": "57d8c136fe5ccb967aab5b4fb0a47742515296ba956aefdcf492c78a69d6c178",
+      "algorithm_ast_sha256": "8cd21409cba39e11ed10bf3733cd7ad48ac651cb5819f4f7c529fe4c6e72d03a",
+      "adaptation": "Private import namespace and explicit adaptation comment only; all function/class ASTs unchanged."
+    },
+    {
+      "path": "_vendor/backward.py",
+      "upstream_path": "protenix/model/tri_attention/backward.py",
+      "upstream_sha256": "fac61c5601a2b0fe5d6f236f5de0e59a3382e094115f8654c0f9d675c14eea46",
+      "upstream_git_blob_sha1": "d9e020f02f4c44cf47a452862455d6f40b8ab3b0",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/backward.py",
+      "vendored_sha256": "a7affffa31334d61df16b302a786002514b65f965f98061ab49b1cbe5451eb65",
+      "algorithm_ast_sha256": "9f1146c16622c352bb0bdd0ee6bf85ed81a27e9b9c600a777f3525fa96699e93",
+      "adaptation": "Private import namespace and explicit adaptation comment only; all function/class ASTs unchanged."
+    },
+    {
+      "path": "_vendor/autotune.py",
+      "upstream_path": "protenix/model/tri_attention/autotune.py",
+      "upstream_sha256": "4da7f146f0c7e399b624ed818354c6e5044213ff873a3b995f66d3af988f0de8",
+      "upstream_git_blob_sha1": "4d9a05f5b53c2de9c854bbd7ba6137cffdf7c731",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/autotune.py",
+      "vendored_sha256": "b3309b75337f2b86d6ea8a5a0485747a4104980ba2b56539d0301c93446eb1d0",
+      "adaptation": "Private imports; cache selected at launch for actual device/rank and writable user cache; isolated in-memory caches and lazy disk loading. Autotune keys/configs/benchmark selection preserved."
+    },
+    {
+      "path": "_vendor/autotune_helpers.py",
+      "upstream_path": "protenix/model/tri_attention/autotune_helpers.py",
+      "upstream_sha256": "e9f1a96c63a0218b2bd25198d9aa31a9165a0ec20534e5607a0692995d3743d7",
+      "upstream_git_blob_sha1": "1ad8bd903d007b4b5d15d260f02a2c2dea91965b",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/autotune_helpers.py",
+      "vendored_sha256": "9123501dc6bccb9f57984375b24726811282416555826fb8a3d85305fea9277d",
+      "configuration_ast_sha256": "9eff9c69e8089cee7c27f86ac03e12cc9c7e1605339c8980cacebd8999dfe7e8",
+      "adaptation": "Removed import-time CUDA/distributed/cache setup; all five configuration lists and serialization functions unchanged."
+    },
+    {
+      "path": "LICENSE",
+      "upstream_path": "LICENSE",
+      "upstream_sha256": "add3b0d4449b29559d6f429d84a09a9b363d78fd516b3315a8ed946eb12ad8eb",
+      "upstream_git_blob_sha1": "c6dd1f322a49000ac84f511711b418fdcaaeda9e",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/LICENSE",
+      "vendored_sha256": "add3b0d4449b29559d6f429d84a09a9b363d78fd516b3315a8ed946eb12ad8eb",
+      "adaptation": "Unmodified upstream license."
+    }
+  ],
+  "host_layout": {
+    "source": "Frozen three-crop 70-step experiment adapter (2026-09-20)",
+    "function_sha256": "a11b6da4d9e3ee3e87e87037b0180ab131ffc1d4c86f532ec67c58a79e93756d",
+    "adaptation": "Function body copied unchanged; host Q scaling, native deterministic=False and contiguous dO hook preserved."
+  },
+  "omitted_upstream_files": [
+    "protenix/model/tri_attention/__init__.py",
+    "protenix/utils/distributed.py"
+  ],
+  "integration_changes": [
+    "Expose lazy attention_scaled under openfold3.core.kernels.protenix; never inject the global protenix namespace.",
+    "Validate CUDA BF16 Q/K/V/pair bias, BF16 or FP32 additive masks, matching Q/K/V shapes/device and non-trainable masks; fail explicitly for unsupported inputs.",
+    "Use caller-prescaled Q without another scaling or precision conversion; preserve 4D/5D/6D normalization.",
+    "Use writable user cache scoped by upstream revision, actual tensor device, Torch/Triton version and distributed rank; override with OPENFOLD3_PROTENIX_CACHE_DIR.",
+    "Obtain rank from initialized torch.distributed or RANK; do not import upstream distributed runtime or wrapper/fallback.",
+    "Do not ship experiment-specific pre-tuned cache entries; kernel candidates and autotune policy are retained."
+  ]
+}

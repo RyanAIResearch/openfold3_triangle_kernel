@@ -92,6 +92,7 @@ class MSAStack(nn.Module, ABC):
         pair_mask: torch.Tensor | None,
         inplace_safe: bool,
         _mask_trans: bool,
+        use_protenix_triangle_attention: bool = False,
     ):
         """
         Partially initialize the blocks. Optionally add cache clearing between
@@ -111,6 +112,7 @@ class MSAStack(nn.Module, ABC):
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_protenix_triangle_attention=use_protenix_triangle_attention,
                 use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
@@ -190,7 +192,19 @@ class MSAStack(nn.Module, ABC):
         use_stable_triangle_multiplicative: bool = False,
         use_lma: bool = False,
         _mask_trans: bool = True,
+        use_protenix_triangle_attention: bool = False,
     ):
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            raise ValueError("Protenix does not support inference offload")
+
         assert not (self.training or torch.is_grad_enabled())
 
         blocks = self._prep_blocks(
@@ -204,6 +218,7 @@ class MSAStack(nn.Module, ABC):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=False,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_stable_triangle_multiplicative=(use_stable_triangle_multiplicative),
             use_lma=use_lma,
             msa_mask=msa_mask,
@@ -243,6 +258,7 @@ class MSAStack(nn.Module, ABC):
         use_lma: bool = False,
         inplace_safe: bool = False,
         _mask_trans: bool = True,
+        use_protenix_triangle_attention: bool = False,
     ):
         """
         Args:
@@ -275,6 +291,21 @@ class MSAStack(nn.Module, ABC):
             z:
                 [*, N_res, N_res, C_z] pair embedding
         """
+        if use_protenix_triangle_attention:
+            if any((
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_deepspeed_evo_attention,
+                use_triton_triangle_kernels,
+                use_lma,
+            )):
+                raise ValueError("Protenix cannot be combined with other backends")
+            if (chunk_size is not None or inplace_safe):
+                raise ValueError(
+                    "Protenix requires unchunked, non-inplace execution "
+                    "without inference offload"
+                )
+
         if use_stable_triangle_attention and chunk_size is not None:
             raise ValueError(
                 "stable Triangle Attention does not support chunked MSA stacks"
@@ -289,6 +320,7 @@ class MSAStack(nn.Module, ABC):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
             use_lma=use_lma,
             msa_mask=msa_mask,

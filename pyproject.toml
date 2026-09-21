@@ -78,6 +78,13 @@ optional-dependencies.cuequivariance = [
     "cuequivariance-torch==0.10.0",
     "torch==2.10.0",
 ]
+optional-dependencies.protenix = [
+    "triton==3.6.0; platform_system == 'Linux'",
+    "cuequivariance==0.10.0",
+    "cuequivariance-ops-torch-cu12==0.10.0",
+    "cuequivariance-torch==0.10.0",
+    "torch==2.10.0",
+]
 optional-dependencies.deepspeed = [
     "deepspeed>=0.18.7",
 ]
@@ -129,7 +136,10 @@ openfold3 = [
     "core/kernels/cuda/turbopairformer_triangle_dkdv.cu",
     "core/kernels/cuda/turbopairformer_triangle_dq_dbias.cu",
     "core/kernels/cuda/turbopairformer_trimul_cuda.cu",
-    "core/kernels/cuda/_build_manifest.json"
+    "core/kernels/cuda/_build_manifest.json",
+    "core/kernels/protenix/*.json",
+    "core/kernels/protenix/*.md",
+    "core/kernels/protenix/LICENSE"
 ]
 
 # The ABI-locked H100 artifact is intentionally not built through the generic
@@ -138,7 +148,7 @@ openfold3 = [
 
 [tool.ruff]
 line-length = 88
-extend-exclude = ["docs"]
+extend-exclude = ["docs", "openfold3/core/kernels/protenix/_vendor"]
 
 [tool.ruff.lint]
 select = [

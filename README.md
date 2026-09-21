@@ -120,6 +120,25 @@ backend selection, single-GPU training, single-node DDP, and multi-node launch,
 see the
 [Bare-metal training quickstart](docs/source/bare_metal_distributed_quickstart.md).
 
+## Protenix Attention + cuEq TriMul
+
+The optional `protenix` training backend uses ByteDance's native Protenix
+Triangle Attention with NVIDIA cuEquivariance 0.10.0 Triangle Multiplicative
+Update. It is disabled by default and uses the Protenix revision from our
+384/640/768 experiments. See [installation, scope and constraints](docs/source/protenix_backend.md).
+
+```bash
+python tools/select_training_backend.py your_training.yml \
+  --backend protenix --output training_protenix.yml
+```
+
+The generated YAML keeps your data, model weights, optimizer and training
+schedule. It selects Protenix for BF16 triangle attention in the template,
+MSA and main Pairformer stacks, and cuEq TriMul in the MSA and main Pairformer
+stacks. Confidence, template TriMul and other attention retain their stock
+routes. Protenix kernels are loaded lazily; the full Protenix model package is
+not required.
+
 ## Enable TurboPairFormer manually
 
 Set the SR-R backward contract before starting Python:
