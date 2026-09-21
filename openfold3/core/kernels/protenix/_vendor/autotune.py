@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# OpenFold adaptation: private package imports; kernel arithmetic is unchanged.
-# Type annotations and two precise ignores describe unchanged upstream constructs.
-
 from __future__ import annotations
 
 import builtins
@@ -24,14 +21,14 @@ import logging
 import os
 import time
 from multiprocessing import Lock
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import triton
 
-from openfold3.core.kernels.protenix._cache import get_config_dir
 from openfold3.core.kernels.protenix._vendor.autotune_helpers import (
+    config_dir,
     config_to_dict,
+    device_capability,
     dict_to_config,
 )
 
@@ -66,8 +63,8 @@ class Autotuner(triton.runtime.Autotuner):
         arg_names: List[str],
         configs: List[triton.Config],
         key: List[str],
-        reset_to_zero: Optional[List[str]],
-        restore_value: Optional[List[str]],
+        reset_to_zero: List[str],
+        restore_value: List[str],
         pre_hook: Optional[Callable] = None,
         post_hook: Optional[Callable] = None,
         prune_configs_by: Optional[Dict] = None,
@@ -89,46 +86,25 @@ class Autotuner(triton.runtime.Autotuner):
             rep,
             use_cuda_graph,
         )
-        # OpenFold adaptation: resolve the actual tensor device at launch time.
-        # Importing this private module does not initialize CUDA or create files.
-        self.cache_file: Path | None = None
-        self.cache: dict[str, triton.Config]
-        self._device_caches: dict[Path, dict[str, triton.Config]] = {}
-        self.nargs: Optional[Dict[str, Any]]
-
-    def _select_cache(self, args: Any, kwargs: Any) -> None:
-        device = next(
-            (arg.device for arg in (*args, *kwargs.values())
-             if hasattr(arg, "device") and arg.device.type == "cuda"),
-            None,
-        )
-        directory = get_config_dir(device)
-        cache_file = directory / f"{self.base_fn.__name__}.json"
-        if cache_file == self.cache_file:
-            return
-        if self.cache_file is not None:
-            self._device_caches[self.cache_file] = self.cache
-        if cache_file in self._device_caches:
-            self.cache_file = cache_file
-            self.cache = self._device_caches[cache_file]
-            return
-        try:
-            directory.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise RuntimeError(
-                f"Protenix autotune cache is not writable: {directory}. "
-                "Set OPENFOLD3_PROTENIX_CACHE_DIR to a writable directory."
-            ) from exc
-        cache = {}
-        if cache_file.exists():
-            try:
-                with FILE_LOCK, open(cache_file, "rb") as f:
-                    cache = {k: dict_to_config(v) for k, v in json.load(f).items()}
-            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-                logger.warning("Could not load Protenix autotune cache %s: %s", cache_file, exc)
-        self.cache_file = cache_file
-        self.cache = cache
-        self._device_caches[cache_file] = self.cache
+        # File where we'll store results if disk caching is enabled
+        self.cache_file = None
+        if config_dir is not None:
+            config_dir.mkdir(parents=True, exist_ok=True)
+            # TODO: adjust this to also include the fn's hash?
+            self.cache_file = config_dir / f"{fn.__name__}_{device_capability}.json"
+            # Load any previously cached data
+            if self.cache_file.exists():
+                try:
+                    with FILE_LOCK, open(self.cache_file, "rb") as f:
+                        self.cache = {
+                            k: dict_to_config(v) for k, v in json.load(f).items()
+                        }
+                except Exception as e:
+                    # If there's some corruption or incompatibility, ignore and start fresh
+                    print(
+                        f"Warning: Could not load autotune cache from {self.cache_file}: {e}"
+                    )
+                    self.cache = {}
 
     def _write_cache_to_disk(self) -> None:
         """Writes the current self.cache to disk if self.cache_dir is set."""
@@ -151,13 +127,12 @@ class Autotuner(triton.runtime.Autotuner):
                 os.remove(temp_file)
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
-        self._select_cache(args, kwargs)
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
             _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
-            key: Any = [_args[key] for key in self.keys if key in _args]
+            key = [_args[key] for key in self.keys if key in _args]
             for _, arg in _args.items():
                 if hasattr(arg, "dtype"):
                     key.append(str(arg.dtype))
@@ -173,8 +148,7 @@ class Autotuner(triton.runtime.Autotuner):
                 }
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
-                # Every key visited by min belongs to timings, so get cannot be None.
-                self.cache[key] = builtins.min(timings, key=timings.get)  # type: ignore[arg-type]
+                self.cache[key] = builtins.min(timings, key=timings.get)
                 full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
                 self.pre_hook(full_nargs, reset_only=True)
                 self.configs_timings = timings
@@ -272,7 +246,7 @@ def autotune(
     def decorator(fn: Callable) -> Autotuner:
         return Autotuner(
             fn,
-            fn.arg_names,  # type: ignore[attr-defined]  # Triton JITFunction metadata.
+            fn.arg_names,
             configs,
             key,
             reset_to_zero,

@@ -62,8 +62,9 @@ by TurboPairFormer; they must be disabled for this combination. The standalone
 The standard experiment architecture has 108 targeted triangle attention and
 104 targeted TriMul instances. Counts depend on the model configuration and
 template participation. FP32 attention is left on the stock path; the adapter
-does not downcast confidence or change projection precision. Existing cuEq
-shape/dtype fallback behavior remains in effect for TriMul.
+does not downcast confidence or change projection precision. As in the official Protenix call sites, sequence lengths at most 16 use
+stock attention, and unequal input/hidden TriMul channels use stock TriMul.
+Existing cuEq shape/dtype fallback behavior also remains in effect.
 
 This route is for BF16 mixed precision, unchunked, out-of-place execution.
 Conflicting attention backends, chunked attention, inference offload and active
@@ -75,15 +76,21 @@ inference offload.
 
 The kernel revision is
 [`4c355be4553512f72453ecbfb65e69f4c35d1413`](https://github.com/bytedance/Protenix/tree/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention).
-Kernel arithmetic and autotune candidate configurations are retained. Local
-changes provide isolated imports and a writable cache outside the source tree.
+All six vendored implementation files, including autotune, cache handling and
+distributed utilities, match that revision byte for byte after reversing only
+the private import namespace substitutions. Local host adapters provide layout
+conversion and the input contract below.
 The host scales Q once by `1/sqrt(head_dim)` before calling the native kernel.
 The adapter preserves additive mask semantics, pair-bias gradients and logical
 batch/template broadcasting, and makes output gradients contiguous for the
 native backward. Additive masks must not require gradients.
 
-Autotune files use the user cache directory by default. Set
-`OPENFOLD3_PROTENIX_CACHE_DIR` to choose another writable cache root.
+Autotune follows the upstream implementation: JSON files are written under
+`openfold3/core/kernels/protenix/_vendor/TriAttentionCache/<RANK>/`, with the
+compute capability in each filename. That package directory must be writable.
+Select the CUDA device before the first Protenix call; upstream captures the
+current device when its native module is imported. Runtime caches are excluded
+from source control and distributions. There is no custom cache override.
 Runtime compilation and kernel failures propagate instead of silently selecting
 another GPU attention backend.
 

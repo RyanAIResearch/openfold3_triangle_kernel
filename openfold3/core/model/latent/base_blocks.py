@@ -491,6 +491,10 @@ class PairBlock(nn.Module):
                     "Protenix requires unchunked, non-inplace execution "
                     "without inference offload"
                 )
+            # Protenix uses cuEq TriMul only when its input and hidden channels
+            # match; otherwise it preserves the stock multiplication path.
+            if self.tri_mul_out.c_z != self.tri_mul_out.c_hidden:
+                use_cueq_triangle_kernels = False
 
         pair_trans_mask = pair_mask if _mask_trans else None
 

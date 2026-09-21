@@ -539,12 +539,17 @@ class Attention(nn.Module):
             ),
         )
 
-        if use_protenix_triangle_attention and q.dtype != torch.float32:
+        if (
+            use_protenix_triangle_attention
+            and q.dtype != torch.float32
+            and q.shape[-2] > 16
+        ):
             if len(biases) != 2:
                 raise ValueError(
                     "Protenix Triangle Attention requires mask and pair biases"
                 )
             # This optional provider is loaded only by an explicit BF16 request.
+            # As in Protenix, sequences of at most 16 use stock attention.
             # _prep_qkv has already applied the scale exactly once. Provider
             # failures propagate instead of silently selecting another backend.
             from openfold3.core.kernels.protenix import attention_scaled

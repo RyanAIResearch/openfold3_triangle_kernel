@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import subprocess
 import sys
@@ -16,7 +15,6 @@ import pytest
 import torch
 
 import openfold3.core.kernels.protenix as provider
-from openfold3.core.kernels.protenix._cache import UPSTREAM_REVISION, get_config_dir
 from openfold3.core.kernels.protenix._layout import _normalize_inputs
 
 
@@ -185,32 +183,11 @@ def test_missing_triton_has_actionable_error():
     provider._native_function.cache_clear()
 
 
-def test_cache_respects_override_xdg_device_and_rank(monkeypatch, tmp_path):
-    monkeypatch.setitem(sys.modules, "triton", SimpleNamespace(__version__="3.6.0"))
-    monkeypatch.setattr(torch.cuda, "get_device_name", lambda _: "NVIDIA H100")
-    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _: (9, 0))
-    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: False)
-    monkeypatch.setenv("RANK", "7")
-    monkeypatch.delenv("OPENFOLD3_PROTENIX_CACHE_DIR", raising=False)
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    directory = get_config_dir(torch.device("cuda:2"))
-    assert directory.is_relative_to(tmp_path / "xdg" / "openfold3" / "protenix")
-    assert UPSTREAM_REVISION in directory.parts
-    assert "NVIDIA-H100-sm90-device2" in directory.parts
-    assert directory.name == "rank-7"
-    assert not directory.exists()
-    monkeypatch.setenv("OPENFOLD3_PROTENIX_CACHE_DIR", str(tmp_path / "override"))
-    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
-    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 3)
-    directory = get_config_dir(torch.device("cuda:0"))
-    assert directory.is_relative_to(tmp_path / "override")
-    assert directory.name == "rank-3"
-
-
 def test_vendored_file_integrity_matches_provenance():
     root = Path(provider.__file__).parent
     manifest = json.loads((root / "PROVENANCE.json").read_text())
-    assert manifest["commit"] == UPSTREAM_REVISION
+    assert manifest["commit"] == "4c355be4553512f72453ecbfb65e69f4c35d1413"
+    assert manifest["strict_upstream"] is True
     assert manifest["algorithm_changes"] is False
     for row in manifest["files"]:
         assert (
@@ -218,73 +195,9 @@ def test_vendored_file_integrity_matches_provenance():
             == row["vendored_sha256"]
         )
 
-
-def _cache_only_autotuner(tmp_path):
-    """Exercise our disk-cache changes without Triton imports or compilation."""
-
-    class BaseAutotuner:
-        def __init__(self, fn, *args, **kwargs):
-            self.base_fn = fn
-            self.cache = {}
-
-    root = Path(provider.__file__).parent
-    spec = importlib.util.spec_from_file_location(
-        "_protenix_cache_unit_test", root / "_vendor" / "autotune.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    fake_modules = {
-        "triton": SimpleNamespace(runtime=SimpleNamespace(Autotuner=BaseAutotuner)),
-        "openfold3.core.kernels.protenix._vendor.autotune_helpers": SimpleNamespace(
-            dict_to_config=lambda value: value,
-            config_to_dict=lambda value: value,
-        ),
-    }
-    with patch.dict(sys.modules, fake_modules):
-        spec.loader.exec_module(module)
-    module.get_config_dir = lambda device: tmp_path / f"device-{device.index}"
-
-    def kernel():
-        pass
-
-    return module.Autotuner(kernel, [], [], [], None, None)
-
-
-def _cache_args(device_index):
-    return (SimpleNamespace(device=SimpleNamespace(type="cuda", index=device_index)),)
-
-
-def test_autotuner_keeps_device_caches_separate_and_persists(tmp_path):
-    tuner = _cache_only_autotuner(tmp_path)
-    tuner._select_cache(_cache_args(0), {})
-    tuner.cache["shape"] = {"choice": 0}
-    tuner._write_cache_to_disk()
-    tuner._select_cache(_cache_args(1), {})
-    assert tuner.cache == {}
-    tuner.cache["shape"] = {"choice": 1}
-    tuner._select_cache(_cache_args(0), {})
-    assert tuner.cache == {"shape": {"choice": 0}}
-    reloaded = _cache_only_autotuner(tmp_path)
-    reloaded._select_cache(_cache_args(0), {})
-    assert reloaded.cache == tuner.cache
-
-
-@pytest.mark.parametrize("payload", ["[]", "null", "4", "{broken"])
-def test_autotuner_ignores_corrupted_cache(tmp_path, payload):
-    cache_dir = tmp_path / "device-0"
-    cache_dir.mkdir()
-    (cache_dir / "kernel.json").write_text(payload)
-    tuner = _cache_only_autotuner(tmp_path)
-    tuner._select_cache(_cache_args(0), {})
-    assert tuner.cache == {}
-
-
-def test_autotuner_can_retry_after_unwritable_cache(tmp_path):
-    tuner = _cache_only_autotuner(tmp_path)
-    with (
-        patch.object(Path, "mkdir", side_effect=PermissionError("read only")),
-        pytest.raises(RuntimeError, match="OPENFOLD3_PROTENIX_CACHE_DIR"),
-    ):
-        tuner._select_cache(_cache_args(0), {})
-    assert tuner.cache_file is None
-    tuner._select_cache(_cache_args(0), {})
-    assert tuner.cache_file.parent.is_dir()
+        upstream_bytes = (root / row["path"]).read_bytes()
+        for original, vendored in manifest["import_rewrites"].items():
+            upstream_bytes = upstream_bytes.replace(
+                vendored.encode(), original.encode()
+            )
+        assert hashlib.sha256(upstream_bytes).hexdigest() == row["upstream_sha256"]

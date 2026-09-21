@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# OpenFold adaptation: private package imports; kernel arithmetic is unchanged.
-
 import triton
 import triton.language as tl
 

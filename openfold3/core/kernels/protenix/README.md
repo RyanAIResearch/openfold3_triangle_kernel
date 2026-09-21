@@ -26,17 +26,23 @@ fallback. Kernel compilation/execution failures propagate to the caller. This
 provider does not claim deterministic gradients or parity with every hardware
 and shape configuration; the checked-in GPU tests cover the supported route.
 
-The vendored forward/backward arithmetic, autograd function bodies, and five
-autotune configuration lists are unchanged. Adaptations namespace imports under
-`openfold3.core.kernels.protenix._vendor` and defer dependency/device work until
-execution. The upstream public fallback wrapper and distributed utility are
-omitted. No top-level `protenix` package is imported or injected.
+The six vendored implementation files (op, forward, backward, autotune,
+autotune_helpers, distributed) are exactly the pinned upstream bytes after
+reversing only the private import namespace substitutions recorded in
+PROVENANCE.json. No local type annotations, tuning, cache policy, or arithmetic
+changes are applied to these files. The optional host adapter loads them on
+first use and does not import or inject a top-level `protenix` package.
 
-Autotune JSON files are written below
-`$XDG_CACHE_HOME/openfold3/protenix` (default `~/.cache/openfold3/protenix`), or
-`$OPENFOLD3_PROTENIX_CACHE_DIR` when set. Subdirectories separate upstream
-revision, actual CUDA device, PyTorch/Triton runtime, and distributed rank. Rank
-comes from initialized `torch.distributed`, otherwise `RANK` (default 0). Device
-metadata is cached; kernel selection and autotune candidates are preserved.
-The installed source directory stays read-only, and experiment-specific tuning
-JSON files are not shipped. First use of each shape may autotune.
+Autotune follows upstream: files live in `_vendor/TriAttentionCache/<RANK>/`
+with compute capability in their filenames. The package directory must be
+writable, and the current CUDA device must be selected before the first native
+import. Rank comes from the upstream distributed utility's environment rules.
+The upstream rank-0 cache-copy behavior is retained. Runtime tuning JSON files
+are excluded from source control and distribution artifacts; no experiment
+precache is shipped. First use of each shape may autotune.
+
+This is the native-kernel route used by the frozen experiments. The optional
+upstream SDPA fallback wrapper is not used. The host's BF16 validation, 4D/5D/6D
+layout conversion, pre-scaled Q and contiguous output-gradient boundary remain
+explicit integration requirements; this does not replace the host model with
+the full Protenix model or claim identical model-level routing.

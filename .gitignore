@@ -30,3 +30,6 @@ cutlass/
 
 # mypy cache
 .mypy_cache/
+
+# Upstream Protenix runtime autotune cache
+openfold3/core/kernels/protenix/_vendor/TriAttentionCache/

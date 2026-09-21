@@ -224,6 +224,13 @@ follow_imports_for_stubs = true
 module = ["rdkit.*", "gemmi.*"]
 follow_imports = "skip"
 
+# Keep pinned third-party sources intact, including their upstream annotations.
+# Byte identity after namespace normalization is checked by the provider tests.
+# Host adapters remain fully type-checked.
+[[tool.mypy.overrides]]
+module = ["openfold3.core.kernels.protenix._vendor.*"]
+ignore_errors = true
+
 [tool.mypy-baseline]
 # Keep the baseline sorted so its diffs stay reviewable.
 sort_baseline = true

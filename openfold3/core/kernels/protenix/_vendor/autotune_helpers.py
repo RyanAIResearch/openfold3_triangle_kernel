@@ -12,11 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# OpenFold adaptation: cache/device/rank infrastructure lives in ../_cache.py.
-# Autotune configuration lists below are unchanged from the pinned upstream.
+import os
+from pathlib import Path
 from typing import Any
 
+import torch
 import triton
+
+from openfold3.core.kernels.protenix._vendor.distributed import DIST_WRAPPER
+
+device_capability = torch.cuda.get_device_capability()
+device_capability = f"{device_capability[0]}-{device_capability[1]}"
+
+device_name = torch.cuda.get_device_name().replace(" ", "-")
+
+
+def get_config_dir() -> Path:
+    current_dir = Path(__file__).parent
+    tri_cache_root = current_dir / "TriAttentionCache"
+    rank = f"{DIST_WRAPPER.rank}"
+    target_dir = tri_cache_root / rank
+    if not target_dir.exists():
+        target_dir.mkdir(parents=True, exist_ok=False)
+        precache_dir = tri_cache_root / "0"
+        if precache_dir.exists() and any(precache_dir.iterdir()):
+            ret = os.system(f"cp {precache_dir}/* {target_dir}")
+    return target_dir
+
+
+config_dir = get_config_dir()
 
 
 def config_to_dict(config: triton.Config) -> dict[str, Any]:

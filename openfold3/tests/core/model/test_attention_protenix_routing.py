@@ -40,10 +40,10 @@ def native_attention(monkeypatch):
     return native
 
 
-def _attention_inputs(dtype=torch.bfloat16):
-    x = torch.randn(1, 3, 3, 32, dtype=dtype, requires_grad=True)
-    mask = torch.zeros(1, 3, 1, 1, 3, dtype=dtype)
-    bias = torch.randn(1, 1, 2, 3, 3, dtype=dtype, requires_grad=True)
+def _attention_inputs(dtype=torch.bfloat16, sequence=17):
+    x = torch.randn(1, sequence, sequence, 32, dtype=dtype, requires_grad=True)
+    mask = torch.zeros(1, sequence, 1, 1, sequence, dtype=dtype)
+    bias = torch.randn(1, 1, 2, sequence, sequence, dtype=dtype, requires_grad=True)
     return x, mask, bias
 
 
@@ -80,6 +80,26 @@ def test_float32_site_stays_exactly_stock_with_no_provider_cast(native_attention
         use_cueq_triangle_kernels=True,
     )
     assert torch.equal(stock, selected)
+    native_attention.assert_not_called()
+
+
+@pytest.mark.parametrize("sequence", (1, 16))
+def test_protenix_short_sequences_use_stock_attention(native_attention, sequence):
+    module = Attention(32, 32, 32, 16, 2, gating=False).to(torch.bfloat16)
+    torch.nn.init.normal_(module.linear_o.weight, std=0.1)
+    x, mask, bias = _attention_inputs(sequence=sequence)
+    stock = module(x, x, [mask, bias])
+    selected = module(
+        x,
+        x,
+        [mask, bias],
+        use_protenix_triangle_attention=True,
+        use_cueq_triangle_kernels=True,
+    )
+    assert torch.equal(stock, selected)
+    stock_grads = torch.autograd.grad(stock.float().square().sum(), (x, bias))
+    selected_grads = torch.autograd.grad(selected.float().square().sum(), (x, bias))
+    assert all(torch.equal(a, b) for a, b in zip(stock_grads, selected_grads))
     native_attention.assert_not_called()
 
 
@@ -149,21 +169,30 @@ def test_stack_routes_only_triangle_attention_and_scopes_cueq_trimul(
     config.update(no_blocks=1, blocks_per_ckpt=None)
     module = cls(**config).to(torch.bfloat16)
     common = dict(use_protenix_triangle_attention=True, use_cueq_triangle_kernels=True)
-    z = torch.randn(1, 3, 3, config.get("c_z", config.get("c_t")), dtype=torch.bfloat16)
-    mask = torch.ones(1, 3, 3, dtype=torch.bfloat16)
+    sequence = 17
+    z = torch.randn(
+        1,
+        sequence,
+        sequence,
+        config.get("c_z", config.get("c_t")),
+        dtype=torch.bfloat16,
+    )
+    mask = torch.ones(1, sequence, sequence, dtype=torch.bfloat16)
     with mock.patch.object(
         trimul, "_cueq_triangle_mult", side_effect=lambda z, **kw: z * 0.1
     ) as cueq:
         if stack_name == "pairformer":
-            s = torch.randn(1, 3, config["c_s"], dtype=torch.bfloat16)
+            s = torch.randn(1, sequence, config["c_s"], dtype=torch.bfloat16)
             apb = module.blocks[0].attn_pair_bias
             with mock.patch.object(apb, "forward", wraps=apb.forward) as single:
                 module(s, z, mask[:, 0], mask, **common)
             assert single.call_args.kwargs["use_high_precision_attention"]
             assert "use_protenix_triangle_attention" not in single.call_args.kwargs
         elif stack_name == "msa":
-            m = torch.randn(1, 2, 3, config["c_m"], dtype=torch.bfloat16)
-            module(m, z, torch.ones(1, 2, 3, dtype=torch.bfloat16), mask, **common)
+            m = torch.randn(1, 2, sequence, config["c_m"], dtype=torch.bfloat16)
+            module(
+                m, z, torch.ones(1, 2, sequence, dtype=torch.bfloat16), mask, **common
+            )
         else:
             module(z.unsqueeze(1), mask.unsqueeze(1), **common)
     assert native_attention.call_count == 2
@@ -269,6 +298,33 @@ def test_pair_block_rejects_conflict_before_cueq_mutation():
             use_stable_triangle_multiplicative=True,
         )
     multiply.assert_not_called()
+
+
+@pytest.mark.parametrize("protenix", (True, False))
+@pytest.mark.parametrize("c_hidden", (16, 32))
+def test_protenix_cueq_trimul_requires_matching_channels(protenix, c_hidden):
+    block = PairBlock(32, c_hidden, 16, 2, "relu", 2, 0.0, False, 1e9)
+    torch.nn.init.normal_(block.tri_mul_out.linear_z.weight, std=0.1)
+    torch.nn.init.normal_(block.tri_mul_in.linear_z.weight, std=0.1)
+    z, mask = torch.randn(1, 3, 3, 32), torch.ones(1, 3, 3)
+    with (
+        mock.patch.object(
+            trimul, "_cueq_triangle_mult", side_effect=lambda z, **kw: z * 0.1
+        ) as cueq,
+        mock.patch.object(block, "tri_att_start_end", side_effect=lambda z, **kw: z),
+    ):
+        stock = block(z, mask)
+        selected = block(
+            z,
+            mask,
+            use_protenix_triangle_attention=protenix,
+            use_cueq_triangle_kernels=True,
+        )
+    if protenix and c_hidden != 32:
+        cueq.assert_not_called()
+        assert torch.equal(selected, stock)
+    else:
+        assert cueq.call_count == 2
 
 
 @pytest.mark.parametrize("protenix", (True, False))
