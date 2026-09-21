@@ -213,7 +213,7 @@ class _PackQKV(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, bo, heads, seq, dim):
         ctx.view_shapes = (q.shape, k.shape, v.shape)
-        packed = _forward_extension().stablefold_pack_qkv(
+        packed = _forward_extension().turbopairformer_pack_qkv(
             q.transpose(-2, -3).reshape(-1),
             k.transpose(-2, -3).reshape(-1),
             v.transpose(-2, -3).reshape(-1),
@@ -274,11 +274,11 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
                 # residual of the output, the compressed state that lets
                 # the backward evaluate a probability-consistent delta.
                 shadow = torch.empty_like(out)
-                _forward_extension().stablefold_triangle_forward_shadow_out(
+                _forward_extension().turbopairformer_triangle_forward_shadow_out(
                     q, k, v, mask, expanded_bias, out, lse, shadow
                 )
             else:
-                _forward_extension().stablefold_triangle_forward_out(
+                _forward_extension().turbopairformer_triangle_forward_out(
                     q, k, v, mask, expanded_bias, out, lse
                 )
         if shadow is None:
@@ -302,11 +302,11 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
         # extensions load on first use), and hoisting keeps the per-call
         # backward free of import-machinery overhead.
         from turbopairformer.triangle_dkdv import (
-            stablefold_triangle_dkdv as dkdv,
+            turbopairformer_triangle_dkdv as dkdv,
         )
         from turbopairformer.triangle_dq_dbias import (
-            stablefold_reduce_broadcast_dbias,
-            stablefold_triangle_dq_dbias,
+            turbopairformer_reduce_broadcast_dbias,
+            turbopairformer_triangle_dq_dbias,
         )
 
         saved = ctx.saved_tensors
@@ -317,21 +317,23 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
             d_output = d_output.contiguous()
             delta = torch.empty_like(lse)
             if use_sr and shadow is not None:
-                _delta_extension().stablefold_triangle_delta_shadow_out(
+                _delta_extension().turbopairformer_triangle_delta_shadow_out(
                     d_output, out, shadow, delta
                 )
             else:
-                _delta_extension().stablefold_triangle_delta_out(d_output, out, delta)
+                _delta_extension().turbopairformer_triangle_delta_out(
+                    d_output, out, delta
+                )
             if use_sr:
                 # Experimental single-reconstruction lane: one kernel
                 # reconstructs P/dS and produces all four gradients with
                 # the classic delta everywhere (v1 perf-experiment
                 # contract; dQ/dBias forgo the delta_true accuracy fix).
                 from turbopairformer.triangle_dq_dbias import (
-                    stablefold_triangle_sr_backward,
+                    turbopairformer_triangle_sr_backward,
                 )
 
-                d_q, d_k, d_v, per_batch_dbias = stablefold_triangle_sr_backward(
+                d_q, d_k, d_v, per_batch_dbias = turbopairformer_triangle_sr_backward(
                     q, k, v, d_output, lse, delta, mask, expanded_bias
                 )
                 if ctx.bias_prefix == ctx.target_prefix:
@@ -339,7 +341,7 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
                         dtype=torch.bfloat16
                     )
                 else:
-                    d_bias = stablefold_reduce_broadcast_dbias(
+                    d_bias = turbopairformer_reduce_broadcast_dbias(
                         per_batch_dbias,
                         target_prefix=ctx.target_prefix,
                         bias_prefix=ctx.bias_prefix,
@@ -370,7 +372,7 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
                 expanded_bias,
                 emit_delta_true=True,
             )
-            d_q, per_batch_dbias = stablefold_triangle_dq_dbias(
+            d_q, per_batch_dbias = turbopairformer_triangle_dq_dbias(
                 q, k, v, d_output, lse, delta_true, mask, expanded_bias
             )
             if ctx.bias_prefix == ctx.target_prefix:
@@ -383,7 +385,7 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
                     dtype=torch.bfloat16
                 )
             else:
-                d_bias = stablefold_reduce_broadcast_dbias(
+                d_bias = turbopairformer_reduce_broadcast_dbias(
                     per_batch_dbias,
                     target_prefix=ctx.target_prefix,
                     bias_prefix=ctx.bias_prefix,

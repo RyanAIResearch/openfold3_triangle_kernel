@@ -47,8 +47,8 @@ export OPENFOLD3_TRIANGLE_PROVIDER="$TURBOPAIRFORMER_PROVIDER"
 
 # Canonical package settings take precedence. Mirror them into the host's
 # OPENFOLD3_* spellings so both providers run under the same execution policy.
-export OPENFOLD3_SR_BACKWARD=${TURBOPAIRFORMER_SR_BACKWARD:-${STABLEFOLD_SR_BACKWARD:-${OPENFOLD3_SR_BACKWARD:-1}}}
-export OPENFOLD3_SR_SHADOW=${TURBOPAIRFORMER_SR_SHADOW:-${STABLEFOLD_SR_SHADOW:-${OPENFOLD3_SR_SHADOW:-1}}}
+export OPENFOLD3_SR_BACKWARD=${TURBOPAIRFORMER_SR_BACKWARD:-${OPENFOLD3_SR_BACKWARD:-1}}
+export OPENFOLD3_SR_SHADOW=${TURBOPAIRFORMER_SR_SHADOW:-${OPENFOLD3_SR_SHADOW:-1}}
 export PYTHONNOUSERSITE=1
 
 # Launchers require an AOT install for either provider. Source development JIT

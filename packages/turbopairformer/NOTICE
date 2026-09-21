@@ -11,7 +11,7 @@ The revisions used for this derivative are:
 
     OpenFold3 upstream base:
     c615a7f8d0e7bb04095a35ec6dc7b30192ac19d3
-    StableFold source development revision (TurboPairFormer predecessor):
+    Original source development revision:
     https://github.com/RyanAIResearch/hammer_inference_engine/commit/6db02ff4b31e87bfced98331b22613e96e8ced37
     Curated repository:
     https://github.com/RyanAIResearch/openfold3_triangle_kernel

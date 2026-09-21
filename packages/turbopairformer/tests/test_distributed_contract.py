@@ -58,32 +58,32 @@ def _config(
         (
             _config(train_attention=True),
             (
-                "stablefold_forward",
-                "stablefold_delta",
-                "stablefold_dkdv",
-                "stablefold_dq_dbias",
+                "turbopairformer_forward",
+                "turbopairformer_delta",
+                "turbopairformer_dkdv",
+                "turbopairformer_dq_dbias",
             ),
         ),
-        (_config(train_trimul=True), ("stablefold_trimul",)),
+        (_config(train_trimul=True), ("turbopairformer_trimul",)),
         (
             _config(train_trimul=True, eval_attention=True),
             (
-                "stablefold_forward",
-                "stablefold_delta",
-                "stablefold_dkdv",
-                "stablefold_dq_dbias",
-                "stablefold_trimul",
+                "turbopairformer_forward",
+                "turbopairformer_delta",
+                "turbopairformer_dkdv",
+                "turbopairformer_dq_dbias",
+                "turbopairformer_trimul",
             ),
         ),
     ],
 )
-def test_stablefold_aot_module_discovery_uses_train_eval_union(config, expected):
+def test_turbopairformer_aot_module_discovery_uses_train_eval_union(config, expected):
     assert turbopairformer_aot_modules_from_config(config) == expected
     module = SimpleNamespace(config=config)
     assert required_turbopairformer_aot_modules(module) == expected
 
 
-def test_stablefold_aot_module_discovery_handles_missing_settings():
+def test_turbopairformer_aot_module_discovery_handles_missing_settings():
     assert turbopairformer_aot_modules_from_config(None) == ()
     assert turbopairformer_aot_modules_from_config(SimpleNamespace()) == ()
 
@@ -127,7 +127,7 @@ def _kernel_record(rank: int) -> dict:
         "expected_world_size": 2,
         "expected_num_nodes": 1,
         "expected_devices_per_node": 2,
-        "declared_aot_modules": ["stablefold_forward"],
+        "declared_aot_modules": ["turbopairformer_forward"],
         "trainer_world_size": 2,
         "process_group_rank": rank,
         "process_group_world_size": 2,
@@ -158,10 +158,10 @@ def _kernel_record(rank: int) -> dict:
                 "installed_package_tree_sha256": "b" * 64,
             },
         },
-        "required_aot_modules": ["stablefold_forward"],
+        "required_aot_modules": ["turbopairformer_forward"],
         "aot_identity": {
             "manifest_sha256": "a" * 64,
-            "modules": {"stablefold_forward": {"sha256": "c" * 64}},
+            "modules": {"turbopairformer_forward": {"sha256": "c" * 64}},
         },
     }
 
@@ -174,7 +174,7 @@ def test_kernel_rank_identity_rejects_aot_drift():
     second = _kernel_record(1)
     second["aot_identity"] = {
         "manifest_sha256": "f" * 64,
-        "modules": {"stablefold_forward": {"sha256": "e" * 64}},
+        "modules": {"turbopairformer_forward": {"sha256": "e" * 64}},
     }
     with pytest.raises(DistributedContractError, match="aot_identity"):
         _validate_kernel_records([_kernel_record(0), second])
@@ -199,7 +199,7 @@ def test_kernel_rank_identity_rejects_duplicate_physical_gpu():
 
 def test_kernel_rank_identity_rejects_declared_module_drift():
     second = _kernel_record(1)
-    second["declared_aot_modules"] = ["stablefold_trimul"]
+    second["declared_aot_modules"] = ["turbopairformer_trimul"]
     with pytest.raises(DistributedContractError, match="declared_aot_modules"):
         _validate_kernel_records([_kernel_record(0), second])
 
@@ -207,8 +207,8 @@ def test_kernel_rank_identity_rejects_declared_module_drift():
 def test_kernel_rank_identity_rejects_discovery_mismatch():
     first = _kernel_record(0)
     second = _kernel_record(1)
-    first["declared_aot_modules"] = ["stablefold_trimul"]
-    second["declared_aot_modules"] = ["stablefold_trimul"]
+    first["declared_aot_modules"] = ["turbopairformer_trimul"]
+    second["declared_aot_modules"] = ["turbopairformer_trimul"]
     with pytest.raises(DistributedContractError, match="module discovery"):
         _validate_kernel_records([first, second])
 
@@ -265,7 +265,7 @@ def test_fit_start_rejects_missing_kernel_preflight(tmp_path: Path):
         expected_world_size=2,
         expected_num_nodes=1,
         expected_devices_per_node=2,
-        expected_aot_modules=("stablefold_forward",),
+        expected_aot_modules=("turbopairformer_forward",),
         receipt_path=tmp_path / "turbopairformer_kernel_ddp.json",
     )
     with pytest.raises(DistributedContractError, match="process group"):
@@ -326,7 +326,7 @@ def local_hopper_record(monkeypatch):
             expected_world_size=2,
             expected_num_nodes=1,
             expected_devices_per_node=2,
-            expected_aot_modules=("stablefold_trimul",),
+            expected_aot_modules=("turbopairformer_trimul",),
         )
 
     return collect, aot_identity
@@ -353,7 +353,7 @@ def test_local_hopper_hardware_guard_accepts_product_names(
     assert record["ok"], record.get("error")
     assert record["device_name"] == device_name
     assert record["compute_capability"] == [9, 0]
-    aot_identity.assert_called_once_with(("stablefold_trimul",))
+    aot_identity.assert_called_once_with(("turbopairformer_trimul",))
 
 
 @pytest.mark.parametrize(
@@ -386,4 +386,4 @@ def test_local_hopper_hardware_guard_preserves_minimum_resources(local_hopper_re
     record = collect(total_memory=75 * 1024**3, multiprocessor_count=100)
 
     assert record["ok"], record.get("error")
-    aot_identity.assert_called_once_with(("stablefold_trimul",))
+    aot_identity.assert_called_once_with(("turbopairformer_trimul",))

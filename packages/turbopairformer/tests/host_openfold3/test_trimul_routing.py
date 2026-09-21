@@ -152,20 +152,20 @@ def test_supported_runner_failure_propagates_without_fallback():
 
 
 def test_public_runner_rejects_before_extension_load():
-    from turbopairformer import _trimul as stablefold_trimul
+    from turbopairformer import _trimul as turbopairformer_trimul
 
     module = TriangleMultiplicationOutgoing(32, 32)
     z = torch.randn((1, 3, 3, 32), dtype=torch.bfloat16)
 
     with (
         patch.object(
-            stablefold_trimul,
+            turbopairformer_trimul,
             "_get_ext",
             side_effect=AssertionError("unsupported metadata loaded the extension"),
         ) as get_ext,
         pytest.raises(ValueError, match=r"unsupported \[z_device\]"),
     ):
-        stablefold_trimul.run_trimul(module, z, None)
+        turbopairformer_trimul.run_trimul(module, z, None)
 
     get_ext.assert_not_called()
 
@@ -174,7 +174,7 @@ def test_fallback_warning_is_logged_once(caplog):
     module = TriangleMultiplicationOutgoing(8, 8)
     z = torch.randn((1, 3, 3, 8))
     rejection = SupportResult(False, "channels", "synthetic rejection")
-    tmu._STABLEFOLD_TRIMUL_FALLBACK_LOGGED.clear()
+    tmu._TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED.clear()
 
     try:
         with (
@@ -188,7 +188,7 @@ def test_fallback_warning_is_logged_once(caplog):
             module(z, use_stable_triangle_multiplicative=True)
             module(z, use_stable_triangle_multiplicative=True)
     finally:
-        tmu._STABLEFOLD_TRIMUL_FALLBACK_LOGGED.clear()
+        tmu._TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED.clear()
 
     records = [
         record for record in caplog.records if "fallback to stock" in record.message
@@ -360,7 +360,7 @@ def _assert_canonical_aot_paths(paths) -> None:
     assert paths
     assert all(
         path.parent.name == "_ext"
-        and path.name.startswith("_stablefold_trimul_sm90a")
+        and path.name.startswith("_turbopairformer_trimul_sm90a")
         and path.suffix == ".so"
         for path in paths
     )

@@ -20,11 +20,11 @@ from email.parser import BytesParser
 from pathlib import Path
 
 MODULES = {
-    "stablefold_forward": "turbopairformer._ext._stablefold_forward_sm90a",
-    "stablefold_delta": "turbopairformer._ext._stablefold_delta_sm90a",
-    "stablefold_dkdv": "turbopairformer._ext._stablefold_dkdv_sm90a",
-    "stablefold_dq_dbias": "turbopairformer._ext._stablefold_dq_dbias_sm90a",
-    "stablefold_trimul": "turbopairformer._ext._stablefold_trimul_sm90a",
+    "turbopairformer_forward": "turbopairformer._ext._turbopairformer_forward_sm90a",
+    "turbopairformer_delta": "turbopairformer._ext._turbopairformer_delta_sm90a",
+    "turbopairformer_dkdv": "turbopairformer._ext._turbopairformer_dkdv_sm90a",
+    "turbopairformer_dq_dbias": "turbopairformer._ext._turbopairformer_dq_dbias_sm90a",
+    "turbopairformer_trimul": "turbopairformer._ext._turbopairformer_trimul_sm90a",
 }
 PYPI_PLATFORMS = ("manylinux_2_28_x86_64", "manylinux_2_34_x86_64")
 # These libraries are supplied by the pinned PyPI Torch distribution and its
@@ -184,8 +184,12 @@ def validate_wheel(
             "editable build receipt leaked into the wheel",
         )
         require(
-            not any(
-                name.startswith(("openfold3/", "stablefold/", "trionce/"))
+            all(
+                name.startswith(("turbopairformer/", "turbopairformer.libs/"))
+                or (
+                    name.split("/", 1)[0].startswith("turbopairformer-")
+                    and name.split("/", 1)[0].endswith(".dist-info")
+                )
                 for name in names
             ),
             "wheel contains a host or renamed package",

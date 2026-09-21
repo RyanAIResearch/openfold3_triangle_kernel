@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// StableFold Triangle Attention forward with online softmax.
+// TurboPairFormer Triangle Attention forward with online softmax.
 //
 // FA2-style online softmax: each warp owns 16 query rows and streams KV in
 // 64-key tiles; scores never touch HBM. Deterministic by construction in the
@@ -10,7 +10,7 @@
 // Goals: correctness, replay stability, and arbitrary N. Perf work (cp.async double
 // buffering, register-layout P reuse, WGMMA) comes after the gate is green.
 //
-// Internal layout contract used by the public StableFold facade:
+// Internal layout contract used by the public TurboPairFormer facade:
 //   q, k, v : [1, N, H=4, N, D=32] BF16, contiguous
 //   mask    : [1, N, 1, 1, N] FP32 additive (0 or -inf-like)
 //   bias    : [1, 1, H, N, N] BF16 additive
@@ -47,7 +47,7 @@ constexpr int kBlockN = 64;                             // keys per streamed til
 // Every vector fits within one logical row; the scalar BF16-sized lane is
 // the general fallback. There is no D/N/crop-specific kernel selection.
 template <typename CopyT>
-__global__ void stablefold_pack_qkv_kernel(
+__global__ void turbopairformer_pack_qkv_kernel(
     const CopyT* __restrict__ q,
     const CopyT* __restrict__ k,
     const CopyT* __restrict__ v,
@@ -332,7 +332,7 @@ __device__ __forceinline__ float quad_sum(float value) {
 // terms are +0.0 — exact) and reads/writes global memory at io_dim strides.
 // io_dim == HeadDim is the plain lane; the ternaries stay out of hot loops.
 template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq>
-__global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
+__global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -632,7 +632,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
 template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq,
           bool BiasTma>
 __global__ __launch_bounds__(kThreads) void
-stablefold_triangle_forward_tma_kernel(
+turbopairformer_triangle_forward_tma_kernel(
     const __grid_constant__ CUtensorMap k_map,
     const __grid_constant__ CUtensorMap v_map,
     const __grid_constant__ CUtensorMap b_map,
@@ -1169,18 +1169,18 @@ void launch_forward_tma_lane(
             static_cast<unsigned int>(query_blocks));
   const bool exact_tiles =
       sequence % kBlockM == 0 && sequence % kBlockN == 0;
-#define LAUNCH_STABLEFOLD_FORWARD_TMA(TileMajor, Exact, OuterEq)            \
+#define LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(TileMajor, Exact, OuterEq)            \
   do {                                                                      \
     const cudaError_t status = cudaFuncSetAttribute(                        \
-        stablefold_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,   \
+        turbopairformer_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,   \
                                                OuterEq, BiasTma>,                    \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                        \
         shared_bytes_tma<HeadDim, BiasTma>());                                       \
     TORCH_CHECK(                                                            \
         status == cudaSuccess,                                              \
-        "failed to opt in StableFold TMA forward shared memory: ",          \
+        "failed to opt in TurboPairFormer TMA forward shared memory: ",          \
         cudaGetErrorString(status));                                        \
-    stablefold_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,       \
+    turbopairformer_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,       \
                                            OuterEq, BiasTma>                         \
         <<<grid, kThreads, shared_bytes_tma<HeadDim, BiasTma>(), stream>>>(          \
             k_map,                                                          \
@@ -1200,22 +1200,22 @@ void launch_forward_tma_lane(
   const bool outer_eq = outer_count == sequence;
   if (tile_major_grid) {
     if (exact_tiles) {
-      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD_TMA(true, true, true);
-      else LAUNCH_STABLEFOLD_FORWARD_TMA(true, true, false);
+      if (outer_eq) LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(true, true, true);
+      else LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(true, true, false);
     } else {
-      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD_TMA(true, false, true);
-      else LAUNCH_STABLEFOLD_FORWARD_TMA(true, false, false);
+      if (outer_eq) LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(true, false, true);
+      else LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(true, false, false);
     }
   } else {
     if (exact_tiles) {
-      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD_TMA(false, true, true);
-      else LAUNCH_STABLEFOLD_FORWARD_TMA(false, true, false);
+      if (outer_eq) LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(false, true, true);
+      else LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(false, true, false);
     } else {
-      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD_TMA(false, false, true);
-      else LAUNCH_STABLEFOLD_FORWARD_TMA(false, false, false);
+      if (outer_eq) LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(false, false, true);
+      else LAUNCH_TURBOPAIRFORMER_FORWARD_TMA(false, false, false);
     }
   }
-#undef LAUNCH_STABLEFOLD_FORWARD_TMA
+#undef LAUNCH_TURBOPAIRFORMER_FORWARD_TMA
 }
 
 template <int HeadDim>
@@ -1280,18 +1280,18 @@ void launch_forward(
             static_cast<unsigned int>(query_blocks));
   const bool exact_tiles =
       sequence % kBlockM == 0 && sequence % kBlockN == 0;
-#define LAUNCH_STABLEFOLD_FORWARD(TileMajor, Exact, OuterEq)                \
+#define LAUNCH_TURBOPAIRFORMER_FORWARD(TileMajor, Exact, OuterEq)                \
   do {                                                                      \
     const cudaError_t status = cudaFuncSetAttribute(                        \
-        stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact,       \
+        turbopairformer_triangle_forward_kernel<HeadDim, TileMajor, Exact,       \
                                            OuterEq>,                        \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                        \
         shared_bytes<HeadDim>());                                           \
     TORCH_CHECK(                                                            \
         status == cudaSuccess,                                              \
-        "failed to opt in StableFold forward shared memory: ",              \
+        "failed to opt in TurboPairFormer forward shared memory: ",              \
         cudaGetErrorString(status));                                        \
-    stablefold_triangle_forward_kernel<HeadDim, TileMajor, Exact, OuterEq>  \
+    turbopairformer_triangle_forward_kernel<HeadDim, TileMajor, Exact, OuterEq>  \
         <<<grid, kThreads, shared_bytes<HeadDim>(), stream>>>(              \
             reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),          \
             reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),          \
@@ -1311,25 +1311,25 @@ void launch_forward(
   const bool outer_eq = outer_count == sequence;
   if (tile_major_grid) {
     if (exact_tiles) {
-      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD(true, true, true);
-      else LAUNCH_STABLEFOLD_FORWARD(true, true, false);
+      if (outer_eq) LAUNCH_TURBOPAIRFORMER_FORWARD(true, true, true);
+      else LAUNCH_TURBOPAIRFORMER_FORWARD(true, true, false);
     } else {
-      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD(true, false, true);
-      else LAUNCH_STABLEFOLD_FORWARD(true, false, false);
+      if (outer_eq) LAUNCH_TURBOPAIRFORMER_FORWARD(true, false, true);
+      else LAUNCH_TURBOPAIRFORMER_FORWARD(true, false, false);
     }
   } else {
     if (exact_tiles) {
-      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD(false, true, true);
-      else LAUNCH_STABLEFOLD_FORWARD(false, true, false);
+      if (outer_eq) LAUNCH_TURBOPAIRFORMER_FORWARD(false, true, true);
+      else LAUNCH_TURBOPAIRFORMER_FORWARD(false, true, false);
     } else {
-      if (outer_eq) LAUNCH_STABLEFOLD_FORWARD(false, false, true);
-      else LAUNCH_STABLEFOLD_FORWARD(false, false, false);
+      if (outer_eq) LAUNCH_TURBOPAIRFORMER_FORWARD(false, false, true);
+      else LAUNCH_TURBOPAIRFORMER_FORWARD(false, false, false);
     }
   }
-#undef LAUNCH_STABLEFOLD_FORWARD
+#undef LAUNCH_TURBOPAIRFORMER_FORWARD
 }
 
-std::vector<torch::Tensor> stablefold_pack_qkv(
+std::vector<torch::Tensor> turbopairformer_pack_qkv(
     const torch::Tensor& q_source,
     const torch::Tensor& k_source,
     const torch::Tensor& v_source,
@@ -1341,13 +1341,13 @@ std::vector<torch::Tensor> stablefold_pack_qkv(
       batch_outer > 0 && heads64 > 0 && heads64 <= 65535 &&
           sequence64 > 0 && sequence64 <= std::numeric_limits<int>::max() &&
           head_dim64 > 0 && head_dim64 <= 64 && head_dim64 % 2 == 0,
-      "StableFold pack requires positive batch_outer/N, H<=65535, and an "
+      "TurboPairFormer pack requires positive batch_outer/N, H<=65535, and an "
       "even D<=64");
   TORCH_CHECK(
       batch_outer <=
           std::numeric_limits<int64_t>::max() / heads64 / sequence64 /
               head_dim64,
-      "StableFold pack element count overflows int64");
+      "TurboPairFormer pack element count overflows int64");
   const int64_t elements =
       batch_outer * heads64 * sequence64 * head_dim64;
   const auto check_source = [&](const torch::Tensor& tensor) {
@@ -1355,7 +1355,7 @@ std::vector<torch::Tensor> stablefold_pack_qkv(
         tensor.is_cuda() && tensor.device() == q_source.device() &&
             tensor.dtype() == torch::kBFloat16 && tensor.is_contiguous() &&
             tensor.numel() == elements,
-        "StableFold pack sources must be contiguous BF16 tensors with the "
+        "TurboPairFormer pack sources must be contiguous BF16 tensors with the "
         "declared element count on one CUDA device");
   };
   check_source(q_source);
@@ -1366,7 +1366,7 @@ std::vector<torch::Tensor> stablefold_pack_qkv(
   const int64_t blocks = (rows + 7) / 8;
   TORCH_CHECK(
       blocks <= 2147483647LL,
-      "StableFold pack exceeds the CUDA grid-x contract");
+      "TurboPairFormer pack exceeds the CUDA grid-x contract");
   const int heads = static_cast<int>(heads64);
   const int sequence = static_cast<int>(sequence64);
   const int head_dim = static_cast<int>(head_dim64);
@@ -1399,8 +1399,8 @@ std::vector<torch::Tensor> stablefold_pack_qkv(
       (total_vectors + kCopyThreads - 1) / kCopyThreads, 2147483647LL);
   const dim3 block(kCopyThreads);
   const dim3 grid(static_cast<unsigned int>(copy_blocks));
-#define LAUNCH_STABLEFOLD_PACK_COPY(CopyType)                                  \
-  stablefold_pack_qkv_kernel<CopyType><<<grid, block, 0, stream>>>(              \
+#define LAUNCH_TURBOPAIRFORMER_PACK_COPY(CopyType)                                  \
+  turbopairformer_pack_qkv_kernel<CopyType><<<grid, block, 0, stream>>>(              \
       reinterpret_cast<const CopyType*>(q_source.data_ptr()),                 \
       reinterpret_cast<const CopyType*>(k_source.data_ptr()),                 \
       reinterpret_cast<const CopyType*>(v_source.data_ptr()),                 \
@@ -1410,26 +1410,26 @@ std::vector<torch::Tensor> stablefold_pack_qkv(
       total_vectors, heads, sequence, vectors_per_row)
   switch (copy_bytes) {
     case 16:
-      LAUNCH_STABLEFOLD_PACK_COPY(uint4);
+      LAUNCH_TURBOPAIRFORMER_PACK_COPY(uint4);
       break;
     case 8:
-      LAUNCH_STABLEFOLD_PACK_COPY(uint2);
+      LAUNCH_TURBOPAIRFORMER_PACK_COPY(uint2);
       break;
     case 4:
-      LAUNCH_STABLEFOLD_PACK_COPY(std::uint32_t);
+      LAUNCH_TURBOPAIRFORMER_PACK_COPY(std::uint32_t);
       break;
     default:
-      LAUNCH_STABLEFOLD_PACK_COPY(std::uint16_t);
+      LAUNCH_TURBOPAIRFORMER_PACK_COPY(std::uint16_t);
       break;
   }
-#undef LAUNCH_STABLEFOLD_PACK_COPY
+#undef LAUNCH_TURBOPAIRFORMER_PACK_COPY
   TORCH_CHECK(
       cudaGetLastError() == cudaSuccess,
-      "StableFold pack QKV launch failed");
+      "TurboPairFormer pack QKV launch failed");
   return {out_q, out_k, out_v};
 }
 
-void stablefold_triangle_forward_impl(
+void turbopairformer_triangle_forward_impl(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -1501,7 +1501,7 @@ void stablefold_triangle_forward_impl(
   TORCH_CHECK(
       reinterpret_cast<std::uintptr_t>(k.data_ptr()) % 16 == 0 &&
           reinterpret_cast<std::uintptr_t>(v.data_ptr()) % 16 == 0,
-      "StableFold forward K/V storage must be 16-byte aligned");
+      "TurboPairFormer forward K/V storage must be 16-byte aligned");
   const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   // TMA lanes need io_dim == storage lane AND the flattened (batch, outer,
@@ -1558,7 +1558,7 @@ void stablefold_triangle_forward_impl(
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "launch failed");
 }
 
-void stablefold_triangle_forward_out(
+void turbopairformer_triangle_forward_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -1566,14 +1566,14 @@ void stablefold_triangle_forward_out(
     const torch::Tensor& bias,
     torch::Tensor& out,
     torch::Tensor& lse) {
-  stablefold_triangle_forward_impl(q, k, v, mask, bias, out, lse, nullptr);
+  turbopairformer_triangle_forward_impl(q, k, v, mask, bias, out, lse, nullptr);
 }
 
 // Shadow variant: additionally emits the BF16 rounding residual of the
 // output (same [B,O,N,H,D] layout) -- the compressed state that lets the
 // backward evaluate a probability-consistent delta without a second
 // reconstruction.
-void stablefold_triangle_forward_shadow_out(
+void turbopairformer_triangle_forward_shadow_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -1589,7 +1589,7 @@ void stablefold_triangle_forward_shadow_out(
           shadow_residual.is_contiguous() &&
           shadow_residual.sizes() == out.sizes(),
       "shadow_residual must be contiguous BF16 matching out");
-  stablefold_triangle_forward_impl(
+  turbopairformer_triangle_forward_impl(
       q, k, v, mask, bias, out, lse,
       reinterpret_cast<__nv_bfloat16*>(shadow_residual.data_ptr()));
 }
@@ -1598,15 +1598,15 @@ void stablefold_triangle_forward_shadow_out(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
-      "stablefold_pack_qkv",
-      &stablefold_pack_qkv,
-      "StableFold fused physical [N,H,D] to logical [H,N,D] QKV pack");
+      "turbopairformer_pack_qkv",
+      &turbopairformer_pack_qkv,
+      "TurboPairFormer fused physical [N,H,D] to logical [H,N,D] QKV pack");
   module.def(
-      "stablefold_triangle_forward_out",
-      &stablefold_triangle_forward_out,
-      "StableFold Triangle Attention forward (online softmax)");
+      "turbopairformer_triangle_forward_out",
+      &turbopairformer_triangle_forward_out,
+      "TurboPairFormer Triangle Attention forward (online softmax)");
   module.def(
-      "stablefold_triangle_forward_shadow_out",
-      &stablefold_triangle_forward_shadow_out,
+      "turbopairformer_triangle_forward_shadow_out",
+      &turbopairformer_triangle_forward_shadow_out,
       "Forward + BF16 rounding-residual shadow for the SR delta");
 }

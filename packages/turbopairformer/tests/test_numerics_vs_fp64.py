@@ -59,7 +59,7 @@ def _stock(q, k, v, mask, bias, dout):
     return out.detach(), q_.grad, k_.grad, v_.grad, b_.grad
 
 
-def _stablefold(q, k, v, mask, bias, dout):
+def _turbopairformer(q, k, v, mask, bias, dout):
     from turbopairformer import turbo_attention
 
     q_, k_, v_ = (t.detach().clone().requires_grad_(True) for t in (q, k, v))
@@ -148,36 +148,36 @@ def test_triangle_attention_fp64_error_stays_within_stock_envelope(
     q, k, v, mask, bias, dout = _case(bias_dtype=torch.bfloat16, **shape)
     ref = _oracle(q, k, v, mask, bias, dout)
     stock = _stock(q, k, v, mask, bias, dout)
-    sf = _stablefold(q, k, v, mask, bias, dout)
-    sf2 = _stablefold(q, k, v, mask, bias, dout)
+    actual = _turbopairformer(q, k, v, mask, bias, dout)
+    replayed = _turbopairformer(q, k, v, mask, bias, dout)
 
-    assert all(torch.equal(a, b) for a, b in zip(sf, sf2, strict=True)), (
+    assert all(torch.equal(a, b) for a, b in zip(actual, replayed, strict=True)), (
         "not replayable"
     )
-    assert all(torch.isfinite(t).all() for t in sf), "non-finite output"
+    assert all(torch.isfinite(t).all() for t in actual), "non-finite output"
 
     full = shape["full_planes"]
     if full:
         for tensor in (
-            sf[0][:, :full],
-            sf[1][:, :full],
-            sf[2][:, :full],
-            sf[3][:, :full],
+            actual[0][:, :full],
+            actual[1][:, :full],
+            actual[2][:, :full],
+            actual[3][:, :full],
         ):
             assert tensor.abs().max().item() == 0.0, (
                 "masked planes must be exactly zero"
             )
         ref = (ref[0][:, full:], *ref[1:])
         stock = (stock[0][:, full:], *stock[1:])
-        sf = (sf[0][:, full:], *sf[1:])
+        actual = (actual[0][:, full:], *actual[1:])
 
     # TurboPairFormer error must not exceed the stock BF16 path by more than 10 %.
     for label, s_val, st_val, r_val in zip(
-        ("out", "dq", "dk", "dv", "dbias"), sf, stock, ref, strict=True
+        ("out", "dq", "dk", "dv", "dbias"), actual, stock, ref, strict=True
     ):
-        e_sf, e_stock = _rel(s_val, r_val), _rel(st_val, r_val)
-        assert e_sf <= 1.1 * e_stock + 1e-6, (
-            f"{name} {label}: sf={e_sf:.2e} stock={e_stock:.2e}"
+        e_actual, e_stock = _rel(s_val, r_val), _rel(st_val, r_val)
+        assert e_actual <= 1.1 * e_stock + 1e-6, (
+            f"{name} {label}: actual={e_actual:.2e} stock={e_stock:.2e}"
         )
 
 
@@ -193,7 +193,7 @@ def test_fp32_bias_is_accepted_and_returns_fp32_gradient():
         full_planes=0,
         bias_dtype=torch.float32,
     )
-    out, dq, dk, dv, dbias = _stablefold(q, k, v, mask, bias, dout)
+    out, dq, dk, dv, dbias = _turbopairformer(q, k, v, mask, bias, dout)
     assert out.dtype == torch.bfloat16
     assert dbias.dtype == torch.float32
     assert torch.isfinite(dbias).all()

@@ -38,12 +38,12 @@ from turbopairformer.policy import (
 )
 
 _ATTENTION_AOT_MODULES = (
-    "stablefold_forward",
-    "stablefold_delta",
-    "stablefold_dkdv",
-    "stablefold_dq_dbias",
+    "turbopairformer_forward",
+    "turbopairformer_delta",
+    "turbopairformer_dkdv",
+    "turbopairformer_dq_dbias",
 )
-_TRIMUL_AOT_MODULES = ("stablefold_trimul",)
+_TRIMUL_AOT_MODULES = ("turbopairformer_trimul",)
 
 
 def _setting(settings: Any, name: str) -> bool:
@@ -232,7 +232,7 @@ def _local_kernel_record(
             raise DistributedContractError(
                 f"TurboPairFormer kernel DDP requires {ALLOW_JIT}=0"
             )
-        if "stablefold_forward" in required_modules and (
+        if "turbopairformer_forward" in required_modules and (
             execution_env[SR_BACKWARD] != "1" or execution_env[SR_SHADOW] != "1"
         ):
             raise DistributedContractError(

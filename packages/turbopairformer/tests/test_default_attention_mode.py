@@ -20,12 +20,11 @@ requires_hopper = pytest.mark.skipif(
 
 
 def _clear_sr_environment(monkeypatch):
-    for prefix in ("TURBOPAIRFORMER", "STABLEFOLD", "OPENFOLD3"):
+    for prefix in ("TURBOPAIRFORMER", "OPENFOLD3"):
         for suffix in ("BACKWARD", "SHADOW"):
             monkeypatch.delenv(f"{prefix}_SR_{suffix}", raising=False)
     for name in (
         "TURBOPAIRFORMER_ALLOW_JIT",
-        "STABLEFOLD_ALLOW_JIT",
         "OPENFOLD3_TRIANGLE_ALLOW_JIT",
     ):
         monkeypatch.setenv(name, "0")
@@ -91,7 +90,7 @@ def _spy_aot_calls(monkeypatch):
             # The original installed CUDA extension performs the operation.
             result = original(*args, **kwargs)
             calls[name] += 1
-            if name == "stablefold_triangle_forward_shadow_out":
+            if name == "turbopairformer_triangle_forward_shadow_out":
                 output, shadow = args[5], args[7]
                 assert shadow.shape == output.shape
                 assert shadow.dtype == output.dtype == torch.bfloat16
@@ -106,7 +105,7 @@ def _spy_aot_calls(monkeypatch):
                         "consumed": False,
                     }
                 )
-            elif name == "stablefold_triangle_delta_shadow_out":
+            elif name == "turbopairformer_triangle_delta_shadow_out":
                 shadow = args[2]
                 assert len(residuals) == 1
                 residual = residuals[0]
@@ -121,29 +120,29 @@ def _spy_aot_calls(monkeypatch):
         (
             forward,
             (
-                "stablefold_triangle_forward_out",
-                "stablefold_triangle_forward_shadow_out",
+                "turbopairformer_triangle_forward_out",
+                "turbopairformer_triangle_forward_shadow_out",
             ),
         ),
         (
             delta,
             (
-                "stablefold_triangle_delta_out",
-                "stablefold_triangle_delta_shadow_out",
+                "turbopairformer_triangle_delta_out",
+                "turbopairformer_triangle_delta_shadow_out",
             ),
         ),
         (
             dq_dbias,
             (
-                "stablefold_triangle_dq_dbias_out",
-                "stablefold_triangle_sr_backward_out",
+                "turbopairformer_triangle_dq_dbias_out",
+                "turbopairformer_triangle_sr_backward_out",
             ),
         ),
         (
             dkdv,
             (
-                "stablefold_triangle_dkdv_out",
-                "stablefold_triangle_dkdv_delta_true_out",
+                "turbopairformer_triangle_dkdv_out",
+                "turbopairformer_triangle_dkdv_delta_true_out",
             ),
         ),
     ):
@@ -158,9 +157,9 @@ def test_default_attention_executes_shadow_and_sr_like_explicit_flags(monkeypatc
     inputs, gradient = _inputs_and_gradient()
     calls, residuals = _spy_aot_calls(monkeypatch)
     expected_calls = {
-        "stablefold_triangle_forward_shadow_out": 1,
-        "stablefold_triangle_delta_shadow_out": 1,
-        "stablefold_triangle_sr_backward_out": 1,
+        "turbopairformer_triangle_forward_shadow_out": 1,
+        "turbopairformer_triangle_delta_shadow_out": 1,
+        "turbopairformer_triangle_sr_backward_out": 1,
     }
 
     default = _run(inputs, gradient)
@@ -189,9 +188,9 @@ def test_explicit_classic_attention_bypasses_shadow_and_sr(monkeypatch):
     _run(inputs, gradient)
 
     assert calls == {
-        "stablefold_triangle_forward_out": 1,
-        "stablefold_triangle_delta_out": 1,
-        "stablefold_triangle_dkdv_delta_true_out": 1,
-        "stablefold_triangle_dq_dbias_out": 1,
+        "turbopairformer_triangle_forward_out": 1,
+        "turbopairformer_triangle_delta_out": 1,
+        "turbopairformer_triangle_dkdv_delta_true_out": 1,
+        "turbopairformer_triangle_dq_dbias_out": 1,
     }
     assert not residuals

@@ -29,7 +29,7 @@ docker run --rm --gpus all --network none \
     cd /tmp
     unset PYTHONPATH PYTHONHOME LD_PRELOAD LD_LIBRARY_PATH
     export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1
-    export TURBOPAIRFORMER_ALLOW_JIT=0 OPENFOLD3_TRIANGLE_ALLOW_JIT=0 STABLEFOLD_ALLOW_JIT=0
+    export TURBOPAIRFORMER_ALLOW_JIT=0 OPENFOLD3_TRIANGLE_ALLOW_JIT=0
     export OPENFOLD3_TRIANGLE_PROVIDER=turbopairformer
     export CUDA_HOME=/nonexistent TORCH_EXTENSIONS_DIR=/tmp/no-jit-cache
     python -m venv --system-site-packages /tmp/validation

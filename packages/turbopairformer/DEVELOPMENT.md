@@ -221,15 +221,14 @@ ignored `_build_manifest.local.json`; wheels embed `_build_manifest.json`.
 
 The defaults are `TURBOPAIRFORMER_SR_BACKWARD=1` (single-reconstruction backward),
 `TURBOPAIRFORMER_SR_SHADOW=1` (save and use the forward rounding residual), and
-`TURBOPAIRFORMER_ALLOW_JIT=0`. Advanced users may explicitly override them. The old
-`STABLEFOLD_*` execution flags and corresponding `OPENFOLD3_*` aliases remain
-accepted. Precedence is `TURBOPAIRFORMER_*`, then `STABLEFOLD_*`, then
-`OPENFOLD3_*`; an explicit canonical `0` overrides a legacy `1`. Build and
-validation commands use the new `TURBOPAIRFORMER_*` names.
+`TURBOPAIRFORMER_ALLOW_JIT=0`. Advanced users may explicitly override them.
+The corresponding `OPENFOLD3_*` aliases remain accepted; canonical
+`TURBOPAIRFORMER_*` values take precedence, including explicit `0` values.
 
-The earlier package rename preserved CUDA source bytes, C++ exports, internal
-AOT module keys, and extension leaf names. Their `stablefold_*` names are internal ABI
-identifiers. Public Torch custom operations use the `turbopairformer` namespace.
+Version 0.1.1 uses `turbopairformer_*` C++ exports, Python wrappers, AOT module
+keys and extension names. Public Torch custom operations use the
+`turbopairformer` namespace. Precompiled extensions must come from the same
+wheel as the Python package.
 
 ## Host integration and scope
 

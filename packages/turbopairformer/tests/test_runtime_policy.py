@@ -36,6 +36,17 @@ def test_default_policy_stores_residual_without_mutating_environment():
     assert dict(os.environ) == environment
 
 
+def test_execution_flags_have_one_host_alias_and_no_duplicate_canonical_names():
+    assert policy.LEGACY_ENV_NAMES == {
+        "TURBOPAIRFORMER_SR_BACKWARD": ("OPENFOLD3_SR_BACKWARD",),
+        "TURBOPAIRFORMER_SR_SHADOW": ("OPENFOLD3_SR_SHADOW",),
+        "TURBOPAIRFORMER_ALLOW_JIT": ("OPENFOLD3_TRIANGLE_ALLOW_JIT",),
+    }
+    for canonical, (alias,) in policy.LEGACY_ENV_NAMES.items():
+        assert policy.canonical_flag_name(canonical) == canonical
+        assert policy.canonical_flag_name(alias) == canonical
+
+
 @pytest.mark.parametrize(
     ("canonical", "explicit_name"),
     [
@@ -57,7 +68,7 @@ def test_explicit_zero_overrides_default_for_every_flag_spelling(
         assert not runtime._development_jit_enabled()
 
 
-@pytest.mark.parametrize("spelling_index", (0, 1, 2))
+@pytest.mark.parametrize("spelling_index", (0, 1))
 def test_strict_default_snapshot_matches_explicit_residual_enablement(
     spelling_index, monkeypatch
 ):
@@ -108,10 +119,6 @@ def test_strict_policy_rejects_default_residual_disablement(
         ({}, False),
         ({"TURBOPAIRFORMER_ALLOW_JIT": "1"}, True),
         ({"OPENFOLD3_TRIANGLE_ALLOW_JIT": "1"}, True),
-        ({"STABLEFOLD_ALLOW_JIT": "1"}, True),
-        ({"TURBOPAIRFORMER_ALLOW_JIT": "0", "STABLEFOLD_ALLOW_JIT": "1"}, False),
-        ({"TURBOPAIRFORMER_ALLOW_JIT": "1", "STABLEFOLD_ALLOW_JIT": "0"}, True),
-        ({"STABLEFOLD_ALLOW_JIT": "0", "OPENFOLD3_TRIANGLE_ALLOW_JIT": "1"}, False),
         (
             {"TURBOPAIRFORMER_ALLOW_JIT": "0", "OPENFOLD3_TRIANGLE_ALLOW_JIT": "1"},
             False,
@@ -164,14 +171,14 @@ def test_installed_wheel_ignores_unowned_local_receipt(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("canonical", policy.EXECUTION_ENV_KEYS)
 def test_execution_aliases_follow_canonical_precedence(canonical, monkeypatch):
-    stablefold_alias, openfold_alias = policy.LEGACY_ENV_NAMES[canonical]
+    (openfold_alias,) = policy.LEGACY_ENV_NAMES[canonical]
     monkeypatch.setenv(openfold_alias, "1")
     assert policy.distributed_execution_flag(canonical)
-    monkeypatch.setenv(stablefold_alias, "0")
+    monkeypatch.setenv(canonical, "0")
     assert not policy.distributed_execution_flag(canonical)
+    assert not policy.distributed_execution_flag(openfold_alias)
     monkeypatch.setenv(canonical, "1")
     assert policy.distributed_execution_flag(canonical)
-    assert policy.distributed_execution_flag(stablefold_alias)
     assert policy.distributed_execution_flag(openfold_alias)
     policy._set_distributed_strict(True, policy.execution_environment())
     monkeypatch.setenv(openfold_alias, "0")
@@ -200,7 +207,7 @@ for name in ("_trimul_fwd_v1", "_trimul_bwd_v1"):
     ).schema()
     assert schema.name == "turbopairformer::" + name
 assert not any(
-    name.startswith("turbopairformer._ext._stablefold_")
+    name.startswith("turbopairformer._ext._turbopairformer_")
     for name in sys.modules
 )
 """,

@@ -53,7 +53,7 @@ def source_sha256() -> dict[str, str]:
     from turbopairformer._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
-    return source_sha256_for("stablefold_dq_dbias", source)
+    return source_sha256_for("turbopairformer_dq_dbias", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
@@ -62,13 +62,13 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         from turbopairformer._aot_runtime import load_extension_module
 
         _EXTENSION = load_extension_module(
-            module_key="stablefold_dq_dbias",
-            aot_module=("turbopairformer._ext._stablefold_dq_dbias_sm90a"),
+            module_key="turbopairformer_dq_dbias",
+            aot_module=("turbopairformer._ext._turbopairformer_dq_dbias_sm90a"),
             source=Path(__file__).with_suffix(".cu"),
             expected_symbols=(
-                "stablefold_triangle_dq_dbias_out",
-                "stablefold_reduce_broadcast_dbias_out",
-                "stablefold_triangle_sr_backward_out",
+                "turbopairformer_triangle_dq_dbias_out",
+                "turbopairformer_reduce_broadcast_dbias_out",
+                "turbopairformer_triangle_sr_backward_out",
             ),
             verbose=bool(verbose),
         )
@@ -287,7 +287,7 @@ def workspace_elements(
     ).elements
 
 
-def stablefold_reduce_broadcast_dbias(
+def turbopairformer_reduce_broadcast_dbias(
     per_batch_dbias: torch.Tensor,
     *,
     target_prefix: tuple[int, ...],
@@ -322,7 +322,7 @@ def stablefold_reduce_broadcast_dbias(
             dtype=torch.bfloat16,
         )
     with torch.cuda.device(per_batch_dbias.device), torch.no_grad():
-        load_extension().stablefold_reduce_broadcast_dbias_out(
+        load_extension().turbopairformer_reduce_broadcast_dbias_out(
             per_batch_dbias,
             out,
             list(target_prefix),
@@ -331,7 +331,7 @@ def stablefold_reduce_broadcast_dbias(
     return out
 
 
-def stablefold_triangle_dq_dbias(
+def turbopairformer_triangle_dq_dbias(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -383,7 +383,7 @@ def stablefold_triangle_dq_dbias(
             dtype=torch.float32,
         )
     with torch.cuda.device(q.device), torch.no_grad():
-        load_extension().stablefold_triangle_dq_dbias_out(
+        load_extension().turbopairformer_triangle_dq_dbias_out(
             q,
             k,
             v,
@@ -402,7 +402,7 @@ def stablefold_triangle_dq_dbias(
     return out_dq, out_dbias
 
 
-def stablefold_triangle_sr_backward(
+def turbopairformer_triangle_sr_backward(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -465,7 +465,7 @@ def stablefold_triangle_sr_backward(
         dtype=torch.float32,
     )
     with torch.cuda.device(q.device), torch.no_grad():
-        load_extension().stablefold_triangle_sr_backward_out(
+        load_extension().turbopairformer_triangle_sr_backward_out(
             q,
             k,
             v,
@@ -589,9 +589,9 @@ __all__ = [
     "load_extension",
     "source_sha256",
     "sr_workspace_plan",
-    "stablefold_reduce_broadcast_dbias",
-    "stablefold_triangle_dq_dbias",
-    "stablefold_triangle_sr_backward",
+    "turbopairformer_reduce_broadcast_dbias",
+    "turbopairformer_triangle_dq_dbias",
+    "turbopairformer_triangle_sr_backward",
     "workspace_elements",
     "workspace_plan",
 ]

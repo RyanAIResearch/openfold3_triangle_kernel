@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -182,6 +183,7 @@ def test_failed_gpu_test_is_rejected(bundle):
         ("source", "source checkout"),
         ("gpu", "Hopper"),
         ("commit", "source commit"),
+        ("extensions", "all five extensions"),
     ],
 )
 def test_doctor_must_identify_exact_installed_gpu_build(bundle, change, match):
@@ -193,12 +195,60 @@ def test_doctor_must_identify_exact_installed_gpu_build(bundle, change, match):
         report["package"]["path"] = "/checkout/turbopairformer/__init__.py"
     elif change == "gpu":
         report["gpu"]["available"] = False
+    elif change == "extensions":
+        extensions = report["aot"]["extensions"]
+        extensions["another_build_forward"] = extensions.pop(
+            "turbopairformer_forward"
+        )
     else:
         report["aot"]["git"]["commit"] = "b" * 40
     path = output / "installed-aot.json"
     path.write_text(json.dumps(report))
     with pytest.raises(ValueError, match=match):
         release.validate_doctor(path, COMMIT, info["version"], manifest_hash)
+
+
+def test_doctor_records_canonical_installed_aot_extensions(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "turbopairformer_doctor",
+        Path(__file__).resolve().parents[1] / "turbopairformer_doctor.py",
+    )
+    doctor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(doctor)
+    suffixes = ("forward", "delta", "dkdv", "dq_dbias", "trimul")
+    entries = {
+        f"turbopairformer_{suffix}": {
+            "module": f"turbopairformer._ext._turbopairformer_{suffix}_sm90a"
+        }
+        for suffix in suffixes
+    }
+    manifest_path = tmp_path / "_build_manifest.json"
+    manifest_path.write_text(json.dumps({"built": True, "extensions": entries}))
+    preflighted = []
+    modules = {
+        "turbopairformer._aot_runtime": SimpleNamespace(
+            _manifest_path=lambda: manifest_path,
+            _preflight_aot_artifact=lambda key, module: preflighted.append(
+                (key, module)
+            ),
+        )
+    }
+    expected_paths = {}
+    for suffix in suffixes:
+        key = f"turbopairformer_{suffix}"
+        facade = "trimul_cuda" if suffix == "trimul" else f"triangle_{suffix}"
+        path = str(tmp_path / "_ext" / f"_{key}_sm90a.so")
+        expected_paths[key] = path
+        modules[f"turbopairformer.{facade}"] = SimpleNamespace(
+            load_extension=lambda path=path: SimpleNamespace(__file__=path)
+        )
+    monkeypatch.setattr(doctor.importlib, "import_module", modules.__getitem__)
+
+    report = doctor._check_extensions("turbopairformer")
+
+    assert report["extensions"] == expected_paths
+    assert set(report["extensions"]) == release.EXTENSIONS
+    assert preflighted == [(key, entry["module"]) for key, entry in entries.items()]
 
 
 def test_wheel_digest_mismatch_is_rejected(bundle):

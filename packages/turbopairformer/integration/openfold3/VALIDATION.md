@@ -39,6 +39,9 @@ change.
 
 ## Package
 
+These results describe the original integration campaign. The internal naming
+changes in 0.1.1 do not recertify host integration.
+
 | Check | Result |
 | --- | --- |
 | `tools/build_sm90_wheel.sh` | wheel built in 9.5 min; clean-install smoke (no compiler on PATH, JIT forbidden) passed |
@@ -48,14 +51,17 @@ change.
 
 ## Host patch on upstream `aqlaboratory/openfold-3` e47adbf
 
+These results describe the original integration campaign. The internal naming
+changes in 0.1.1 do not recertify host integration.
+
 | Check | Result |
 | --- | --- |
 | `git apply` on a fresh checkout | clean, 16 files |
-| Import without the package installed | OpenFold3 imports; `stablefold_aot_modules_from_config` resolves to `None` |
+| Import without the package installed | OpenFold3 imports; the optional module-discovery hook resolves to `None` |
 | `TriangleAttention` layer with `use_stable_triangle_attention=True` | routed to the package (invocation count +1) |
 | `TriangleMultiplicationOutgoing` with `use_stable_triangle_multiplicative=True` | N=128 routed to the package; N=64 fell back to stock with one warning |
 | Model config with both flags on | accepted by the upstream config validator |
-| `run_openfold train`, one BF16 step, PDB subset, crop 384 | `max_steps=1` reached; 360 StableFold attention invocations in the step; zero fallback messages |
+| `run_openfold train`, one BF16 step, PDB subset, crop 384 | `max_steps=1` reached; 360 attention invocations in the step; zero fallback messages |
 | `tests/host_openfold3/` (routing, TriMul custom op, support, offload, diffusion scope) against the patched upstream | 218 passed |
 
 ## Not yet validated

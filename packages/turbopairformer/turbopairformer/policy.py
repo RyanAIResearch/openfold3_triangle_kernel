@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import os
 
-# Canonical flag names.  The previous ``STABLEFOLD_*`` names and
-# ``OPENFOLD3_*`` spellings remain accepted for existing launchers.
+# Canonical flag names. ``OPENFOLD3_*`` spellings remain accepted for
+# existing host launchers.
 # The canonical name wins when more than one is set.
 SR_BACKWARD = "TURBOPAIRFORMER_SR_BACKWARD"
 SR_SHADOW = "TURBOPAIRFORMER_SR_SHADOW"
@@ -20,9 +20,9 @@ ALLOW_JIT = "TURBOPAIRFORMER_ALLOW_JIT"
 
 EXECUTION_ENV_KEYS: tuple[str, ...] = (SR_BACKWARD, SR_SHADOW, ALLOW_JIT)
 LEGACY_ENV_NAMES: dict[str, tuple[str, ...]] = {
-    SR_BACKWARD: ("STABLEFOLD_SR_BACKWARD", "OPENFOLD3_SR_BACKWARD"),
-    SR_SHADOW: ("STABLEFOLD_SR_SHADOW", "OPENFOLD3_SR_SHADOW"),
-    ALLOW_JIT: ("STABLEFOLD_ALLOW_JIT", "OPENFOLD3_TRIANGLE_ALLOW_JIT"),
+    SR_BACKWARD: ("OPENFOLD3_SR_BACKWARD",),
+    SR_SHADOW: ("OPENFOLD3_SR_SHADOW",),
+    ALLOW_JIT: ("OPENFOLD3_TRIANGLE_ALLOW_JIT",),
 }
 _DEFAULT_EXECUTION_FLAGS = {SR_BACKWARD: "1", SR_SHADOW: "1", ALLOW_JIT: "0"}
 _CANONICAL_BY_ANY_NAME: dict[str, str] = {

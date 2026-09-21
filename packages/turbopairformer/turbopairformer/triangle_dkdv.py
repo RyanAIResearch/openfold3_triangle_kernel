@@ -16,7 +16,7 @@ def source_sha256() -> dict[str, str]:
     from turbopairformer._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
-    return source_sha256_for("stablefold_dkdv", source)
+    return source_sha256_for("turbopairformer_dkdv", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
@@ -25,12 +25,12 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         from turbopairformer._aot_runtime import load_extension_module
 
         _EXTENSION = load_extension_module(
-            module_key="stablefold_dkdv",
-            aot_module="turbopairformer._ext._stablefold_dkdv_sm90a",
+            module_key="turbopairformer_dkdv",
+            aot_module="turbopairformer._ext._turbopairformer_dkdv_sm90a",
             source=Path(__file__).with_suffix(".cu"),
             expected_symbols=(
-                "stablefold_triangle_dkdv_out",
-                "stablefold_triangle_dkdv_delta_true_out",
+                "turbopairformer_triangle_dkdv_out",
+                "turbopairformer_triangle_dkdv_delta_true_out",
             ),
             verbose=bool(verbose),
         )
@@ -51,7 +51,7 @@ def delta_true_partial_elements(
     return batch * outer * heads * sequence * key_blocks
 
 
-def stablefold_triangle_dkdv(
+def turbopairformer_triangle_dkdv(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -85,7 +85,7 @@ def stablefold_triangle_dkdv(
         out_dv = torch.empty_like(q)
     if not emit_delta_true:
         with torch.cuda.device(q.device), torch.no_grad():
-            load_extension().stablefold_triangle_dkdv_out(
+            load_extension().turbopairformer_triangle_dkdv_out(
                 q,
                 k,
                 v,
@@ -113,7 +113,7 @@ def stablefold_triangle_dkdv(
     if out_delta_true is None:
         out_delta_true = torch.empty_like(logsumexp)
     with torch.cuda.device(q.device), torch.no_grad():
-        load_extension().stablefold_triangle_dkdv_delta_true_out(
+        load_extension().turbopairformer_triangle_dkdv_delta_true_out(
             q,
             k,
             v,
@@ -134,5 +134,5 @@ __all__ = [
     "delta_true_partial_elements",
     "load_extension",
     "source_sha256",
-    "stablefold_triangle_dkdv",
+    "turbopairformer_triangle_dkdv",
 ]

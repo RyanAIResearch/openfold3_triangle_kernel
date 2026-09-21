@@ -48,7 +48,7 @@ def _keywords(call: ast.Call) -> dict[str, ast.expr]:
     }
 
 
-def test_rollout_keeps_aqlab_diffusion_and_disables_stablefold():
+def test_rollout_keeps_aqlab_diffusion_and_disables_turbopairformer():
     rollout = _openfold3_method("_rollout")
     sample_diffusion = _self_call(rollout, "sample_diffusion")
     keywords = _keywords(sample_diffusion)
@@ -109,7 +109,7 @@ def test_train_diffusion_keeps_aqlab_stock_high_precision_attention():
     assert keywords["use_high_precision_attention"].value is True
 
 
-def test_stablefold_remains_selected_only_at_non_diffusion_sites():
+def test_turbopairformer_remains_selected_only_at_non_diffusion_sites():
     trunk = _openfold3_method("run_trunk")
     pairformer = _self_call(trunk, "pairformer_stack")
     pairformer_stable = _keywords(pairformer)["use_stable_triangle_attention"]

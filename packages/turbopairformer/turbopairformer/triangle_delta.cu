@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// StableFold delta precompute: delta[o,h,q] = sum_d dO[o,h,q,d]*O[o,h,q,d].
+// TurboPairFormer delta precompute: delta[o,h,q] = sum_d dO[o,h,q,d]*O[o,h,q,d].
 //
 // One warp owns one row; each lane holds one product (D=32 == warp size) and
 // the sum runs down a fixed XOR-shuffle tree. Single writer per output
@@ -18,7 +18,7 @@ constexpr int kWarpSize = 32;
 constexpr int kWarpsPerBlock = 8;
 constexpr int kThreads = kWarpsPerBlock * kWarpSize;
 
-__global__ __launch_bounds__(kThreads) void stablefold_triangle_delta_kernel(
+__global__ __launch_bounds__(kThreads) void turbopairformer_triangle_delta_kernel(
     const __nv_bfloat16* __restrict__ d_output,
     const __nv_bfloat16* __restrict__ output,
     float* __restrict__ delta,
@@ -64,7 +64,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_delta_kernel(
 // (~= sum_k P_k dP_k) without a second score reconstruction. Same warp
 // ownership and fixed shuffle tree as the classic kernel.
 __global__ __launch_bounds__(kThreads) void
-stablefold_triangle_delta_shadow_kernel(
+turbopairformer_triangle_delta_shadow_kernel(
     const __nv_bfloat16* __restrict__ d_output,
     const __nv_bfloat16* __restrict__ output,
     const __nv_bfloat16* __restrict__ shadow_residual,
@@ -103,7 +103,7 @@ stablefold_triangle_delta_shadow_kernel(
   }
 }
 
-void stablefold_triangle_delta_out(
+void turbopairformer_triangle_delta_out(
     const torch::Tensor& d_output,
     const torch::Tensor& output,
     torch::Tensor& delta) {
@@ -139,15 +139,15 @@ void stablefold_triangle_delta_out(
   if (resolved_device != device_index) {
     cudaFuncAttributes attributes{};
     const cudaError_t attribute_status = cudaFuncGetAttributes(
-        &attributes, stablefold_triangle_delta_kernel);
+        &attributes, turbopairformer_triangle_delta_kernel);
     TORCH_CHECK(
         attribute_status == cudaSuccess,
-        "failed to resolve StableFold delta kernel attributes: ",
+        "failed to resolve TurboPairFormer delta kernel attributes: ",
         cudaGetErrorString(attribute_status));
     resolved_device = device_index;
   }
   auto stream = at::cuda::getCurrentCUDAStream();
-  stablefold_triangle_delta_kernel<<<
+  turbopairformer_triangle_delta_kernel<<<
       static_cast<unsigned int>(blocks), kThreads, 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(d_output.data_ptr()),
       reinterpret_cast<const __nv_bfloat16*>(output.data_ptr()),
@@ -159,7 +159,7 @@ void stablefold_triangle_delta_out(
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "launch failed");
 }
 
-void stablefold_triangle_delta_shadow_out(
+void turbopairformer_triangle_delta_shadow_out(
     const torch::Tensor& d_output,
     const torch::Tensor& output,
     const torch::Tensor& shadow_residual,
@@ -192,7 +192,7 @@ void stablefold_triangle_delta_shadow_out(
       "delta launch exceeds the CUDA grid-x contract");
   const c10::cuda::CUDAGuard device_guard(d_output.device());
   auto stream = at::cuda::getCurrentCUDAStream();
-  stablefold_triangle_delta_shadow_kernel<<<
+  turbopairformer_triangle_delta_shadow_kernel<<<
       static_cast<unsigned int>(blocks), kThreads, 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(d_output.data_ptr()),
       reinterpret_cast<const __nv_bfloat16*>(output.data_ptr()),
@@ -209,11 +209,11 @@ void stablefold_triangle_delta_shadow_out(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
-      "stablefold_triangle_delta_out",
-      &stablefold_triangle_delta_out,
+      "turbopairformer_triangle_delta_out",
+      &turbopairformer_triangle_delta_out,
       "delta = rowsum(dO * O), warp-owned rows, fixed shuffle tree");
   module.def(
-      "stablefold_triangle_delta_shadow_out",
-      &stablefold_triangle_delta_shadow_out,
+      "turbopairformer_triangle_delta_shadow_out",
+      &turbopairformer_triangle_delta_shadow_out,
       "delta = rowsum(dO * (O + shadow residual)), probability-consistent");
 }

@@ -57,11 +57,11 @@ REQUIRED_FUNCTIONAL_GPU_CASES = {
 }
 CLI_ARGUMENTS = (("--help",), ("--version",), ("api", "--all"))
 EXTENSIONS = {
-    "stablefold_forward",
-    "stablefold_delta",
-    "stablefold_dkdv",
-    "stablefold_dq_dbias",
-    "stablefold_trimul",
+    "turbopairformer_forward",
+    "turbopairformer_delta",
+    "turbopairformer_dkdv",
+    "turbopairformer_dq_dbias",
+    "turbopairformer_trimul",
 }
 
 
@@ -75,7 +75,7 @@ def digest(path: Path) -> str:
 
 
 def requires_current_api_evidence(version: str) -> bool:
-    """Keep historical 0.1.0 receipts valid; require new API checks from 0.1.1."""
+    """Require functional API and installed CLI checks from version 0.1.1."""
 
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:$|[^0-9])", version)
     require(match is not None, "unsupported release version")

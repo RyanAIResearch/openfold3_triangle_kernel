@@ -15,7 +15,7 @@ def source_sha256() -> dict[str, str]:
     from turbopairformer._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
-    return source_sha256_for("stablefold_delta", source)
+    return source_sha256_for("turbopairformer_delta", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
@@ -25,12 +25,12 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         from turbopairformer._aot_runtime import load_extension_module
 
         _EXTENSION = load_extension_module(
-            module_key="stablefold_delta",
-            aot_module=("turbopairformer._ext._stablefold_delta_sm90a"),
+            module_key="turbopairformer_delta",
+            aot_module=("turbopairformer._ext._turbopairformer_delta_sm90a"),
             source=Path(__file__).with_suffix(".cu"),
             expected_symbols=(
-                "stablefold_triangle_delta_out",
-                "stablefold_triangle_delta_shadow_out",
+                "turbopairformer_triangle_delta_out",
+                "turbopairformer_triangle_delta_shadow_out",
             ),
             verbose=bool(verbose),
         )

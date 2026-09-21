@@ -853,7 +853,7 @@ def test_hopper_dynamic_sequence_export_save_load_preserves_versioned_target(tmp
     ]
     assert custom_targets == ["turbopairformer._trimul_fwd_v1.default"]
 
-    artifact = tmp_path / "stablefold_trimul_dynamic.pt2"
+    artifact = tmp_path / "turbopairformer_trimul_dynamic.pt2"
     torch.export.save(exported, artifact)
     loaded = torch.export.load(artifact).module()
     z_dynamic = torch.randn(

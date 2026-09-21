@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// StableFold dK/dV with key-block ownership and runtime shape dispatch.
+// TurboPairFormer dK/dV with key-block ownership and runtime shape dispatch.
 //
 // One CTA owns one (64-key block, head, outer) and its dK/dV accumulators
 // outright: dK[k]/dV[k] depend only on column k of dS, so key-block
@@ -238,7 +238,7 @@ __device__ __forceinline__ uint32_t pack_bf16_pair(float low, float high) {
 
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
           bool EmitDeltaTrue, bool OuterEqSeq, bool TmaQdo>
-__device__ __forceinline__ void stablefold_triangle_dkdv_body(
+__device__ __forceinline__ void turbopairformer_triangle_dkdv_body(
     const CUtensorMap* q_map,
     const CUtensorMap* do_map,
     const CUtensorMap* k_map,
@@ -754,7 +754,7 @@ __device__ __forceinline__ void stablefold_triangle_dkdv_body(
 // away and the dead nullptr/0 arguments vanish under inlining).
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
           bool OuterEqSeq, bool TmaQdo>
-__global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
+__global__ __launch_bounds__(kThreads) void turbopairformer_triangle_dkdv_kernel(
     const __grid_constant__ CUtensorMap q_map,
     const __grid_constant__ CUtensorMap do_map,
     const __grid_constant__ CUtensorMap k_map,
@@ -775,7 +775,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
     int batch,
     int io_dim,
     float scale) {
-  stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
+  turbopairformer_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 false, OuterEqSeq, TmaQdo>(
       &q_map, &do_map, &k_map, &v_map, q, k, v, d_output, logsumexp,
       delta, mask, bias, out_dk, out_dv, nullptr, 0, runtime_sequence,
@@ -785,7 +785,7 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_dkdv_kernel(
 template <int HeadDim, int StaticSequence, bool TileMajorGrid,
           bool OuterEqSeq, bool TmaQdo>
 __global__ __launch_bounds__(kThreads)
-void stablefold_triangle_dkdv_delta_true_kernel(
+void turbopairformer_triangle_dkdv_delta_true_kernel(
     const __grid_constant__ CUtensorMap q_map,
     const __grid_constant__ CUtensorMap do_map,
     const __grid_constant__ CUtensorMap k_map,
@@ -808,7 +808,7 @@ void stablefold_triangle_dkdv_delta_true_kernel(
     int batch,
     int io_dim,
     float scale) {
-  stablefold_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
+  turbopairformer_triangle_dkdv_body<HeadDim, StaticSequence, TileMajorGrid,
                                 true, OuterEqSeq, TmaQdo>(
       &q_map, &do_map, &k_map, &v_map, q, k, v, d_output, logsumexp,
       delta, mask, bias, out_dk, out_dv, delta_true_partials, key_blocks,
@@ -820,7 +820,7 @@ void stablefold_triangle_dkdv_delta_true_kernel(
 // to LSE rounding, measured 1 +- 1.3e-6 on the real capture). One thread
 // owns one row; fully masked rows emit exact zeros because every w_k is
 // zero. Row layout matches lse/delta [B,N,H,N].
-__global__ void stablefold_delta_true_reduce_kernel(
+__global__ void turbopairformer_delta_true_reduce_kernel(
     const float* __restrict__ partials,
     float* __restrict__ delta_true,
     int64_t rows,
@@ -893,21 +893,21 @@ void launch(
   if constexpr (EmitDeltaTrue) {
     const cudaError_t attribute_status = tile_major_grid
         ? cudaFuncSetAttribute(
-              stablefold_triangle_dkdv_delta_true_kernel<
+              turbopairformer_triangle_dkdv_delta_true_kernel<
                   HeadDim, StaticSequence, true, OuterEqSeq, TmaQdo>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes)
         : cudaFuncSetAttribute(
-              stablefold_triangle_dkdv_delta_true_kernel<
+              turbopairformer_triangle_dkdv_delta_true_kernel<
                   HeadDim, StaticSequence, false, OuterEqSeq, TmaQdo>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes);
     TORCH_CHECK(
         attribute_status == cudaSuccess,
-        "failed to opt in StableFold dK/dV shared memory: ",
+        "failed to opt in TurboPairFormer dK/dV shared memory: ",
         cudaGetErrorString(attribute_status));
     if (tile_major_grid) {
-      stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
+      turbopairformer_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
                                                  true, OuterEqSeq, TmaQdo>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
@@ -933,7 +933,7 @@ void launch(
               io_dim,
               scale);
     } else {
-      stablefold_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
+      turbopairformer_triangle_dkdv_delta_true_kernel<HeadDim, StaticSequence,
                                                  false, OuterEqSeq, TmaQdo>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
@@ -962,21 +962,21 @@ void launch(
   } else {
     const cudaError_t attribute_status = tile_major_grid
         ? cudaFuncSetAttribute(
-              stablefold_triangle_dkdv_kernel<
+              turbopairformer_triangle_dkdv_kernel<
                   HeadDim, StaticSequence, true, OuterEqSeq, TmaQdo>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes)
         : cudaFuncSetAttribute(
-              stablefold_triangle_dkdv_kernel<
+              turbopairformer_triangle_dkdv_kernel<
                   HeadDim, StaticSequence, false, OuterEqSeq, TmaQdo>,
               cudaFuncAttributeMaxDynamicSharedMemorySize,
               kSharedBytes);
     TORCH_CHECK(
         attribute_status == cudaSuccess,
-        "failed to opt in StableFold dK/dV shared memory: ",
+        "failed to opt in TurboPairFormer dK/dV shared memory: ",
         cudaGetErrorString(attribute_status));
     if (tile_major_grid) {
-      stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, true,
+      turbopairformer_triangle_dkdv_kernel<HeadDim, StaticSequence, true,
                                       OuterEqSeq, TmaQdo>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
@@ -1000,7 +1000,7 @@ void launch(
               io_dim,
               scale);
     } else {
-      stablefold_triangle_dkdv_kernel<HeadDim, StaticSequence, false,
+      turbopairformer_triangle_dkdv_kernel<HeadDim, StaticSequence, false,
                                       OuterEqSeq, TmaQdo>
           <<<grid, kThreads, kSharedBytes, stream>>>(
               q_map,
@@ -1336,18 +1336,18 @@ void run_dkdv(
           outer_count, heads, batch, io_dim, stream);
       break;
     default:
-      TORCH_CHECK(false, "unsupported storage lane for StableFold dK/dV");
+      TORCH_CHECK(false, "unsupported storage lane for TurboPairFormer dK/dV");
   }
   {
     const cudaError_t launch_status = cudaGetLastError();
     TORCH_CHECK(
         launch_status == cudaSuccess,
-        "StableFold dK/dV launch failed: ",
+        "TurboPairFormer dK/dV launch failed: ",
         cudaGetErrorString(launch_status));
   }
 }
 
-void stablefold_triangle_dkdv_out(
+void turbopairformer_triangle_dkdv_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -1363,7 +1363,7 @@ void stablefold_triangle_dkdv_out(
       nullptr);
 }
 
-void stablefold_triangle_dkdv_delta_true_out(
+void turbopairformer_triangle_dkdv_delta_true_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -1404,7 +1404,7 @@ void stablefold_triangle_dkdv_delta_true_out(
   TORCH_CHECK(
       reduce_blocks > 0 && reduce_blocks <= 2147483647LL,
       "delta_true reduce exceeds the CUDA grid-x contract");
-  stablefold_delta_true_reduce_kernel<<<
+  turbopairformer_delta_true_reduce_kernel<<<
       static_cast<unsigned int>(reduce_blocks), kReduceThreads, 0, stream>>>(
       delta_true_partials.data_ptr<float>(),
       out_delta_true.data_ptr<float>(),
@@ -1413,19 +1413,19 @@ void stablefold_triangle_dkdv_delta_true_out(
       static_cast<int>(sequence));
   TORCH_CHECK(
       cudaGetLastError() == cudaSuccess,
-      "StableFold delta_true reduce launch failed");
+      "TurboPairFormer delta_true reduce launch failed");
 }
 
 }  // namespace
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
-      "stablefold_triangle_dkdv_out",
-      &stablefold_triangle_dkdv_out,
-      "StableFold dK/dV (key-block ownership, runtime H/D/N)");
+      "turbopairformer_triangle_dkdv_out",
+      &turbopairformer_triangle_dkdv_out,
+      "TurboPairFormer dK/dV (key-block ownership, runtime H/D/N)");
   module.def(
-      "stablefold_triangle_dkdv_delta_true_out",
-      &stablefold_triangle_dkdv_delta_true_out,
-      "StableFold dK/dV plus the recomputed delta_true = sum(P*dP) row "
+      "turbopairformer_triangle_dkdv_delta_true_out",
+      &turbopairformer_triangle_dkdv_delta_true_out,
+      "TurboPairFormer dK/dV plus the recomputed delta_true = sum(P*dP) row "
       "scalars (fixed-order key-block fold, zero atomics)");
 }

@@ -143,7 +143,7 @@ class TurboPairFormerTriangleWorkspaceTest(unittest.TestCase):
         source = (
             Path(__file__).parents[1] / "turbopairformer/triangle_dq_dbias.cu"
         ).read_text()
-        start = source.index("__global__ void stablefold_dq_dbias_finalize_kernel(")
+        start = source.index("__global__ void turbopairformer_dq_dbias_finalize_kernel(")
         finalizer = source[start : source.index("\n}", start)]
         self.assertRegex(finalizer, r"float\s+root\[kElements\]\s*;")
         self.assertRegex(

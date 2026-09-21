@@ -50,9 +50,9 @@ def _kernel_record(rank: int, failure_mode: str | None) -> dict:
         "expected_num_nodes": 1,
         "expected_devices_per_node": 2,
         "declared_aot_modules": [
-            "stablefold_trimul"
+            "turbopairformer_trimul"
             if failure_mode == "declared_mismatch" and rank == 1
-            else "stablefold_forward"
+            else "turbopairformer_forward"
         ],
         "trainer_world_size": 2,
         "process_group_rank": rank,
@@ -84,10 +84,10 @@ def _kernel_record(rank: int, failure_mode: str | None) -> dict:
                 "installed_package_tree_sha256": "b" * 64,
             },
         },
-        "required_aot_modules": ["stablefold_forward"],
+        "required_aot_modules": ["turbopairformer_forward"],
         "aot_identity": {
             "manifest_sha256": aot_digest,
-            "modules": {"stablefold_forward": {"sha256": aot_digest}},
+            "modules": {"turbopairformer_forward": {"sha256": aot_digest}},
         },
     }
 
@@ -149,7 +149,7 @@ def _callback_worker(
             expected_world_size=world_size,
             expected_num_nodes=1,
             expected_devices_per_node=world_size,
-            expected_aot_modules=("stablefold_forward",),
+            expected_aot_modules=("turbopairformer_forward",),
             receipt_path=Path(receipt_path),
         )
         trainer = SimpleNamespace(

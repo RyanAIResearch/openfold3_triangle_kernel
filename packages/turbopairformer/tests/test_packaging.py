@@ -27,11 +27,11 @@ LOADERS = (
     "trimul_cuda.py",
 )
 EXPECTED_MODULES = {
-    "_stablefold_forward_sm90a",
-    "_stablefold_delta_sm90a",
-    "_stablefold_dkdv_sm90a",
-    "_stablefold_dq_dbias_sm90a",
-    "_stablefold_trimul_sm90a",
+    "_turbopairformer_forward_sm90a",
+    "_turbopairformer_delta_sm90a",
+    "_turbopairformer_dkdv_sm90a",
+    "_turbopairformer_dq_dbias_sm90a",
+    "_turbopairformer_trimul_sm90a",
 }
 
 
@@ -43,6 +43,7 @@ def _top_level_imports(path: Path) -> set[str]:
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module)
+            names.update(f"{node.module}.{alias.name}" for alias in node.names)
     return names
 
 
@@ -82,7 +83,11 @@ def test_facades_only_import_package_modules_lazily():
     facade = PACKAGE / "_triangle_attention.py"
     imports = _top_level_imports(facade)
     assert "turbopairformer.policy" in imports
-    assert not any(name.startswith("turbopairformer.stablefold_") for name in imports)
+    kernel_modules = {
+        "turbopairformer._aot_runtime",
+        *(f"turbopairformer.{Path(loader).stem}" for loader in LOADERS),
+    }
+    assert imports.isdisjoint(kernel_modules)
 
 
 def test_setup_defines_five_unique_sm90a_extensions():
@@ -117,6 +122,21 @@ def test_pyproject_ships_sources_and_manifest_as_package_data():
         assert pattern in package_data
     manifest = (REPOSITORY / "MANIFEST.in").read_text()
     assert "recursive-include turbopairformer *.cu *.py *.json *.md" in manifest
+
+
+def test_project_metadata_preserves_all_nine_authors_in_order():
+    project = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())["project"]
+    assert [author["name"] for author in project["authors"]] == [
+        "Yide Ran",
+        "Chelsea Lowman",
+        "Jan Domanski",
+        "David Hartmann",
+        "Jenke Scheen",
+        "Jennifer Wei",
+        "Chuan Li",
+        "Jianwen Xie",
+        "Zhaozhuo Xu",
+    ]
 
 
 def test_notice_is_self_contained():
@@ -176,7 +196,7 @@ def test_source_tree_manifest_is_fail_closed():
 
 def _wheel_validator():
     spec = importlib.util.spec_from_file_location(
-        "stablefold_wheel_validator", REPOSITORY / "tools/validate_wheel.py"
+        "turbopairformer_wheel_validator", REPOSITORY / "tools/validate_wheel.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -325,7 +345,7 @@ def test_facade_metadata_contract_is_release_bounded():
     assert "_MAX_BROADCAST_PREFIX_RANK = 16" in text
     assert "if bias_requires_broadcast and len(prefix) >" in text
     assert "D<=64" in text
-    assert "stablefold_trimul" not in text
+    assert "turbopairformer_trimul" not in text
 
 
 def test_build_entrypoint_is_abi_locked_and_smoke_tested():
@@ -373,9 +393,19 @@ def test_binary_hash_is_checked_before_extension_import():
 
 def test_trimul_custom_ops_use_the_package_namespace():
     text = (PACKAGE / "_trimul.py").read_text()
-    assert '"turbopairformer::_trimul_fwd_v1"' in text
-    assert '"turbopairformer::_trimul_bwd_v1"' in text
-    assert "openfold3_stablefold" not in text
+    registered_names = {
+        decorator.args[0].value
+        for node in ast.walk(ast.parse(text))
+        if isinstance(node, ast.FunctionDef)
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr == "custom_op"
+    }
+    assert registered_names == {
+        "turbopairformer::_trimul_fwd_v1",
+        "turbopairformer::_trimul_bwd_v1",
+    }
 
 
 def test_sdist_excludes_generated_artifacts(source_copy):
@@ -707,7 +737,7 @@ def test_elf_parser_and_patchelf_on_a_linked_shared_object(tmp_path, dtags):
     if sys.platform != "linux" or not compiler or not patchelf:
         pytest.skip("this ELF integration test needs Linux, cc, and patchelf")
     source = tmp_path / "rpath_test.c"
-    source.write_text("int stablefold_rpath_fixture(void) { return 0; }\n")
+    source.write_text("int turbopairformer_rpath_fixture(void) { return 0; }\n")
     binary = tmp_path / "rpath_test.so"
     subprocess.run(
         [

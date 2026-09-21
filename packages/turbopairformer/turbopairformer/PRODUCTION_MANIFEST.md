@@ -6,7 +6,7 @@ Triangle Attention 路径。OpenFold3 默认配置仍保持官方实现；TurboP
 不满足 facade 契约的站点记录一次原因并回退官方 PyTorch attention。
 
 每个 TurboPairFormer 发布 wheel 都必须附带自身的安装与 GPU 验证回执。
-以下算法契约沿用前身 StableFold；旧产物身份和历史结果不随改名转移。
+以下算法契约沿用既有实现；旧产物身份和历史结果不随新版本转移。
 PyPI 可安装的算子包与完整模型生产训练认证是不同范围；后者仍受下述门禁约束。
 
 ## 当前发布状态
@@ -71,10 +71,10 @@ facade 的未填充 direct ABI 调用才走 `StaticSequence=0` 的显式尾块 g
 | `openfold3/core/model/primitives/attention.py` | 显式 TurboPairFormer 路由；unsupported 模型站点回退 stock |
 | `_triangle_attention.py` | public facade、broadcast/prefix 编排、自定义 autograd |
 | `_aot_runtime.py` | AOT import、ABI/device/hash/symbol 核验；production 禁止自动 JIT |
-| `_ext/_stablefold_forward_sm90a*.so` | forward 与 fused physical-layout QKV pack AOT module |
-| `_ext/_stablefold_delta_sm90a*.so` | 独立 delta AOT module |
-| `_ext/_stablefold_dkdv_sm90a*.so` | 独立 dK+dV AOT module |
-| `_ext/_stablefold_dq_dbias_sm90a*.so` | 独立 dQ+dBias/reduce AOT module |
+| `_ext/_turbopairformer_forward_sm90a*.so` | forward 与 fused physical-layout QKV pack AOT module |
+| `_ext/_turbopairformer_delta_sm90a*.so` | 独立 delta AOT module |
+| `_ext/_turbopairformer_dkdv_sm90a*.so` | 独立 dK+dV AOT module |
+| `_ext/_turbopairformer_dq_dbias_sm90a*.so` | 独立 dQ+dBias/reduce AOT module |
 | `triangle_forward.{py,cu}` | fused QKV pack、online-softmax forward 与 LSE |
 | `triangle_delta.{py,cu}` | backward delta 预计算 |
 | `triangle_dkdv.{py,cu}` | generic/runtime dK+dV |
@@ -86,7 +86,7 @@ facade 的未填充 direct ABI 调用才走 `StaticSequence=0` 的显式尾块 g
 损坏或 ABI 不匹配的生产二进制会直接报错。生产 facade 不允许依赖
 `scripts/benchmarks` 或任何历史 backward loader。
 
-共享 AOT wheel 还包含独立的 `_stablefold_trimul_sm90a` 模块；它复用同一
+共享 AOT wheel 还包含独立的 `_turbopairformer_trimul_sm90a` 模块；它复用同一
 manifest、ABI/hash preflight 与显式 development-JIT gate，但其数值和支持范围
 不属于本 Attention release manifest。
 

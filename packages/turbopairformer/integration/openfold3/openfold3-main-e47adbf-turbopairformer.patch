@@ -731,7 +731,7 @@ index 59636b2..c99d95f 100644
      "installed with Triton support."
  )
  
-+_STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
++_TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
 +
 +
 +def _route_stable_trimul(module, z, mask):
@@ -764,8 +764,8 @@ index 59636b2..c99d95f 100644
 +        )
 +
 +    key = (type(module).__qualname__, support.code)
-+    if key not in _STABLEFOLD_TRIMUL_FALLBACK_LOGGED:
-+        _STABLEFOLD_TRIMUL_FALLBACK_LOGGED.add(key)
++    if key not in _TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED:
++        _TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED.add(key)
 +        logging.getLogger(__name__).warning(
 +            "TurboPairFormer TriMul fallback to stock for %s at shape %s [%s]: %s",
 +            type(module).__qualname__,
@@ -843,7 +843,7 @@ index b9e0ee0..2acd66c 100644
          return False
  
  
-+_STABLEFOLD_FALLBACK_LOGGED: set = set()
++_TURBOPAIRFORMER_FALLBACK_LOGGED: set = set()
 +
  DEFAULT_LMA_Q_CHUNK_SIZE = 1024
  DEFAULT_LMA_KV_CHUNK_SIZE = 4096
@@ -852,7 +852,7 @@ index b9e0ee0..2acd66c 100644
  _ZERO_PAIR_BIAS_CACHE: dict = {}
  
  
-+def _raise_if_strict_stablefold_fallback(reason: str, shape: tuple[int, ...]) -> None:
++def _raise_if_strict_turbopairformer_fallback(reason: str, shape: tuple[int, ...]) -> None:
 +    """Under the TurboPairFormer DDP strict policy an attention fallback is fatal."""
 +    from turbopairformer.policy import distributed_strict_enabled
 +
@@ -949,7 +949,7 @@ index b9e0ee0..2acd66c 100644
 +            if q_x.is_cuda and torch.cuda.get_device_capability(q_x.device) != (9, 0):
 +                blanket_reasons.append("requires Hopper compute capability 9.0")
 +            if blanket_reasons:
-+                _raise_if_strict_stablefold_fallback(
++                _raise_if_strict_turbopairformer_fallback(
 +                    "; ".join(blanket_reasons), tuple(q_x.shape)
 +                )
 +                use_stable_triangle_attention = False
@@ -999,10 +999,10 @@ index b9e0ee0..2acd66c 100644
 +                if orig_dtype != torch.bfloat16:
 +                    o = o.to(orig_dtype)
 +            else:
-+                _raise_if_strict_stablefold_fallback(reason, tuple(q.shape))
++                _raise_if_strict_turbopairformer_fallback(reason, tuple(q.shape))
 +                key = (reason, tuple(q.shape))
-+                if key not in _STABLEFOLD_FALLBACK_LOGGED:
-+                    _STABLEFOLD_FALLBACK_LOGGED.add(key)
++                if key not in _TURBOPAIRFORMER_FALLBACK_LOGGED:
++                    _TURBOPAIRFORMER_FALLBACK_LOGGED.add(key)
 +                    logging.getLogger(__name__).warning(
 +                        "turbopairformer fallback to stock at shape %s: %s",
 +                        tuple(q.shape),
@@ -1029,12 +1029,12 @@ index 684c753..c53c651 100644
 +    # TurboPairFormer is an optional dependency, adopted like cuEquivariance: the
 +    # kernels live in the standalone ``turbopairformer`` package and are selected
 +    # through the ``use_stable_triangle_*`` memory settings.
-+    import turbopairformer as stablefold_package
++    import turbopairformer as turbopairformer_package
 +except ImportError:  # pragma: no cover - exercised only without the package
-+    stablefold_package = None
++    turbopairformer_package = None
 +
 +
-+def _stablefold_flags_requested(model_config) -> bool:
++def _turbopairformer_flags_requested(model_config) -> bool:
 +    """Return whether any TurboPairFormer memory flag is enabled in the config."""
 +    memory = model_config.settings.memory
 +    return any(
@@ -1052,8 +1052,8 @@ index 684c753..c53c651 100644
          # Currently used to sync the number of recycles across ranks
          self.model_config.update({"architecture": {"shared": {"sync_seed": self.seed}}})
  
-+        if _stablefold_flags_requested(self.model_config):
-+            if stablefold_package is None:
++        if _turbopairformer_flags_requested(self.model_config):
++            if turbopairformer_package is None:
 +                raise ImportError(
 +                    "use_stable_triangle_* is enabled but the 'turbopairformer' package "
 +                    "is not installed; install the turbopairformer sm_90a wheel"

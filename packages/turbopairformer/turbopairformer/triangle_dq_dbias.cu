@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// StableFold fused dQ + dBias with bounded deterministic waves.
+// TurboPairFormer fused dQ + dBias with bounded deterministic waves.
 //
-// Production leaf under the StableFold contract (one fixed reduction tree,
+// Production leaf under the TurboPairFormer contract (one fixed reduction tree,
 // tolerance vs PyTorch, replay-bitwise vs self):
 //   * raw mma.sync + ldmatrix fragments instead of WMMA with FP32 shared
 //     round-trips and CTA-wide barriers per tile;
@@ -22,7 +22,7 @@
 // dbias = ((plane0 + plane1) + plane2) + ... in global leaf order. Wave
 // boundaries only spill/reload the FP32 root and do not change arithmetic.
 //
-// Layouts match stablefold_triangle_forward: q/k/v/dO [B,N,H,N,D] BF16,
+// Layouts match turbopairformer_triangle_forward: q/k/v/dO [B,N,H,N,D] BF16,
 // mask [B,N,1,1,N] FP32 additive, bias [B,1,H,N,N] BF16, lse/delta
 // [B,N,H,N] FP32, out_dq [B,N,H,N,D] BF16, out_dbias [B,1,H,N,N] FP32.
 
@@ -141,7 +141,7 @@ template <
     bool FullQueryTiles,
     bool TaskInGridZ,
     bool OuterEqSeq>
-__global__ __launch_bounds__(kThreads) void stablefold_dq_dbias_leaf_kernel(
+__global__ __launch_bounds__(kThreads) void turbopairformer_dq_dbias_leaf_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -582,7 +582,7 @@ __device__ __forceinline__ void wg_wgmma_wait_zero() {
 // the wgmma async live-ranges push allocation to 164 regs and occupancy
 // collapses to one CTA per SM (measured).
 template <int HeadDim, bool TaskInGridZ, bool OuterEqSeq>
-__global__ __launch_bounds__(kThreadsWg, 2) void stablefold_dq_dbias_wg_kernel(
+__global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_dq_dbias_wg_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -984,7 +984,7 @@ __device__ __forceinline__ void ldmatrix_b_rowtrans_sw_sr(
 }
 
 template <int HeadDim, bool TaskInGridZ, bool OuterEqSeq>
-__global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
+__global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
     const __nv_bfloat16* __restrict__ q,
     const __nv_bfloat16* __restrict__ k,
     const __nv_bfloat16* __restrict__ v,
@@ -1489,7 +1489,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void stablefold_sr_leaf_kernel(
 // per-kb loads coalesce to full lines and the eight per-element fadd
 // chains stay independent; per-element fold order (ascending kb) and
 // therefore the output bits match the scalar form exactly.
-__global__ void stablefold_sr_dq_reduce_kernel(
+__global__ void turbopairformer_sr_dq_reduce_kernel(
     const __nv_bfloat16* __restrict__ dq_partials,
     __nv_bfloat16* __restrict__ out_dq,
     int64_t output_elements,
@@ -1541,7 +1541,7 @@ __global__ void stablefold_sr_dq_reduce_kernel(
 // A thread owns up to eight adjacent keys, with independent FP32 folds.
 // Vectors never cross a row: workspace capacity can exceed the active slab.
 // Unaligned rows and row tails retain scalar memory accesses and the same fold.
-__global__ void stablefold_dq_dbias_finalize_kernel(
+__global__ void turbopairformer_dq_dbias_finalize_kernel(
     const __nv_bfloat16* __restrict__ workspace,
     float* __restrict__ out_dbias,
     int64_t active_elements,
@@ -1675,7 +1675,7 @@ __global__ void stablefold_dq_dbias_finalize_kernel(
 // FP32 partial is first rounded to the public BF16 per-batch contract, then
 // accumulated with explicit FP32 round-to-nearest additions. One thread owns
 // one output element; no atomics or framework reduction tree participate.
-__global__ void stablefold_reduce_broadcast_dbias_kernel(
+__global__ void turbopairformer_reduce_broadcast_dbias_kernel(
     const float* __restrict__ per_batch_dbias,
     __nv_bfloat16* __restrict__ out,
     int64_t output_elements,
@@ -1787,18 +1787,18 @@ void launch(
 #define SET_DQ_DBIAS_SMEM_ATTRIBUTE(FullTiles, TaskInZ)                    \
   do {                                                                     \
     const cudaError_t status = cudaFuncSetAttribute(                       \
-        stablefold_dq_dbias_leaf_kernel<                                    \
+        turbopairformer_dq_dbias_leaf_kernel<                                    \
             HeadDim, StaticSequence, FullTiles, TaskInZ, true>,            \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytes);                                                     \
     const cudaError_t status_g = cudaFuncSetAttribute(                     \
-        stablefold_dq_dbias_leaf_kernel<                                    \
+        turbopairformer_dq_dbias_leaf_kernel<                                    \
             HeadDim, StaticSequence, FullTiles, TaskInZ, false>,           \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytes);                                                     \
     TORCH_CHECK(                                                           \
         status == cudaSuccess && status_g == cudaSuccess,                  \
-        "failed to opt in StableFold dQ/dBias shared memory");             \
+        "failed to opt in TurboPairFormer dQ/dBias shared memory");             \
   } while (false)
   SET_DQ_DBIAS_SMEM_ATTRIBUTE(true, true);
   SET_DQ_DBIAS_SMEM_ATTRIBUTE(true, false);
@@ -1853,7 +1853,7 @@ void launch(
                   static_cast<unsigned int>(heads),
                   static_cast<unsigned int>(query_blocks));
 #define LAUNCH_DQ_DBIAS_LEAF(FullTiles, TaskInZ, OuterEq)                  \
-  stablefold_dq_dbias_leaf_kernel<                                          \
+  turbopairformer_dq_dbias_leaf_kernel<                                          \
       HeadDim, StaticSequence, FullTiles, TaskInZ, OuterEq>                \
       <<<grid, kThreads, kSharedBytes, stream>>>(                          \
           reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
@@ -1907,8 +1907,8 @@ void launch(
 #undef LAUNCH_DQ_DBIAS_LEAF
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
-            "StableFold dQ/dBias slab leaf launch failed");
-        stablefold_dq_dbias_finalize_kernel
+            "TurboPairFormer dQ/dBias slab leaf launch failed");
+        turbopairformer_dq_dbias_finalize_kernel
             <<<static_cast<unsigned int>(finalize_blocks),
                finalize_threads,
                0,
@@ -1928,7 +1928,7 @@ void launch(
                 leaf_base != 0);
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
-            "StableFold dQ/dBias slab finalizer launch failed");
+            "TurboPairFormer dQ/dBias slab finalizer launch failed");
         // Increment by the validated active extent, so even the theoretical
         // INT_MAX boundary cannot overflow a signed host loop counter.
         leaf_base += wave_leaves;
@@ -1992,16 +1992,16 @@ void launch_wg(
 #define SET_DQ_DBIAS_WG_SMEM_ATTRIBUTE(TaskInZ)                             \
   do {                                                                     \
     const cudaError_t status = cudaFuncSetAttribute(                       \
-        stablefold_dq_dbias_wg_kernel<HeadDim, TaskInZ, true>,             \
+        turbopairformer_dq_dbias_wg_kernel<HeadDim, TaskInZ, true>,             \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytesWg);                                                   \
     const cudaError_t status_g = cudaFuncSetAttribute(                     \
-        stablefold_dq_dbias_wg_kernel<HeadDim, TaskInZ, false>,            \
+        turbopairformer_dq_dbias_wg_kernel<HeadDim, TaskInZ, false>,            \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytesWg);                                                   \
     TORCH_CHECK(                                                           \
         status == cudaSuccess && status_g == cudaSuccess,                  \
-        "failed to opt in StableFold dQ/dBias warpgroup shared memory");   \
+        "failed to opt in TurboPairFormer dQ/dBias warpgroup shared memory");   \
   } while (false)
   SET_DQ_DBIAS_WG_SMEM_ATTRIBUTE(true);
   SET_DQ_DBIAS_WG_SMEM_ATTRIBUTE(false);
@@ -2051,7 +2051,7 @@ void launch_wg(
                   static_cast<unsigned int>(heads),
                   static_cast<unsigned int>(query_blocks));
 #define LAUNCH_DQ_DBIAS_WG(TaskInZ, OuterEq)                                \
-  stablefold_dq_dbias_wg_kernel<HeadDim, TaskInZ, OuterEq>                  \
+  turbopairformer_dq_dbias_wg_kernel<HeadDim, TaskInZ, OuterEq>                  \
       <<<grid, kThreadsWg, kSharedBytesWg, stream>>>(                      \
           reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
           reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),           \
@@ -2082,8 +2082,8 @@ void launch_wg(
 #undef LAUNCH_DQ_DBIAS_WG
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
-            "StableFold dQ/dBias warpgroup leaf launch failed");
-        stablefold_dq_dbias_finalize_kernel
+            "TurboPairFormer dQ/dBias warpgroup leaf launch failed");
+        turbopairformer_dq_dbias_finalize_kernel
             <<<static_cast<unsigned int>(finalize_blocks),
                finalize_threads,
                0,
@@ -2103,7 +2103,7 @@ void launch_wg(
                 leaf_base != 0);
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
-            "StableFold dQ/dBias slab finalizer launch failed");
+            "TurboPairFormer dQ/dBias slab finalizer launch failed");
         leaf_base += wave_leaves;
       }
       query_base += query_rows;
@@ -2189,16 +2189,16 @@ void launch_sr(
 #define SET_SR_SMEM_ATTRIBUTE(TaskInZ)                                      \
   do {                                                                     \
     const cudaError_t status = cudaFuncSetAttribute(                       \
-        stablefold_sr_leaf_kernel<HeadDim, TaskInZ, true>,                 \
+        turbopairformer_sr_leaf_kernel<HeadDim, TaskInZ, true>,                 \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytesSr);                                                   \
     const cudaError_t status_g = cudaFuncSetAttribute(                     \
-        stablefold_sr_leaf_kernel<HeadDim, TaskInZ, false>,                \
+        turbopairformer_sr_leaf_kernel<HeadDim, TaskInZ, false>,                \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                       \
         kSharedBytesSr);                                                   \
     TORCH_CHECK(                                                           \
         status == cudaSuccess && status_g == cudaSuccess,                  \
-        "failed to opt in StableFold SR shared memory");                   \
+        "failed to opt in TurboPairFormer SR shared memory");                   \
   } while (false)
   SET_SR_SMEM_ATTRIBUTE(true);
   SET_SR_SMEM_ATTRIBUTE(false);
@@ -2244,7 +2244,7 @@ void launch_sr(
                   static_cast<unsigned int>(heads),
                   static_cast<unsigned int>(key_blocks));
 #define LAUNCH_SR_LEAF(TaskInZ, OuterEq)                                    \
-  stablefold_sr_leaf_kernel<HeadDim, TaskInZ, OuterEq>                      \
+  turbopairformer_sr_leaf_kernel<HeadDim, TaskInZ, OuterEq>                      \
       <<<grid, kThreadsWg, kSharedBytesSr, stream>>>(                      \
           reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
           reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),           \
@@ -2282,8 +2282,8 @@ void launch_sr(
 #undef LAUNCH_SR_LEAF
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
-            "StableFold SR leaf launch failed");
-        stablefold_dq_dbias_finalize_kernel
+            "TurboPairFormer SR leaf launch failed");
+        turbopairformer_dq_dbias_finalize_kernel
             <<<static_cast<unsigned int>(finalize_blocks),
                finalize_threads,
                0,
@@ -2303,7 +2303,7 @@ void launch_sr(
                 leaf_base != 0);
         TORCH_CHECK(
             cudaGetLastError() == cudaSuccess,
-            "StableFold SR finalizer launch failed");
+            "TurboPairFormer SR finalizer launch failed");
         leaf_base += wave_leaves;
       }
       query_base += query_rows;
@@ -2321,7 +2321,7 @@ void launch_sr(
       positive_ceil_div(output_elements / 8, reduce_threads);
   const unsigned int reduce_blocks = static_cast<unsigned int>(
       std::min<int64_t>(reduce_blocks_needed, 65535));
-  stablefold_sr_dq_reduce_kernel<<<reduce_blocks, reduce_threads, 0,
+  turbopairformer_sr_dq_reduce_kernel<<<reduce_blocks, reduce_threads, 0,
                                    stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(dq_partials.data_ptr()),
       reinterpret_cast<__nv_bfloat16*>(out_dq.data_ptr()),
@@ -2331,10 +2331,10 @@ void launch_sr(
       scale);
   TORCH_CHECK(
       cudaGetLastError() == cudaSuccess,
-      "StableFold SR dQ reduce launch failed");
+      "TurboPairFormer SR dQ reduce launch failed");
 }
 
-void stablefold_triangle_sr_backward_out(
+void turbopairformer_triangle_sr_backward_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -2454,7 +2454,7 @@ void stablefold_triangle_sr_backward_out(
       break;
   }
   TORCH_CHECK(
-      cudaGetLastError() == cudaSuccess, "StableFold SR launch failed");
+      cudaGetLastError() == cudaSuccess, "TurboPairFormer SR launch failed");
 }
 
 template <int HeadDim>
@@ -2505,7 +2505,7 @@ void dispatch_sequence(
   }
 }
 
-void stablefold_triangle_dq_dbias_out(
+void turbopairformer_triangle_dq_dbias_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -2642,10 +2642,10 @@ void stablefold_triangle_dq_dbias_out(
       break;
   }
   TORCH_CHECK(
-      cudaGetLastError() == cudaSuccess, "StableFold dQ/dBias launch failed");
+      cudaGetLastError() == cudaSuccess, "TurboPairFormer dQ/dBias launch failed");
 }
 
-void stablefold_reduce_broadcast_dbias_out(
+void turbopairformer_reduce_broadcast_dbias_out(
     const torch::Tensor& per_batch_dbias,
     torch::Tensor& out,
     const std::vector<int64_t>& target_prefix,
@@ -2727,7 +2727,7 @@ void stablefold_reduce_broadcast_dbias_out(
   const int64_t required_blocks = positive_ceil_div(out.numel(), threads);
   const unsigned int blocks = static_cast<unsigned int>(
       std::min<int64_t>(required_blocks, 65535));
-  stablefold_reduce_broadcast_dbias_kernel<<<blocks, threads, 0, stream>>>(
+  turbopairformer_reduce_broadcast_dbias_kernel<<<blocks, threads, 0, stream>>>(
       per_batch_dbias.data_ptr<float>(),
       reinterpret_cast<__nv_bfloat16*>(out.data_ptr()),
       out.numel(),
@@ -2743,15 +2743,15 @@ void stablefold_reduce_broadcast_dbias_out(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
-      "stablefold_triangle_dq_dbias_out",
-      &stablefold_triangle_dq_dbias_out,
-      "StableFold fused dQ+dBias (query-slab deterministic waves)");
+      "turbopairformer_triangle_dq_dbias_out",
+      &turbopairformer_triangle_dq_dbias_out,
+      "TurboPairFormer fused dQ+dBias (query-slab deterministic waves)");
   module.def(
-      "stablefold_reduce_broadcast_dbias_out",
-      &stablefold_reduce_broadcast_dbias_out,
+      "turbopairformer_reduce_broadcast_dbias_out",
+      &turbopairformer_reduce_broadcast_dbias_out,
       "Fixed-order broadcast dBias reduction");
   module.def(
-      "stablefold_triangle_sr_backward_out",
-      &stablefold_triangle_sr_backward_out,
-      "StableFold single-reconstruction backward (dQ/dK/dV/dBias)");
+      "turbopairformer_triangle_sr_backward_out",
+      &turbopairformer_triangle_sr_backward_out,
+      "TurboPairFormer single-reconstruction backward (dQ/dK/dV/dBias)");
 }

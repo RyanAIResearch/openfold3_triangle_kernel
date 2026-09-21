@@ -22,11 +22,11 @@ from typing import Any
 
 EXTENSION_FACADES = {
     "turbopairformer": {
-        "stablefold_forward": "turbopairformer.triangle_forward",
-        "stablefold_delta": "turbopairformer.triangle_delta",
-        "stablefold_dkdv": "turbopairformer.triangle_dkdv",
-        "stablefold_dq_dbias": "turbopairformer.triangle_dq_dbias",
-        "stablefold_trimul": "turbopairformer.trimul_cuda",
+        "turbopairformer_forward": "turbopairformer.triangle_forward",
+        "turbopairformer_delta": "turbopairformer.triangle_delta",
+        "turbopairformer_dkdv": "turbopairformer.triangle_dkdv",
+        "turbopairformer_dq_dbias": "turbopairformer.triangle_dq_dbias",
+        "turbopairformer_trimul": "turbopairformer.trimul_cuda",
     },
     "intree": {
         "stablefold_forward": "openfold3.core.kernels.cuda.stablefold_triangle_forward",

@@ -15,7 +15,7 @@ from pathlib import Path
 
 os.environ["TURBOPAIRFORMER_ALLOW_JIT"] = "0"
 # Exercise the package defaults, independent of the caller's training launcher.
-for prefix in ("TURBOPAIRFORMER", "STABLEFOLD", "OPENFOLD3"):
+for prefix in ("TURBOPAIRFORMER", "OPENFOLD3"):
     for suffix in ("SR_BACKWARD", "SR_SHADOW"):
         os.environ.pop(f"{prefix}_{suffix}", None)
 
