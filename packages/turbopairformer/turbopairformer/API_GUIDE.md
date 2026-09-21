@@ -9,11 +9,14 @@ output = turbo_attention(q, k, v, res_mask=None, pair_bias=pair_bias)
 ```
 
 - `q/k/v`: BF16 on Hopper CUDA, shape `[*B, O, H, N, D]`; Q is unscaled, `1 <= D <= 64`.
-  `*B`: batch dimensions (at least one); `O`: outer rows; `H`: heads; `N`: sequence; `D`: head size.
+  `*B`: batch dimensions (at least one); `H`: heads; `N`: sequence; `D`: head size.
+  `O`: outer dimension the `pair_bias` is shared across.
 - `pair_bias`: required BF16/FP32 `[*B, 1, H, N, N]`; batch dimensions may broadcast.
 - `res_mask`: optional additive FP32/BF16/FP16 `[*B, O, 1, 1, N]`; batch dimensions may broadcast.
   `0` keeps a key, `-inf` masks it; `None` keeps all keys.
 - Returns BF16 `[*B, O, N, H, D]` (N/H axes exchanged), with Q/K/V/bias gradients.
+
+Unsupported tensor inputs raise `ValueError`; precheck with `is_triangle_attention_supported(...)`.
 
 ## trimul - Triangle Multiplicative Update
 
@@ -21,6 +24,7 @@ output = turbo_attention(q, k, v, res_mask=None, pair_bias=pair_bias)
 from turbopairformer import turbo_trimul
 
 output = turbo_trimul(z, direction="outgoing", mask=None, **weights)
+output = turbo_trimul(module, z, mask)  # OpenFold3-style module carries the weights
 ```
 
 - `z`: BF16 on Hopper CUDA, shape `[*B, N, N, C]`; `N > 100`, `C` in `{32, 64, 96, 128}`; batch dimensions optional.
@@ -36,3 +40,5 @@ output = turbo_trimul(z, direction="outgoing", mask=None, **weights)
 - `p_out_weight`, `g_out_weight`: `[C, C]` each.
 Training uses persistent weights; omitted weights are per-call demonstration defaults.
 `eps` must be `1e-5`. Neither operator differentiates masks.
+
+Unsupported tensor inputs raise `ValueError`; precheck module calls with `check_trimul_support(module, z, mask)`.

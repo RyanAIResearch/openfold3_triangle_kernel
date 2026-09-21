@@ -57,8 +57,6 @@ def _assert_operator_usage(text: str, expected: tuple[str, ...]) -> None:
         "api distributed",
         "api environment",
         "api internals",
-        "check_trimul_support",
-        "is_triangle_attention_supported",
         "workspace_plan",
         "_NOT_GIVEN",
         "stock_attention",
