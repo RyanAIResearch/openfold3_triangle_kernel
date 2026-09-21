@@ -26,6 +26,20 @@ hash -r
 pip install turbopairformer
 ```
 
+### Previous Versions
+
+Earlier releases remain available on PyPI:
+
+- [0.1.1](https://pypi.org/project/turbopairformer/0.1.1/): updated kernels, functional TriMul, and offline CLI documentation.
+- [0.1.0](https://pypi.org/project/turbopairformer/0.1.0/): initial release.
+
+Install a specific version with either command:
+
+```bash
+pip install turbopairformer==0.1.1
+pip install turbopairformer==0.1.0
+```
+
 ## Offline CLI Documentation
 
 TurboPairFormer includes built-in offline API documentation. It requires no PyTorch import, GPU, compiler, or network connection:
