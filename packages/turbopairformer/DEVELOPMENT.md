@@ -61,13 +61,12 @@ PYTHONPATH=packages/turbopairformer python -m turbopairformer --help
 PYTHONPATH=packages/turbopairformer python -m turbopairformer api --all
 ```
 
-Run those commands from the repository root. After installation,
-`turbopairformer api <topic-or-symbol>` shows a focused reference; `api` lists
-the topics and every top-level export. The handwritten contracts and runnable
-examples live in [API_GUIDE.md](turbopairformer/API_GUIDE.md). Internal signatures
-and docstrings are read from packaged Python source using AST, without importing
-Torch, Lightning, OpenFold3, or extensions. Add new exported names to the CLI
-catalog and maintain their guide topic when extending the package API.
+Run those commands from the repository root. Help describes only the two
+operators: their calls, parameters, input/output shapes and gradients.
+`turbopairformer api attention` and `turbopairformer api trimul` show one
+operator; `api` and `api --all` show both. The descriptions live in
+[API_GUIDE.md](turbopairformer/API_GUIDE.md) and print without importing Torch
+or loading CUDA.
 
 ## Supported build
 

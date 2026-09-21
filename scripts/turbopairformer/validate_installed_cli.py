@@ -78,8 +78,8 @@ def smoke() -> dict:
                     for value in (
                         "turbo_attention",
                         "turbo_trimul",
-                        "## attention",
-                        "## trimul",
+                        "Triangle Attention",
+                        "Triangle Multiplicative Update",
                     )
                 )
             if not valid:

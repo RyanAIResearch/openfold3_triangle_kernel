@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""The installed API guide must remain usable without Torch or CUDA."""
+"""The offline CLI presents only the two operator usages, without GPU imports."""
 
 from __future__ import annotations
 
 import ast
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -15,25 +16,15 @@ import pytest
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = PACKAGE_ROOT / "turbopairformer"
-TOPICS = ("attention", "trimul", "support", "distributed", "environment", "internals")
-
-
-def _public_names() -> tuple[str, ...]:
-    """Read exports without making test collection depend on GPU libraries."""
-    tree = ast.parse((PACKAGE / "__init__.py").read_text())
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "__all__"
-            for target in node.targets
-        ):
-            return tuple(ast.literal_eval(node.value))
-    raise AssertionError("The package must declare its public API in __all__")
+OPERATOR_HEADINGS = {
+    "attention": r"^Triangle Attention\s*$",
+    "trimul": r"^Triangle Multiplicative Update(?: \(TriMul\))?\s*$",
+}
 
 
 def _python(tmp_path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    # -S excludes installed packages; replacing PYTHONPATH also excludes host
-    # checkouts and proves the standalone source package carries its own guide.
+    # Exclude installed dependencies and any host checkout from these processes.
     env["PYTHONPATH"] = str(PACKAGE_ROOT)
     env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
@@ -54,11 +45,54 @@ def _cli(tmp_path: Path, *arguments: str) -> str:
     return result.stdout
 
 
-def test_no_arguments_prints_help_without_site_packages(tmp_path):
+def _assert_operator_usage(text: str, expected: tuple[str, ...]) -> None:
+    for topic, heading in OPERATOR_HEADINGS.items():
+        assert len(re.findall(heading, text, re.MULTILINE)) == int(topic in expected)
+        assert (f"turbo_{topic}(" in text) == (topic in expected)
+    assert len(text.splitlines()) <= 80, "CLI help should remain a short usage reference"
+    assert "`" not in text and not re.search(r"^#{1,6} ", text, re.MULTILINE)
+    assert not re.search(r"\b(?:reason|ok)\b", text, re.IGNORECASE)
+    for unrelated in (
+        "api support",
+        "api distributed",
+        "api environment",
+        "api internals",
+        "check_trimul_support",
+        "is_triangle_attention_supported",
+        "workspace_plan",
+        "_NOT_GIVEN",
+        "stock_attention",
+    ):
+        assert unrelated not in text
+
+
+def test_no_arguments_and_help_show_both_operator_usages(tmp_path):
     help_text = _cli(tmp_path, "--help")
     assert _cli(tmp_path) == help_text
-    for command in ("turbopairformer", "api", "--help", "--version"):
-        assert command in help_text
+    assert "usage:" in help_text.lower()
+    assert "--version" in help_text
+    _assert_operator_usage(help_text, ("attention", "trimul"))
+
+
+def test_api_and_all_show_the_same_two_operator_sections(tmp_path):
+    text = _cli(tmp_path, "api")
+    assert text == _cli(tmp_path, "api", "--all")
+    _assert_operator_usage(text, ("attention", "trimul"))
+
+
+@pytest.mark.parametrize(
+    ("topic", "aliases"),
+    (
+        ("attention", ("turbo_attention", "TurboTriangleAttention", "triangle_attention")),
+        ("trimul", ("turbo_trimul", "TurboTriangleMultiplicative", "run_trimul")),
+    ),
+)
+def test_operator_aliases_show_only_the_selected_usage(tmp_path, topic, aliases):
+    expected = _cli(tmp_path, "api", topic)
+    _assert_operator_usage(expected, (topic,))
+    for alias in aliases:
+        assert _cli(tmp_path, "api", alias) == expected
+        assert _cli(tmp_path, "api", f"turbopairformer.{alias}") == expected
 
 
 def test_version_matches_the_package_without_site_packages(tmp_path):
@@ -66,128 +100,7 @@ def test_version_matches_the_package_without_site_packages(tmp_path):
         tmp_path, "-c", "import turbopairformer; print(turbopairformer.__version__)"
     )
     assert expected.returncode == 0, expected.stdout + expected.stderr
-    version_text = _cli(tmp_path, "--version")
-    assert expected.stdout.strip() in version_text
-    assert "usage:" not in version_text.lower()
-
-
-@pytest.mark.parametrize("arguments", [("api",), ("api", "--all")])
-def test_api_catalog_covers_every_top_level_public_name(tmp_path, arguments):
-    text = _cli(tmp_path, *arguments)
-    for name in _public_names():
-        assert name in text, f"Undocumented public export: {name}"
-    for topic in TOPICS:
-        assert topic in text.lower()
-
-
-@pytest.mark.parametrize("topic", TOPICS)
-def test_each_guide_topic_is_available_without_site_packages(tmp_path, topic):
-    text = _cli(tmp_path, "api", topic)
-    assert topic in text.lower()
-    assert len(text.splitlines()) > 3
-
-
-@pytest.mark.parametrize("name", _public_names())
-def test_public_api_names_resolve_with_or_without_package_prefix(tmp_path, name):
-    short = _cli(tmp_path, "api", name)
-    qualified = _cli(tmp_path, "api", f"turbopairformer.{name}")
-    assert short == qualified
-    assert name in short
-
-
-@pytest.mark.parametrize(
-    "name",
-    (
-        "_trimul.turbo_trimul",
-        "trimul_support.check_trimul_tensor_support",
-        "triangle_dq_dbias.workspace_plan",
-        "distributed.TurboPairFormerKernelDDPCallback",
-    ),
-)
-def test_internal_function_and_class_references_resolve_without_imports(tmp_path, name):
-    text = _cli(tmp_path, "api", name)
-    assert f"turbopairformer.{name}" in text
-    assert "```python" in text
-    assert text == _cli(tmp_path, "api", f"turbopairformer.{name}")
-
-
-@pytest.mark.parametrize(
-    ("name", "expected"),
-    (
-        ("policy.SR_BACKWARD", "TURBOPAIRFORMER_SR_BACKWARD"),
-        ("trimul_support.SUPPORTED_CHANNELS", "frozenset"),
-        ("distributed.DistributedContractError", "class DistributedContractError"),
-    ),
-)
-def test_module_constants_and_reexports_are_available_without_imports(
-    tmp_path, name, expected
-):
-    text = _cli(tmp_path, "api", name)
-    assert name in text
-    assert expected in text
-    assert text == _cli(tmp_path, "api", f"turbopairformer.{name}")
-    assert name in _cli(tmp_path, "api", "--all")
-
-
-@pytest.mark.parametrize(
-    "name",
-    (
-        "trimul_support.TensorMetadata",
-        "trimul_support.SupportResult",
-        "distributed.TurboPairFormerKernelDDPCallback",
-        "distributed.DistributedContractError",
-    ),
-)
-def test_rendered_class_examples_are_valid_python(tmp_path, name):
-    text = _cli(tmp_path, "api", name)
-    blocks = [part.split("```", 1)[0] for part in text.split("```python\n")[1:]]
-    assert blocks, f"No Python class reference for {name}"
-    for block in blocks:
-        tree = ast.parse(block)
-        assert any(isinstance(node, ast.ClassDef) for node in tree.body)
-
-
-def test_class_reference_preserves_dataclass_and_property_semantics(tmp_path):
-    text = _cli(tmp_path, "api", "trimul_support.TensorMetadata")
-    block = text.split("```python\n", 1)[1].split("```", 1)[0]
-    tree = ast.parse(block)
-    record = next(node for node in tree.body if isinstance(node, ast.ClassDef))
-    assert any(
-        isinstance(decorator, ast.Call)
-        and isinstance(decorator.func, ast.Name)
-        and decorator.func.id == "dataclass"
-        for decorator in record.decorator_list
-    )
-    device_key = next(
-        node
-        for node in record.body
-        if isinstance(node, ast.FunctionDef) and node.name == "device_key"
-    )
-    assert any(
-        isinstance(decorator, ast.Name) and decorator.id == "property"
-        for decorator in device_key.decorator_list
-    ), "device_key is an attribute; the guide must not advertise a callable method"
-
-
-@pytest.mark.parametrize(
-    "arguments", [("api", "attention", "--all"), ("api", "--all", "attention")]
-)
-def test_full_guide_and_individual_topic_are_mutually_exclusive(tmp_path, arguments):
-    result = _python(tmp_path, "-m", "turbopairformer", *arguments)
-    assert result.returncode == 2
-    assert "--all" in result.stderr
-    assert "not allowed" in result.stderr
-    assert "Traceback" not in result.stderr
-    assert result.stdout == ""
-
-
-def test_unknown_topic_reports_actionable_usage_error(tmp_path):
-    result = _python(tmp_path, "-m", "turbopairformer", "api", "not_a_real_api")
-    assert result.returncode == 2
-    assert "not_a_real_api" in result.stderr
-    assert "attention" in result.stderr
-    assert "trimul" in result.stderr
-    assert "Traceback" not in result.stderr
+    assert _cli(tmp_path, "--version").strip() == f"turbopairformer {expected.stdout.strip()}"
 
 
 def test_console_entry_point_runs_the_same_help(tmp_path):
@@ -208,16 +121,58 @@ raise SystemExit(getattr(importlib.import_module({module!r}), {function!r})())
 
 
 @pytest.mark.parametrize(
-    "arguments",
-    [("--help",), ("--version",), ("api",), ("api", "--all")],
+    "topic",
+    (
+        "support",
+        "distributed",
+        "environment",
+        "internals",
+        "check_trimul_support",
+        "_trimul._run_supported_trimul",
+        "turbopairformer.triangle_dq_dbias.workspace_plan",
+        "not_a_real_operator",
+    ),
 )
-def test_documentation_does_not_attempt_optional_runtime_imports(tmp_path, arguments):
-    # Record attempts too: checking sys.modules alone misses optional imports
-    # whose failures were caught and suppressed by application code.
+def test_removed_topics_and_internal_symbols_are_rejected(tmp_path, topic):
+    result = _python(tmp_path, "-m", "turbopairformer", "api", topic)
+    assert result.returncode == 2
+    assert "attention" in result.stderr.lower() and "trimul" in result.stderr.lower()
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""
+
+
+def test_full_usage_and_individual_operator_are_mutually_exclusive(tmp_path):
+    for arguments in (("api", "attention", "--all"), ("api", "--all", "attention")):
+        result = _python(tmp_path, "-m", "turbopairformer", *arguments)
+        assert result.returncode == 2
+        assert "--all" in result.stderr
+        assert "Traceback" not in result.stderr
+        assert result.stdout == ""
+
+
+def test_documented_python_examples_are_syntactically_valid():
+    guide = (PACKAGE / "API_GUIDE.md").read_text()
+    snippets = re.findall(r"^```python\s*\n(.*?)^```\s*$", guide, re.MULTILINE | re.DOTALL)
+    assert snippets, "The operator usage guide must include Python examples"
+    operators = set()
+    for snippet in snippets:
+        tree = ast.parse(snippet)
+        operators.update(
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id.startswith("turbo_")
+        )
+    assert operators == {"turbo_attention", "turbo_trimul"}
+
+
+@pytest.mark.parametrize("arguments", [("--help",), ("--version",), ("api", "--all")])
+def test_usage_does_not_attempt_optional_runtime_imports(tmp_path, arguments):
+    # Record attempts even when application code suppresses an import failure.
     script = f"""
 import importlib.abc
 import sys
-
 blocked = ("torch", "lightning", "pytorch_lightning", "openfold3", "turbopairformer._ext")
 attempted = []
 
@@ -225,7 +180,7 @@ class RejectRuntimeImports(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if any(fullname == root or fullname.startswith(root + ".") for root in blocked):
             attempted.append(fullname)
-            raise RuntimeError("Documentation attempted to import " + fullname)
+            raise RuntimeError("Usage help attempted to import " + fullname)
 
 sys.meta_path.insert(0, RejectRuntimeImports())
 from turbopairformer.cli import main
