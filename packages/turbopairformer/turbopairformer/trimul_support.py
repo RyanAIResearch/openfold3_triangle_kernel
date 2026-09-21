@@ -9,7 +9,7 @@ fast-path domain from future selector/fallback policy.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import prod
 from typing import Any
 
@@ -384,6 +384,117 @@ def _tensor_metadata(tensor: torch.Tensor) -> TensorMetadata:
     )
 
 
+def check_trimul_tensor_support(
+    z: torch.Tensor,
+    direction: str = "outgoing",
+    mask: torch.Tensor | None = None,
+    *,
+    norm_in_weight: torch.Tensor | None = None,
+    norm_in_bias: torch.Tensor | None = None,
+    p_in_weight: torch.Tensor | None = None,
+    g_in_weight: torch.Tensor | None = None,
+    norm_out_weight: torch.Tensor | None = None,
+    norm_out_bias: torch.Tensor | None = None,
+    p_out_weight: torch.Tensor | None = None,
+    g_out_weight: torch.Tensor | None = None,
+    eps: float = 1e-5,
+) -> SupportResult:
+    """Validate functional inputs before allocating any optional parameters.
+
+    Missing parameters are represented only by metadata here. The caller creates
+    demonstration tensors after this check accepts the complete invocation.
+    """
+    if not isinstance(z, torch.Tensor):
+        return _rejected("z_type", "z must be a torch.Tensor")
+    if z.device.type != "cuda":
+        return _rejected("z_device", "z must be a CUDA tensor")
+    if z.ndim < 3:
+        return _rejected("z_rank", "z must have shape [*B, N, N, C_z]")
+    if mask is not None and not isinstance(mask, torch.Tensor):
+        return _rejected("mask_type", "mask must be None or a torch.Tensor")
+    if not isinstance(direction, str) or direction not in ("outgoing", "incoming"):
+        return _rejected("direction", "direction must be 'outgoing' or 'incoming'")
+    if not isinstance(eps, (int, float)) or eps != 1e-5:
+        return _rejected("layer_norm_eps", "eps must equal 1e-5 exactly")
+
+    channels = z.shape[-1]
+    parameters = {
+        "norm_in_weight": (norm_in_weight, (channels,)),
+        "norm_in_bias": (norm_in_bias, (channels,)),
+        "p_in_weight": (p_in_weight, (2 * channels, channels)),
+        "g_in_weight": (g_in_weight, (2 * channels, channels)),
+        "norm_out_weight": (norm_out_weight, (channels,)),
+        "norm_out_bias": (norm_out_bias, (channels,)),
+        "p_out_weight": (p_out_weight, (channels, channels)),
+        "g_out_weight": (g_out_weight, (channels, channels)),
+    }
+    parameter_metadata: dict[str, TensorMetadata] = {}
+    for name, (parameter, shape) in parameters.items():
+        if parameter is None:
+            parameter_metadata[name] = TensorMetadata(
+                shape=shape,
+                dtype=torch.float32,
+                device_type=z.device.type,
+                device_index=z.device.index,
+                contiguous=True,
+                requires_grad=False,
+            )
+        elif not isinstance(parameter, torch.Tensor):
+            return _rejected("parameter_type", f"{name} must be None or a torch.Tensor")
+        elif tuple(parameter.shape) != shape:
+            return _rejected(
+                "parameter_shape",
+                f"{name} must have shape {shape}, got {tuple(parameter.shape)}",
+            )
+        else:
+            parameter_metadata[name] = _tensor_metadata(parameter)
+
+    # The native ABI uses separate a/b matrices. A contiguous [2C, C] tensor
+    # yields contiguous row slices, without performing any tensor operation here.
+    projection = replace(parameter_metadata["p_in_weight"], shape=(channels, channels))
+    gate = replace(parameter_metadata["g_in_weight"], shape=(channels, channels))
+    weights = {
+        "linear_a_p.weight": projection,
+        "linear_a_g.weight": gate,
+        "linear_b_p.weight": projection,
+        "linear_b_g.weight": gate,
+        "linear_g.weight": parameter_metadata["g_out_weight"],
+        "linear_z.weight": parameter_metadata["p_out_weight"],
+        "layer_norm_in.weight": parameter_metadata["norm_in_weight"],
+        "layer_norm_in.bias": parameter_metadata["norm_in_bias"],
+        "layer_norm_out.weight": parameter_metadata["norm_out_weight"],
+        "layer_norm_out.bias": parameter_metadata["norm_out_bias"],
+    }
+    try:
+        capability = tuple(torch.cuda.get_device_capability(z.device))
+        device_name = torch.cuda.get_device_name(z.device)
+        multiprocessor_count = int(
+            torch.cuda.get_device_properties(z.device).multi_processor_count
+        )
+    except (AssertionError, RuntimeError, ValueError) as error:
+        return _rejected(
+            "device_metadata",
+            f"could not query CUDA device metadata: {error}",
+        )
+    return evaluate_trimul_support(
+        TrimulSupportMetadata(
+            z=_tensor_metadata(z),
+            mask=None if mask is None else _tensor_metadata(mask),
+            device_name=device_name,
+            capability=(int(capability[0]), int(capability[1])),
+            multiprocessor_count=multiprocessor_count,
+            c_z=channels,
+            c_hidden=channels,
+            outgoing=direction == "outgoing",
+            weights=tuple(
+                NamedTensorMetadata(name, value) for name, value in weights.items()
+            ),
+            linear_bias_is_none=tuple((name, True) for name in _LINEAR_NAMES),
+            layer_norm_eps=tuple((name, eps) for name in _LAYER_NORM_NAMES),
+        )
+    )
+
+
 def check_trimul_support(
     module: Any,
     z: torch.Tensor,
@@ -498,5 +609,6 @@ __all__ = [
     "SupportResult",
     "TensorMetadata",
     "check_trimul_support",
+    "check_trimul_tensor_support",
     "evaluate_trimul_support",
 ]

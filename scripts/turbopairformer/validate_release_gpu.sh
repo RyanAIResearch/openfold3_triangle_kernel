@@ -40,6 +40,10 @@ docker run --rm --gpus all --network none \
     chmod -R a-w /tmp/validation/lib/python3.14/site-packages/turbopairformer
     env PATH=/nonexistent "$PYTHON" /source/packages/turbopairformer/tools/smoke_installed.py > /evidence/installed-smoke.json
     env PATH=/nonexistent "$PYTHON" /source/tools/turbopairformer_doctor.py --expect-provider turbopairformer --json > /evidence/installed-aot.json
+    # This runs the real installed console script and python -m entry point.
+    # The bundle hash-seals this existing AOT evidence file, so its release
+    # asset download/upload workflows also carry the new CLI gate.
+    env PATH=/nonexistent "$PYTHON" /source/scripts/turbopairformer/validate_installed_cli.py /evidence/installed-aot.json > /evidence/installed-cli.json
     TURBOPAIRFORMER_TEST_WHEEL="/wheel/$WHEEL_NAME" "$PYTHON" -m pytest \
       /source/packages/turbopairformer/tests \
       --ignore=/source/packages/turbopairformer/tests/host_openfold3 \

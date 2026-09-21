@@ -400,11 +400,43 @@ def turbo_attention(
     res_mask: torch.Tensor | None = None,
     pair_bias: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Run Triangle Attention with raw q and a required explicit pair bias.
+    """Run Triangle Attention with autograd for Q, K, V and pair bias.
 
-    ``res_mask=None`` means unmasked, noncausal attention. Omit the mask with
-    ``turbo_attention(q, k, v, pair_bias=bias)``; the original five-positional
-    argument call remains valid. Unsupported inputs raise before allocation.
+    Args:
+        q: Raw, unscaled BF16 CUDA queries with shape ``[*B, O, H, N, D]``.
+            At least one positive batch dimension is required; ``1 <= D <= 64``.
+        k: BF16 keys with the same shape and CUDA device as ``q``.
+        v: BF16 values with the same shape and CUDA device as ``q``.
+        res_mask: Optional FP32/BF16/FP16 additive mask with tail
+            ``[O, 1, 1, N]``. Zero keeps keys; negative infinity excludes them.
+            Its batch prefix must broadcast exactly to ``q``'s prefix.
+            Must not require gradients. ``None`` means unmasked, noncausal
+            attention; padded inputs need an explicit mask.
+        pair_bias: Required BF16/FP32 bias with tail ``[1, H, N, N]`` and a
+            batch prefix that broadcasts exactly to ``q``'s prefix. Pass it
+            by keyword when omitting the mask. FP32 bias is cast to BF16
+            internally; autograd returns a gradient to the FP32 source.
+
+    Returns:
+        A contiguous BF16 tensor with shape ``[*B, O, N, H, D]``. The head
+        and sequence axes are exchanged relative to Q/K/V. The operator
+        applies the ``1/sqrt(D)`` scale and saves its own backward state.
+
+    Raises:
+        ValueError: Unsupported tensor metadata. Hopper CC 9.0 and the
+            package's dtype, shape, broadcast and CUDA grid limits apply.
+            Validation happens before kernel allocation; the host owns any
+            stock fallback. Use ``is_triangle_attention_supported`` to route.
+
+    Example::
+
+        output = turbo_attention(q, k, v, pair_bias=bias)
+        output.float().square().mean().backward()
+
+    The original five-positional-argument call remains valid. Full runnable
+    examples and runtime requirements are available with
+    ``turbopairformer api turbo_attention``. ``TurboTriangleAttention`` and
+    ``triangle_attention`` are aliases of this function.
     """
 
     supported, reason = is_triangle_attention_supported(q, k, v, res_mask, pair_bias)

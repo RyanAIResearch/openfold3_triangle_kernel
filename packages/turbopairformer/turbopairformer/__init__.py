@@ -10,11 +10,12 @@ Public entry points::
 aliases of these functions. ``triangle_attention`` and ``run_trimul`` remain
 available for existing integrations.
 
-Importing the package is deliberately light: only the pure-Python policy and
-TriMul support-check modules load eagerly. The kernel facades, including
+Importing the package is deliberately light: only the pure-Python policy
+module loads eagerly. The support-check modules and kernel facades, including
 ``torch.library`` op registration, load on first attribute access. CUDA
 extensions load only when a supported GPU call needs them; importing these
-functions or checking support does not touch a GPU.
+functions does not load a CUDA extension. Tensor support checks may query device
+metadata. Package import and command-line help do not import Torch.
 
 The facades validate the tensor contract and fail closed on unsupported
 inputs; model-level routing with a stock fallback belongs to the host model.
@@ -31,18 +32,28 @@ from turbopairformer.policy import (
     distributed_execution_flag,
     distributed_strict_enabled,
 )
-from turbopairformer.trimul_support import (
-    TRIMUL_STOCK_FALLBACK_THRESHOLD,
-    SupportResult,
-    TrimulSupportMetadata,
-    check_trimul_support,
-    evaluate_trimul_support,
-)
 
 # Lazily resolved public names -> (module, attribute).  Keeping the kernel
 # facades out of import time is what lets a CPU-only host import ``turbopairformer``
 # for a support check without loading the CUDA extensions.
 _LAZY_ATTRIBUTES: dict[str, tuple[str, str]] = {
+    "TRIMUL_STOCK_FALLBACK_THRESHOLD": (
+        "turbopairformer.trimul_support",
+        "TRIMUL_STOCK_FALLBACK_THRESHOLD",
+    ),
+    "SupportResult": ("turbopairformer.trimul_support", "SupportResult"),
+    "TrimulSupportMetadata": (
+        "turbopairformer.trimul_support",
+        "TrimulSupportMetadata",
+    ),
+    "check_trimul_support": (
+        "turbopairformer.trimul_support",
+        "check_trimul_support",
+    ),
+    "evaluate_trimul_support": (
+        "turbopairformer.trimul_support",
+        "evaluate_trimul_support",
+    ),
     "turbo_attention": ("turbopairformer._triangle_attention", "turbo_attention"),
     "turbo_trimul": ("turbopairformer._trimul", "turbo_trimul"),
     "TurboTriangleAttention": (

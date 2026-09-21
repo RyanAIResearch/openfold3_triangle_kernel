@@ -28,11 +28,17 @@ print(attention_output.shape)  # torch.Size([1, 128, 128, 4, 32])
 All positions in this synthetic example are valid, so the mask is omitted.
 Single-reconstruction backward and the saved forward rounding residual are
 enabled by default; no environment switches are needed for this example.
-For TriMul, pass your existing triangle-multiplication module and pair tensor:
+For TriMul, a standalone example needs only a BF16 pair tensor:
 
 ```python
-trimul_output = turbo_trimul(module, z)
+z = torch.randn(
+    1, 128, 128, 128, device="cuda", dtype=torch.bfloat16, requires_grad=True
+)
+trimul_output = turbo_trimul(z, direction="outgoing")
 ```
+
+Omitted TriMul parameters are initialized afresh on each call for demonstration.
+For training, pass persistent parameter tensors as described below.
 
 Both masks default to `None`: every position is valid, with no causal mask.
 `pair_bias` remains required; pass it by keyword when omitting the attention
@@ -40,8 +46,28 @@ mask. For padded inputs, pass explicit masks:
 
 ```python
 attention_output = turbo_attention(q, k, v, attention_mask, pair_bias)
-trimul_output = turbo_trimul(module, z, pair_mask)
+trimul_output = turbo_trimul(z, direction="outgoing", mask=pair_mask)
 ```
+
+## Offline command-line reference
+
+Version 0.1.1 adds `turbopairformer --help` and
+`python -m turbopairformer --help`. The published 0.1.0 wheel does not include
+this entry point; use a build from this revision. To preview the guide from
+the repository without installing Torch or a CUDA wheel:
+
+```bash
+PYTHONPATH=packages/turbopairformer python -m turbopairformer --help
+PYTHONPATH=packages/turbopairformer python -m turbopairformer api --all
+```
+
+Run those commands from the repository root. After installation,
+`turbopairformer api <topic-or-symbol>` shows a focused reference; `api` lists
+the topics and every top-level export. The handwritten contracts and runnable
+examples live in [API_GUIDE.md](turbopairformer/API_GUIDE.md). Internal signatures
+and docstrings are read from packaged Python source using AST, without importing
+Torch, Lightning, OpenFold3, or extensions. Add new exported names to the CLI
+catalog and maintain their guide topic when extending the package API.
 
 ## Supported build
 
@@ -88,7 +114,7 @@ for its commands. Do not install into a shared training or system Python prefix.
 To install a wheel produced by the build command:
 
 ```bash
-python -m pip install /absolute/path/to/turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl
+python -m pip install /absolute/path/to/turbopairformer-0.1.1-cp314-cp314-manylinux_2_28_x86_64.whl
 ```
 
 Public wheels contain all five precompiled CUDA extensions. No local CUDA toolkit
@@ -113,11 +139,35 @@ its own fallback.
 ```python
 from turbopairformer import turbo_trimul
 
-out = turbo_trimul(module, z, mask)
+out = turbo_trimul(z, direction="outgoing", mask=mask, **weights)
 out.float().square().mean().backward()
 ```
 
-`module` supplies the existing model weights: `c_z`, `c_hidden`, `_outgoing`, six
+The functional API accepts eight optional FP32 parameter tensors on the same
+device as BF16 `z`. To use trained parameters, keep these tensors in your model
+or optimizer and pass them by keyword on every call:
+
+| Keyword | Shape |
+| --- | --- |
+| `norm_in_weight`, `norm_in_bias` | `[C]` each |
+| `p_in_weight`, `g_in_weight` | `[2*C, C]` each; a-branch rows, then b-branch rows |
+| `norm_out_weight`, `norm_out_bias` | `[C]` each |
+| `p_out_weight`, `g_out_weight` | `[C, C]` each |
+
+All supplied tensors must be contiguous. Gradients propagate to caller-owned
+parameters, including both halves of the packed input projection/gate matrices.
+`direction` is `"outgoing"` or `"incoming"`; `eps` is fixed at `1e-5`.
+Linear projection/gate biases are not supported by this CUDA implementation.
+
+Missing normalization weights/biases become ones/zeros. Missing matrices are
+sampled independently with Torch RNG from a normal distribution with standard
+deviation `1/sqrt(C)`, in FP32 on `z.device`, without `requires_grad`.
+These defaults are newly allocated each call and are not persistent model
+parameters. Set the Torch seed again to reproduce a demonstration; pass and
+reuse all eight tensors for training or repeated evaluation.
+
+Existing `turbo_trimul(module, z, mask=None)` integrations remain compatible.
+The legacy `module` supplies `c_z`, `c_hidden`, `_outgoing`, six
 bias-free FP32 linear layers (`linear_a_p`, `linear_a_g`, `linear_b_p`,
 `linear_b_g`, `linear_g`, `linear_z`), and FP32 `layer_norm_in` / `layer_norm_out`
 with epsilon 1e-5. `z` is BF16 `[batch..., N, N, C]`. The supported fast path has
@@ -147,7 +197,7 @@ In a Linux CPython 3.14 environment with `torch==2.10.0` installed from PyPI:
 ```bash
 python -m pip install setuptools wheel patchelf
 CUDA_HOME=/absolute/path/to/cuda-12.9 bash tools/build_sm90_wheel.sh
-python -m pip install dist/turbopairformer-0.1.0-cp314-cp314-linux_x86_64.whl
+python -m pip install dist/turbopairformer-0.1.1-cp314-cp314-linux_x86_64.whl
 cd /tmp
 python /absolute/path/to/packages/turbopairformer/tools/smoke_installed.py
 ```
@@ -178,8 +228,8 @@ accepted. Precedence is `TURBOPAIRFORMER_*`, then `STABLEFOLD_*`, then
 `OPENFOLD3_*`; an explicit canonical `0` overrides a legacy `1`. Build and
 validation commands use the new `TURBOPAIRFORMER_*` names.
 
-The CUDA source bytes, C++ exports, internal AOT module keys, and extension
-leaf names remain unchanged. Their `stablefold_*` names are internal ABI
+The earlier package rename preserved CUDA source bytes, C++ exports, internal
+AOT module keys, and extension leaf names. Their `stablefold_*` names are internal ABI
 identifiers. Public Torch custom operations use the `turbopairformer` namespace.
 
 ## Host integration and scope

@@ -112,6 +112,9 @@ PACKAGED_PYTHON = (
     "policy.py",
     "distributed.py",
     "__init__.py",
+    "__main__.py",
+    "cli.py",
+    "API_GUIDE.md",
     "_ext/__init__.py",
     "PRODUCTION_MANIFEST.md",
 )

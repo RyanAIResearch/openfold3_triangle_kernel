@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turbopairformer"
-version = "0.1.0.post1"
+version = "0.1.1"
 authors = [
     { name = "Yide Ran" },
     { name = "Chelsea Lowman" },
@@ -35,6 +35,9 @@ classifiers = [
 Repository = "https://github.com/RyanAIResearch/openfold3_triangle_kernel"
 Documentation = "https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/README.md"
 Issues = "https://github.com/RyanAIResearch/openfold3_triangle_kernel/issues"
+
+[project.scripts]
+turbopairformer = "turbopairformer.cli:main"
 
 [project.optional-dependencies]
 # The DDP kernel preflight callback (turbopairformer.distributed) needs Lightning.

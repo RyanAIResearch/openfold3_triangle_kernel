@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import struct
 import unittest
 from pathlib import Path
@@ -142,7 +143,29 @@ class TurboPairFormerTriangleWorkspaceTest(unittest.TestCase):
         source = (
             Path(__file__).parents[1] / "turbopairformer/triangle_dq_dbias.cu"
         ).read_text()
-        self.assertIn("root = __fadd_rn", source)
+        start = source.index("__global__ void stablefold_dq_dbias_finalize_kernel(")
+        finalizer = source[start : source.index("\n}", start)]
+        self.assertRegex(finalizer, r"float\s+root\[kElements\]\s*;")
+        self.assertRegex(
+            finalizer,
+            r"const int first_leaf\s*=\s*continue_root\s*\?\s*0\s*:\s*1\s*;",
+        )
+        leaf_loop = re.search(
+            r"for\s*\(int leaf\s*=\s*first_leaf;\s*"
+            r"leaf\s*<\s*wave_leaves;\s*\+\+leaf\)\s*\{"
+            r"(?P<body>.*?)\n  }",
+            finalizer,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(leaf_loop)
+        assert leaf_loop is not None
+        folds = re.findall(
+            r"root\[element\]\s*=\s*__fadd_rn\(\s*root\[element\],\s*"
+            r"__bfloat162float\((values|leaf_values)\[element\]\)\s*\);",
+            leaf_loop.group("body"),
+        )
+        self.assertCountEqual(folds, ["values", "leaf_values"])
+        self.assertEqual(finalizer.count("__fadd_rn("), len(folds))
         # The final wave may contain fewer leaves than the resident capacity.
         # Lock both the bounded active extent and the matching increment so a
         # future rewrite cannot skip the tail or overflow the host loop.

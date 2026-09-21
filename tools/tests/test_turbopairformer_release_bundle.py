@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -21,12 +22,50 @@ SPEC.loader.exec_module(release)
 COMMIT = "a" * 40
 
 
+def _installed_cli(report):
+    package = Path(report["package"]["path"]).parent
+    version = report["package"]["version"]
+    checks = []
+    for launcher in ("console", "module"):
+        for arguments in (("--help",), ("--version",), ("api", "--all")):
+            output = (
+                f"turbopairformer {version}\n"
+                if arguments == ("--version",)
+                else "verified help or full manual\n"
+            ).encode()
+            checks.append(
+                {
+                    "launcher": launcher,
+                    "arguments": list(arguments),
+                    "exit_code": 0,
+                    "stderr": "",
+                    "output_validated": True,
+                    "stdout_bytes": len(output),
+                    "stdout_sha256": hashlib.sha256(output).hexdigest(),
+                }
+            )
+    return {
+        "schema_version": 1,
+        "scope": "installed-cli",
+        "version": version,
+        "package_path": str(package / "__init__.py"),
+        "cli_module_path": str(package / "cli.py"),
+        "entry_point": "turbopairformer.cli:main",
+        "python_path": "/venv/bin/python",
+        "console_path": "/venv/bin/turbopairformer",
+        "checks": checks,
+    }
+
+
 @pytest.fixture
-def bundle(tmp_path, monkeypatch):
-    wheel = tmp_path / "turbopairformer-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl"
+def bundle(tmp_path, monkeypatch, request):
+    version = getattr(request, "param", "0.1.0")
+    wheel = (
+        tmp_path / f"turbopairformer-{version}-cp314-cp314-manylinux_2_28_x86_64.whl"
+    )
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("turbopairformer/_build_manifest.json", '{"built":true}')
-    info = {"wheel": wheel.name, "sha256": release.digest(wheel), "version": "0.1.0"}
+    info = {"wheel": wheel.name, "sha256": release.digest(wheel), "version": version}
     monkeypatch.setattr(release, "validate_wheel", lambda path, commit: info)
     doctor = tmp_path / "doctor.json"
     package = "/venv/lib/python3.14/site-packages/turbopairformer"
@@ -35,7 +74,7 @@ def bundle(tmp_path, monkeypatch):
         "provider": {"provider": "turbopairformer"},
         "package": {
             "name": "turbopairformer",
-            "version": "0.1.0",
+            "version": version,
             "path": package + "/__init__.py",
         },
         "gpu": {"available": True, "name": "NVIDIA H100", "capability": "9.0"},
@@ -47,11 +86,16 @@ def bundle(tmp_path, monkeypatch):
             },
         },
     }
+    if version != "0.1.0":
+        report["installed_cli"] = _installed_cli(report)
     doctor.write_text(json.dumps(report))
     junit = tmp_path / "tests.xml"
     suite = ET.Element("testsuite", failures="0", errors="0")
     for name in release.REQUIRED_GPU_CASES.values():
         ET.SubElement(suite, "testcase", name=name + "[case]")
+    if version != "0.1.0":
+        for name in release.REQUIRED_FUNCTIONAL_GPU_CASES.values():
+            ET.SubElement(suite, "testcase", name=name)
     ET.ElementTree(suite).write(junit)
     output = tmp_path / "bundle"
     release.create_bundle(
@@ -161,6 +205,87 @@ def test_wheel_digest_mismatch_is_rejected(bundle):
     output, info, _ = bundle
     with pytest.raises(ValueError, match="another wheel or digest"):
         release.validate_receipt(output, {**info, "sha256": "b" * 64}, COMMIT)
+
+
+@pytest.mark.parametrize("bundle", ["0.1.1"], indirect=True)
+def test_current_bundle_accepts_all_functional_directions_and_installed_cli(bundle):
+    result = release.validate_bundle(bundle[0], COMMIT, "turbopairformer-v0.1.1", False)
+    assert result["wheel"]["version"] == "0.1.1"
+
+
+@pytest.mark.parametrize("bundle", ["0.1.1"], indirect=True)
+@pytest.mark.parametrize("scope", tuple(release.REQUIRED_FUNCTIONAL_GPU_CASES))
+@pytest.mark.parametrize("omission", ("missing", "skipped"))
+def test_current_gpu_receipt_requires_every_functional_direction(
+    bundle, scope, omission
+):
+    path = bundle[0] / "standalone-gpu.xml"
+    tree = ET.parse(path)
+    name = release.REQUIRED_FUNCTIONAL_GPU_CASES[scope]
+    case = next(case for case in tree.getroot() if case.get("name") == name)
+    if omission == "missing":
+        tree.getroot().remove(case)
+    else:
+        ET.SubElement(case, "skipped")
+    tree.write(path)
+    with pytest.raises(ValueError, match=f"no executed {scope}"):
+        release.validate_junit(path, "0.1.1")
+
+
+@pytest.mark.parametrize("version", ("0.1.1", "0.1.2", "0.2.0", "1.0.0"))
+def test_current_release_cannot_reuse_legacy_gpu_coverage(bundle, version):
+    with pytest.raises(ValueError, match="functional outgoing"):
+        release.validate_junit(bundle[0] / "standalone-gpu.xml", version)
+
+
+@pytest.mark.parametrize("bundle", ["0.1.1"], indirect=True)
+@pytest.mark.parametrize(
+    "change,match",
+    (
+        ("missing", "missing installed CLI"),
+        ("console_missing", "both entry points"),
+        ("module_missing", "both entry points"),
+        ("source", "source checkout"),
+        ("entry_point", "another entry point"),
+        ("failed", "command failed"),
+        ("different_output", "output disagree"),
+        ("wrong_version", "version output"),
+    ),
+)
+def test_current_receipt_rejects_missing_or_wrong_installed_cli(bundle, change, match):
+    output, info, report = bundle
+    cli = report["installed_cli"]
+    if change == "missing":
+        del report["installed_cli"]
+    elif change in ("console_missing", "module_missing"):
+        launcher = change.removesuffix("_missing")
+        cli["checks"] = [
+            check for check in cli["checks"] if check["launcher"] != launcher
+        ]
+    elif change == "source":
+        cli["cli_module_path"] = "/checkout/turbopairformer/cli.py"
+    elif change == "entry_point":
+        cli["entry_point"] = "other_package.cli:main"
+    elif change == "failed":
+        cli["checks"][0]["exit_code"] = 1
+    elif change == "different_output":
+        cli["checks"][0]["stdout_sha256"] = "f" * 64
+    else:
+        for check in cli["checks"]:
+            if check["arguments"] == ["--version"]:
+                check["stdout_sha256"] = hashlib.sha256(
+                    b"turbopairformer 0.1.0\n"
+                ).hexdigest()
+    doctor = output / "installed-aot.json"
+    doctor.write_text(json.dumps(report))
+    receipt_path = output / "release-validation.json"
+    receipt = json.loads(receipt_path.read_text())
+    next(check for check in receipt["checks"] if check["name"] == "installed_aot")[
+        "sha256"
+    ] = release.digest(doctor)
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match=match):
+        release.validate_receipt(output, info, COMMIT)
 
 
 @pytest.fixture

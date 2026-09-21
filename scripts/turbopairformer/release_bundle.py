@@ -39,6 +39,23 @@ REQUIRED_GPU_CASES = {
         "test_explicit_classic_attention_bypasses_shadow_and_sr"
     ),
 }
+# Unlike the legacy gate, these names retain their pytest parameter ids so an
+# incoming-only receipt cannot certify the outgoing API (or vice versa).
+REQUIRED_FUNCTIONAL_GPU_CASES = {
+    "functional outgoing outputs and gradients": (
+        "test_installed_functional_and_legacy_outputs_and_all_gradients_match[True]"
+    ),
+    "functional incoming outputs and gradients": (
+        "test_installed_functional_and_legacy_outputs_and_all_gradients_match[False]"
+    ),
+    "demonstration outgoing backward and replay": (
+        "test_installed_demo_weights_support_backward_and_seeded_replay[outgoing]"
+    ),
+    "demonstration incoming backward and replay": (
+        "test_installed_demo_weights_support_backward_and_seeded_replay[incoming]"
+    ),
+}
+CLI_ARGUMENTS = (("--help",), ("--version",), ("api", "--all"))
 EXTENSIONS = {
     "stablefold_forward",
     "stablefold_delta",
@@ -55,6 +72,80 @@ def require(condition: bool, message: str) -> None:
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def requires_current_api_evidence(version: str) -> bool:
+    """Keep historical 0.1.0 receipts valid; require new API checks from 0.1.1."""
+
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:$|[^0-9])", version)
+    require(match is not None, "unsupported release version")
+    return tuple(int(value) for value in match.groups()) >= (0, 1, 1)
+
+
+def validate_installed_cli(report: dict, version: str, package_root: Path) -> None:
+    """Require both installed entry points, not source-tree CLI test results."""
+
+    cli = report.get("installed_cli", {})
+    require(
+        cli.get("schema_version") == 1 and cli.get("scope") == "installed-cli",
+        "missing installed CLI smoke evidence",
+    )
+    require(cli.get("version") == version, "CLI tested another package version")
+    require(
+        cli.get("package_path") == str(package_root / "__init__.py")
+        and cli.get("cli_module_path") == str(package_root / "cli.py")
+        and cli.get("entry_point") == "turbopairformer.cli:main",
+        "CLI tested a source checkout or another entry point",
+    )
+    python_path = Path(cli.get("python_path", ""))
+    console_path = Path(cli.get("console_path", ""))
+    require(
+        python_path.is_absolute()
+        and console_path.is_absolute()
+        and console_path.name == "turbopairformer"
+        and console_path.parent == python_path.parent,
+        "CLI did not use the installed interpreter and console script",
+    )
+    checks = cli.get("checks", [])
+    require(isinstance(checks, list), "invalid installed CLI checks")
+    by_command = {
+        (check.get("launcher"), tuple(check.get("arguments", ()))): check
+        for check in checks
+    }
+    expected = {
+        (launcher, arguments)
+        for launcher in ("console", "module")
+        for arguments in CLI_ARGUMENTS
+    }
+    require(
+        len(checks) == len(by_command) and set(by_command) == expected,
+        "installed CLI must execute help, version and full manual "
+        "via both entry points",
+    )
+    for check in checks:
+        require(
+            check.get("exit_code") == 0
+            and check.get("stderr") == ""
+            and check.get("output_validated") is True
+            and isinstance(check.get("stdout_bytes"), int)
+            and check["stdout_bytes"] > 0
+            and bool(re.fullmatch(r"[0-9a-f]{64}", check.get("stdout_sha256", ""))),
+            "installed CLI command failed or returned invalid output",
+        )
+    for arguments in CLI_ARGUMENTS:
+        console = by_command[("console", arguments)]
+        module = by_command[("module", arguments)]
+        require(
+            console["stdout_sha256"] == module["stdout_sha256"]
+            and console["stdout_bytes"] == module["stdout_bytes"],
+            "installed console and module CLI output disagree",
+        )
+    expected_version = f"turbopairformer {version}\n".encode()
+    require(
+        by_command[("console", ("--version",))]["stdout_sha256"]
+        == hashlib.sha256(expected_version).hexdigest(),
+        "installed CLI version output does not match the wheel",
+    )
 
 
 def validate_wheel(path: Path, commit: str) -> dict:
@@ -107,6 +198,8 @@ def validate_doctor(path: Path, commit: str, version: str, manifest_hash: str) -
         ),
         "doctor loaded an extension from outside the installed package",
     )
+    if requires_current_api_evidence(version):
+        validate_installed_cli(report, version, package_root)
     return report["gpu"]
 
 
@@ -117,7 +210,7 @@ def wheel_manifest_hash(path: Path) -> str:
         ).hexdigest()
 
 
-def validate_junit(path: Path) -> dict:
+def validate_junit(path: Path, version: str = "0.1.0") -> dict:
     root = ET.parse(path).getroot()
     require(root.tag in {"testsuites", "testsuite"}, "unsupported JUnit document")
     require(not list(root.iter("failure")), "GPU tests contain failures")
@@ -132,6 +225,10 @@ def validate_junit(path: Path) -> dict:
     names = {case.get("name", "").split("[", 1)[0] for case in passed}
     for scope, name in REQUIRED_GPU_CASES.items():
         require(name in names, f"no executed {scope} test in GPU receipt")
+    if requires_current_api_evidence(version):
+        exact_names = {case.get("name", "") for case in passed}
+        for scope, name in REQUIRED_FUNCTIONAL_GPU_CASES.items():
+            require(name in exact_names, f"no executed {scope} test in GPU receipt")
     return {"passed": len(passed), "skipped": len(cases) - len(passed)}
 
 
@@ -165,7 +262,7 @@ def validate_receipt(directory: Path, wheel: dict, commit: str) -> dict:
             wheel["version"],
             wheel_manifest_hash(directory / wheel["wheel"]),
         ),
-        "tests": validate_junit(directory / "standalone-gpu.xml"),
+        "tests": validate_junit(directory / "standalone-gpu.xml", wheel["version"]),
     }
 
 
@@ -288,7 +385,7 @@ def create_bundle(args: argparse.Namespace) -> dict:
         wheel["version"],
         wheel_manifest_hash(args.wheel),
     )
-    validate_junit(args.junit)
+    validate_junit(args.junit, wheel["version"])
     args.directory.mkdir(parents=True, exist_ok=False)
     shutil.copy2(args.wheel, args.directory / args.wheel.name)
     checks = []

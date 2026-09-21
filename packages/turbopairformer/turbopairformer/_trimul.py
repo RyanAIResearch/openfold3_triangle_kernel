@@ -871,8 +871,10 @@ class _TurboPairFormerTrimulFn(torch.autograd.Function):
         )
 
 
-def _run_supported_trimul(module, z, mask):
-    """Run a call that the shared metadata contract already accepted."""
+def _run_supported_trimul_tensors(
+    z, mask, w_ap, w_ag, w_bp, w_bg, w_g, w_z, g_in, b_in, g_out, b_out, outgoing
+):
+    """Run validated tensor parameters through the shared autograd boundary."""
     if mask is None:
         mask = z.new_ones(z.shape[:-1])
     orig_shape = z.shape
@@ -886,6 +888,31 @@ def _run_supported_trimul(module, z, mask):
     tensor_inputs = (
         z_bf,
         mask_f,
+        w_ap,
+        w_ag,
+        w_bp,
+        w_bg,
+        w_g,
+        w_z,
+        g_in,
+        b_in,
+        g_out,
+        b_out,
+    )
+    save_state = any(tensor.requires_grad for tensor in tensor_inputs)
+    output, *_ = _trimul_fwd_v1(
+        *tensor_inputs,
+        outgoing,
+        save_state,
+    )
+    return output.view(orig_shape).to(z.dtype)
+
+
+def _run_supported_trimul(module, z, mask):
+    """Preserve the module integration adapter after its support check."""
+    return _run_supported_trimul_tensors(
+        z,
+        mask,
         module.linear_a_p.weight,
         module.linear_a_g.weight,
         module.linear_b_p.weight,
@@ -896,34 +923,171 @@ def _run_supported_trimul(module, z, mask):
         module.layer_norm_in.bias.float(),
         module.layer_norm_out.weight.float(),
         module.layer_norm_out.bias.float(),
-    )
-    save_state = any(tensor.requires_grad for tensor in tensor_inputs)
-    output, *_ = _trimul_fwd_v1(
-        *tensor_inputs,
         module._outgoing,
-        save_state,
     )
-    return output.view(orig_shape).to(z.dtype)
 
 
-def turbo_trimul(module, z, mask=None):
-    """Run TriMul using the supplied module's weights and direction.
-
-    ``module`` follows the OpenFold3 triangle-multiplication weight contract;
-    importing OpenFold3 is not required. ``z`` has shape ``[..., N, N, C]``;
-    ``mask=None`` means every pair is valid. Unsupported inputs raise
-    ``ValueError`` before any CUDA extension is loaded.
-    """
+def _run_functional_trimul(z, direction, mask, parameters, eps):
     from turbopairformer.trimul_support import (
-        check_trimul_support,
+        check_trimul_tensor_support,
     )
 
-    support = check_trimul_support(module, z, mask)
+    support = check_trimul_tensor_support(z, direction, mask, **parameters, eps=eps)
     if not support:
         raise ValueError(
             f"TurboPairFormer TriMul unsupported [{support.code}]: {support.reason}"
         )
-    return _run_supported_trimul(module, z, mask)
+    channels = z.shape[-1]
+    # Optional matrices are fresh demonstration parameters for this call. They
+    # are neither retained by the package nor registered as trainable state.
+    options = {"device": z.device, "dtype": torch.float32}
+    for name in ("norm_in_weight", "norm_out_weight"):
+        if parameters[name] is None:
+            parameters[name] = torch.ones(channels, **options)
+    for name in ("norm_in_bias", "norm_out_bias"):
+        if parameters[name] is None:
+            parameters[name] = torch.zeros(channels, **options)
+    for name in ("p_in_weight", "g_in_weight", "p_out_weight", "g_out_weight"):
+        if parameters[name] is None:
+            rows = 2 * channels if name in ("p_in_weight", "g_in_weight") else channels
+            parameters[name] = torch.randn(rows, channels, **options) * channels**-0.5
+    p_in = parameters["p_in_weight"]
+    g_in = parameters["g_in_weight"]
+    # Keep these as autograd-connected views so gradients reach caller-owned
+    # packed matrices in their original [a; b] row order.
+    return _run_supported_trimul_tensors(
+        z,
+        mask,
+        p_in[:channels],
+        g_in[:channels],
+        p_in[channels:],
+        g_in[channels:],
+        parameters["g_out_weight"],
+        parameters["p_out_weight"],
+        parameters["norm_in_weight"],
+        parameters["norm_in_bias"],
+        parameters["norm_out_weight"],
+        parameters["norm_out_bias"],
+        direction == "outgoing",
+    )
+
+
+_NOT_GIVEN = object()
+
+
+def turbo_trimul(
+    x=_NOT_GIVEN,
+    *args,
+    z=_NOT_GIVEN,
+    direction=_NOT_GIVEN,
+    mask=_NOT_GIVEN,
+    norm_in_weight=_NOT_GIVEN,
+    norm_in_bias=_NOT_GIVEN,
+    p_in_weight=_NOT_GIVEN,
+    g_in_weight=_NOT_GIVEN,
+    norm_out_weight=_NOT_GIVEN,
+    norm_out_bias=_NOT_GIVEN,
+    p_out_weight=_NOT_GIVEN,
+    g_out_weight=_NOT_GIVEN,
+    eps=_NOT_GIVEN,
+    module=_NOT_GIVEN,
+):
+    """Run functional TriMul on ``z[..., N, N, C]`` with optional parameters.
+
+    Use ``turbo_trimul(z, direction="outgoing", mask=None, ...)`` or ``z=z``.
+    ``direction`` is ``"outgoing"`` or ``"incoming"``; the mask defaults to all
+    pairs valid. Parameters are contiguous FP32 tensors on the same device as
+    BF16 ``z``. ``p_in_weight`` and ``g_in_weight`` have shape ``[2C, C]`` with
+    a-branch rows followed by b-branch rows. ``p_out_weight`` and
+    ``g_out_weight`` have shape ``[C, C]``. Both LayerNorm weight/bias pairs
+    have shape ``[C]``, and ``eps`` must be exactly ``1e-5``.
+
+    An omitted or ``None`` matrix is independently sampled each call from a
+    normal distribution with standard deviation ``1 / sqrt(C)``. Missing norm
+    weights/biases are ones/zeros. These defaults are demonstration tensors,
+    not persistent trainable state. Supply and reuse all eight parameters for
+    training or repeated evaluation; their gradients flow to the supplied
+    tensors. ``mask`` is not differentiable. Only first-order gradients are
+    supported. Validation runs before demonstration allocation or CUDA loading.
+
+    Existing ``turbo_trimul(module, z, mask=None)`` and keyword ``module=``
+    integrations remain supported, and cannot mix in functional parameters.
+    Only z, direction and mask may be positional in functional calls.
+    """
+    parameters = {
+        "norm_in_weight": norm_in_weight,
+        "norm_in_bias": norm_in_bias,
+        "p_in_weight": p_in_weight,
+        "g_in_weight": g_in_weight,
+        "norm_out_weight": norm_out_weight,
+        "norm_out_bias": norm_out_bias,
+        "p_out_weight": p_out_weight,
+        "g_out_weight": g_out_weight,
+    }
+    if x is not _NOT_GIVEN:
+        if module is not _NOT_GIVEN:
+            raise TypeError("turbo_trimul cannot combine a first argument with module=")
+        if isinstance(x, torch.Tensor):
+            if z is not _NOT_GIVEN:
+                raise TypeError("turbo_trimul received z more than once")
+            z = x
+            if len(args) > 2:
+                raise TypeError(
+                    "functional turbo_trimul accepts at most 3 positional arguments"
+                )
+            if args:
+                if direction is not _NOT_GIVEN:
+                    raise TypeError("turbo_trimul received direction more than once")
+                direction = args[0]
+            if len(args) == 2:
+                if mask is not _NOT_GIVEN:
+                    raise TypeError("turbo_trimul received mask more than once")
+                mask = args[1]
+        else:
+            module = x
+            if len(args) > 2:
+                raise TypeError(
+                    "module turbo_trimul accepts at most 3 positional arguments"
+                )
+            if args:
+                if z is not _NOT_GIVEN:
+                    raise TypeError("turbo_trimul received z more than once")
+                z = args[0]
+            if len(args) == 2:
+                if mask is not _NOT_GIVEN:
+                    raise TypeError("turbo_trimul received mask more than once")
+                mask = args[1]
+    if z is _NOT_GIVEN:
+        raise TypeError("turbo_trimul requires z")
+    if mask is _NOT_GIVEN:
+        mask = None
+    if module is not _NOT_GIVEN:
+        if (
+            direction is not _NOT_GIVEN
+            or eps is not _NOT_GIVEN
+            or any(value is not _NOT_GIVEN for value in parameters.values())
+        ):
+            raise TypeError(
+                "module turbo_trimul cannot be mixed with functional parameters"
+            )
+        from turbopairformer.trimul_support import check_trimul_support
+
+        support = check_trimul_support(module, z, mask)
+        if not support:
+            raise ValueError(
+                f"TurboPairFormer TriMul unsupported [{support.code}]: {support.reason}"
+            )
+        return _run_supported_trimul(module, z, mask)
+    return _run_functional_trimul(
+        z,
+        "outgoing" if direction is _NOT_GIVEN else direction,
+        mask,
+        {
+            name: None if value is _NOT_GIVEN else value
+            for name, value in parameters.items()
+        },
+        1e-5 if eps is _NOT_GIVEN else eps,
+    )
 
 
 # Compatibility with integrations using the original descriptive name.

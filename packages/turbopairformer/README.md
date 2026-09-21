@@ -1,23 +1,54 @@
 # TurboPairFormer
 
-Fast CUDA kernels for Triangle Attention and Triangle Multiplicative Update
-in protein folding models, with PyTorch autograd support.
+TurboPairFormer provides optimized GPU kernels for Triangle Attention and
+Triangle Multiplicative Update, with PyTorch autograd support for protein folding
+model training.
+
+The project brings together researchers from Stevens Institute of Technology,
+Lambda, and OpenFold.
 
 ## Installation
 
-Use a fresh Python 3.14 environment:
-
 ```bash
-python3.14 -m venv .venv
-source .venv/bin/activate
+conda create -n turbopairformer python=3.14 pip -y
+conda activate turbopairformer
+
+export PATH="$CONDA_PREFIX/bin:$PATH"
+hash -r
+
 pip install turbopairformer
 ```
 
-Requires Linux x86-64 (glibc ≥2.28), PyTorch 2.10.0 with CUDA 12.8, and a Hopper
-GPU. H100 is tested; H200 execution is not yet validated. The wheel includes
-precompiled kernels; no CUDA toolkit is needed.
+Requires **Python 3.14**, **Linux x86-64** (glibc ≥2.28),
+**PyTorch 2.10.0 / CUDA 12.8**, and an **NVIDIA Hopper GPU**.
+H100 is tested; H200 is not yet validated. No CUDA toolkit needed.
 
-## Quick start
+## Command-line API guide
+
+Version 0.1.1 adds an offline command-line guide. The
+previously published 0.1.0 wheel predates this CLI.
+
+```bash
+turbopairformer --help
+turbopairformer api turbo_attention
+turbopairformer api turbo_trimul
+turbopairformer api support
+turbopairformer api distributed
+turbopairformer api environment
+turbopairformer api internals
+turbopairformer api --all
+```
+
+Use `turbopairformer api` for the full API index, or look up an internal symbol
+with `turbopairformer api triangle_dq_dbias.workspace_plan`. Help includes
+parameter contracts, shapes, masks, autograd examples and source-derived
+signatures. `python -m turbopairformer` is equivalent. Viewing help does not
+import Torch or load CUDA. The [offline API guide](turbopairformer/API_GUIDE.md)
+is also readable directly in the repository.
+
+## Quick Start
+
+### Triangle Attention
 
 ```python
 import torch
@@ -29,29 +60,52 @@ pair_bias = torch.randn(1, 1, 4, 128, 128, **options)
 
 output = turbo_attention(q, k, v, pair_bias=pair_bias)
 output.float().square().mean().backward()
+
+print(output.shape)  # torch.Size([1, 128, 128, 4, 32])
 ```
 
-For TriMul, use your model's compatible triangle-multiplication module and BF16
-pair tensor `z`:
+### Triangle Multiplicative Update
 
 ```python
-output = turbo_trimul(module, z)
+import torch
+from turbopairformer import turbo_trimul
+
+z = torch.randn(
+    1, 128, 128, 128,
+    device="cuda", dtype=torch.bfloat16, requires_grad=True,
+)
+
+output = turbo_trimul(z, direction="outgoing")  # or "incoming"
+output.float().square().mean().backward()
+
+print(output.shape)  # torch.Size([1, 128, 128, 128])
 ```
+
+Omitted TriMul weights are initialized on each call for this example. For model
+training, pass your persistent projection, gate, and normalization weights.
 
 Masks are optional and default to all positions valid. Pass a mask for padded
 inputs. `pair_bias` is required.
 
-## Contributors
+## Project Team
 
-Yide Ran¹, Chelsea Lowman², Jan Domanski³, David Hartmann², Jenke Scheen³,
-Jennifer Wei³, Chuan Li², Jianwen Xie²⁺, Zhaozhuo Xu¹⁺.
+- **Yide Ran** ¹
+- **Chelsea Lowman** ²
+- **Jan Domanski** ³
+- **David Hartmann** ²
+- **Jenke Scheen** ³
+- **Jennifer Wei** ³
+- **Chuan Li** ²
+- **Jianwen Xie** ² ⁺
+- **Zhaozhuo Xu** ¹ ⁺
 
-¹ Stevens Institute of Technology · ² Lambda · ³ OpenFold
+## Affiliations
 
-⁺ Equal advising.
+- ¹ Stevens Institute of Technology
+- ² Lambda
+- ³ OpenFold
+- ⁺ Equal advising
 
 ## License
 
-Apache-2.0. Derived from [AQLab OpenFold3](https://github.com/aqlaboratory/openfold-3).
-See [development documentation](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/DEVELOPMENT.md)
-for supported layouts and build details.
+Apache-2.0

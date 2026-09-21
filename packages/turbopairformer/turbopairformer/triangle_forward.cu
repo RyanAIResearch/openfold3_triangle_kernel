@@ -43,46 +43,40 @@ constexpr int kBlockN = 64;                             // keys per streamed til
 // the attention kernels' contiguous [batch_outer, H, N, D] rows. The Python
 // facade passes flattened physical-order views, so this is one fused launch
 // for q/k/v with no runtime compiler dependency.
+// CopyT is selected only from row-byte divisibility and pointer alignment.
+// Every vector fits within one logical row; the scalar BF16-sized lane is
+// the general fallback. There is no D/N/crop-specific kernel selection.
+template <typename CopyT>
 __global__ void stablefold_pack_qkv_kernel(
-    const __nv_bfloat16* __restrict__ q,
-    const __nv_bfloat16* __restrict__ k,
-    const __nv_bfloat16* __restrict__ v,
-    __nv_bfloat16* __restrict__ out_q,
-    __nv_bfloat16* __restrict__ out_k,
-    __nv_bfloat16* __restrict__ out_v,
-    int64_t rows,
+    const CopyT* __restrict__ q,
+    const CopyT* __restrict__ k,
+    const CopyT* __restrict__ v,
+    CopyT* __restrict__ out_q,
+    CopyT* __restrict__ out_k,
+    CopyT* __restrict__ out_v,
+    int64_t total_vectors,
     int heads,
     int sequence,
-    int head_dim) {
-  const int64_t row =
-      static_cast<int64_t>(blockIdx.x) * blockDim.y + threadIdx.y;
-  if (row >= rows) {
-    return;
-  }
-  const int64_t batch_outer = row / (static_cast<int64_t>(heads) * sequence);
-  const int64_t remainder = row % (static_cast<int64_t>(heads) * sequence);
-  const int head = static_cast<int>(remainder / sequence);
-  const int query = static_cast<int>(remainder % sequence);
-  const int64_t source_row =
-      (batch_outer * sequence + query) * heads + head;
-  const __nv_bfloat162* sources[3] = {
-      reinterpret_cast<const __nv_bfloat162*>(
-          q + source_row * head_dim),
-      reinterpret_cast<const __nv_bfloat162*>(
-          k + source_row * head_dim),
-      reinterpret_cast<const __nv_bfloat162*>(
-          v + source_row * head_dim),
-  };
-  __nv_bfloat162* destinations[3] = {
-      reinterpret_cast<__nv_bfloat162*>(out_q + row * head_dim),
-      reinterpret_cast<__nv_bfloat162*>(out_k + row * head_dim),
-      reinterpret_cast<__nv_bfloat162*>(out_v + row * head_dim),
-  };
-  for (int tensor = 0; tensor < 3; ++tensor) {
-    for (int column = threadIdx.x; column < head_dim / 2;
-         column += blockDim.x) {
-      destinations[tensor][column] = sources[tensor][column];
-    }
+    int64_t vectors_per_row) {
+  const int64_t grid_stride = static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t linear =
+           static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       linear < total_vectors;
+       linear += grid_stride) {
+    const int64_t row = linear / vectors_per_row;
+    const int64_t column = linear % vectors_per_row;
+    const int64_t rows_per_outer = static_cast<int64_t>(heads) * sequence;
+    const int64_t batch_outer = row / rows_per_outer;
+    const int64_t remainder = row % rows_per_outer;
+    const int head = static_cast<int>(remainder / sequence);
+    const int query = static_cast<int>(remainder % sequence);
+    const int64_t source_row =
+        (batch_outer * sequence + query) * heads + head;
+    const int64_t source = source_row * vectors_per_row + column;
+    // Integer assignments preserve every BF16 payload bit without conversion.
+    out_q[linear] = q[source];
+    out_k[linear] = k[source];
+    out_v[linear] = v[source];
   }
 }
 
@@ -278,6 +272,42 @@ __device__ __forceinline__ void ldmatrix_b_keytrans_sw(
   asm volatile(
       "ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n"
       : "=r"(frag[0]), "=r"(frag[1])
+      : "r"(addr));
+}
+
+// Generic 3-D TMA box load: coordinates (innermost first) into a swizzled box.
+__device__ __forceinline__ void tma_load_3d_box(
+    const CUtensorMap* map, __nv_bfloat16* dst, uint64_t* bar,
+    int coord0, int coord1, int coord2) {
+  asm volatile(
+      "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx"
+      "::bytes [%0], [%1, {%2, %3, %4}], [%5];\n" ::"r"(shared_u32(dst)),
+      "l"(reinterpret_cast<uint64_t>(map)),
+      "r"(coord0),
+      "r"(coord1),
+      "r"(coord2),
+      "r"(shared_u32(bar)));
+}
+
+// Pair-bias box: TMA [kBlockM rows][kBlockN keys] BF16 with the 128-byte
+// swizzle, so each 128-byte row stores 16-byte chunk c at c ^ (row & 7).
+// One x4 ldmatrix yields, for the 16 rows of a warp and keys 16*key_pair..+15,
+// the exact m16n8 accumulator fragment layout: frag[0]/frag[1] are rows r and
+// r+8 of the lower 8 keys, frag[2]/frag[3] of the upper 8 keys, each register
+// holding the two adjacent keys 2*(lane&3), 2*(lane&3)+1 in memory order.
+__device__ __forceinline__ void ldmatrix_bias_x4(
+    const __nv_bfloat16* tile, int row_base, int key_pair, int lane,
+    uint32_t (&frag)[4]) {
+  static_assert(
+      kBlockN * sizeof(__nv_bfloat16) == 128,
+      "bias box rows must span exactly the 128-byte swizzle");
+  const int row = row_base + (lane & 7) + ((lane >> 3) & 1) * 8;
+  const int chunk = key_pair * 2 + ((lane >> 4) & 1);
+  const uint32_t addr =
+      shared_u32(tile + row * kBlockN + ((chunk ^ (row & 7)) << 3));
+  asm volatile(
+      "ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+      : "=r"(frag[0]), "=r"(frag[1]), "=r"(frag[2]), "=r"(frag[3])
       : "r"(addr));
 }
 
@@ -593,13 +623,19 @@ __global__ __launch_bounds__(kThreads) void stablefold_triangle_forward_kernel(
 
 // TMA + WGMMA production lane (HeadDim <= 64): identical math and reduction
 // order to the legacy kernel (wgmma proved bitwise equal to the chained
-// mma.sync; the swizzled keytrans reads the same bytes), with K and V
-// staged by the bulk tensor engine instead of per-thread cp.async.
-template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq>
+// mma.sync; the swizzled keytrans reads the same bytes). K, V and the pair
+// bias box are staged by the bulk tensor engine; the additive mask tile is
+// staged one key tile ahead in shared memory. Bias values are read from the
+// swizzled shared box straight into the accumulator fragment layout, so the
+// score expression (scale, mask, bias, max, exp, sum) is evaluated in the
+// same order as the global-load lane.
+template <int HeadDim, bool TileMajorGrid, bool ExactTiles, bool OuterEqSeq,
+          bool BiasTma>
 __global__ __launch_bounds__(kThreads) void
 stablefold_triangle_forward_tma_kernel(
     const __grid_constant__ CUtensorMap k_map,
     const __grid_constant__ CUtensorMap v_map,
+    const __grid_constant__ CUtensorMap b_map,
     const __nv_bfloat16* __restrict__ q,
     const float* __restrict__ mask,
     const __nv_bfloat16* __restrict__ bias,
@@ -612,7 +648,17 @@ stablefold_triangle_forward_tma_kernel(
     float scale) {
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
   constexpr int kQStride = HeadDim + 8;
-  constexpr int kTileElements = kBlockN * HeadDim;  // TMA box, swizzled
+  constexpr int kTileElements = kBlockN * HeadDim;  // K/V TMA box, swizzled
+  constexpr int kBiasTileElements = kBlockM * kBlockN;  // bias box, 128B swizzle
+  // Every TMA box must start on a 1024-byte swizzle atom.
+  static_assert(
+      ((kBlockM * kQStride) * static_cast<int>(sizeof(__nv_bfloat16))) %
+              1024 == 0 &&
+          (kTileElements * static_cast<int>(sizeof(__nv_bfloat16))) % 1024 ==
+              0 &&
+          (kBiasTileElements * static_cast<int>(sizeof(__nv_bfloat16))) %
+                  1024 == 0,
+      "TMA boxes must be 1024-byte aligned in shared memory");
   const int lane = threadIdx.x & (kWarpSize - 1);
   const int warp = threadIdx.x / kWarpSize;
   const int oc = OuterEqSeq ? sequence : outer_count;
@@ -630,18 +676,22 @@ stablefold_triangle_forward_tma_kernel(
   __nv_bfloat16* k_buffers = reinterpret_cast<__nv_bfloat16*>(smem_raw) +
       kBlockM * kQStride;
   __nv_bfloat16* v_buffers = k_buffers + 2 * kTileElements;
+  __nv_bfloat16* b_buffers = v_buffers + 2 * kTileElements;
+  float* smask = reinterpret_cast<float*>(
+      b_buffers + (BiasTma ? 2 * kBiasTileElements : 0));
   __shared__ __align__(8) uint64_t k_barriers[2];
   __shared__ __align__(8) uint64_t v_barriers[2];
+  __shared__ __align__(8) uint64_t b_barriers[2];
 
   const int64_t plane =
       static_cast<int64_t>(batch_index) * oc + outer;
   const int64_t plane_row_base =
       (plane * heads + head) * static_cast<int64_t>(sequence);
   const int64_t head_base = plane_row_base * HeadDim;
+  const int64_t mask_base = plane * sequence;
   const int64_t bias_base =
       (static_cast<int64_t>(batch_index) * heads + head) *
       static_cast<int64_t>(sequence) * sequence;
-  const int64_t mask_base = plane * sequence;
   // Output is written in the PUBLIC [B, O, N, H, D] layout directly, so the
   // facade returns it with no transpose/contiguous pass.
   const int64_t out_plane_base =
@@ -649,12 +699,19 @@ stablefold_triangle_forward_tma_kernel(
       static_cast<int64_t>(head) * HeadDim;
   // The launch contract guarantees batch*outer*heads fits int32.
   const int tma_plane = static_cast<int>(plane * heads + head);
+  // The pair bias is shared across the outer dimension: one [N, N] plane per
+  // (batch, head), so its box coordinate ignores `outer`.
+  const int bias_plane = batch_index * heads + head;
 
   if (threadIdx.x == 0) {
     mbarrier_init(&k_barriers[0], 1);
     mbarrier_init(&k_barriers[1], 1);
     mbarrier_init(&v_barriers[0], 1);
     mbarrier_init(&v_barriers[1], 1);
+    if constexpr (BiasTma) {
+      mbarrier_init(&b_barriers[0], 1);
+      mbarrier_init(&b_barriers[1], 1);
+    }
   }
 
   for (int element = lane; element < kRowsPerWarp * HeadDim;
@@ -667,7 +724,15 @@ stablefold_triangle_forward_tma_kernel(
     sq[row * kQStride + col] =
         q[head_base + static_cast<int64_t>(gq) * HeadDim + col];
   }
-  __syncthreads();  // covers mbarrier_init visibility too
+  // Mask tile 0: the additive key mask is one row per plane, shared by every
+  // query row and head, so the CTA stages 64 floats per key tile. Later
+  // tiles are staged one tile ahead inside the loop.
+  if (threadIdx.x < kBlockN) {
+    const int key = threadIdx.x;
+    smask[key] =
+        ExactTiles || key < sequence ? mask[mask_base + key] : 0.0F;
+  }
+  __syncthreads();  // covers mbarrier_init and mask tile 0 visibility too
 
   uint32_t q_frags[HeadDim / 16][4];
 #pragma unroll
@@ -704,10 +769,23 @@ stablefold_triangle_forward_tma_kernel(
           key_tile * kBlockN, tma_plane);
     }
   };
+  const auto issue_b = [&](int key_tile, int buffer) {
+    if constexpr (BiasTma) {
+      if (threadIdx.x == 0) {
+        mbarrier_expect_tx(
+            &b_barriers[buffer],
+            kBiasTileElements * static_cast<int>(sizeof(__nv_bfloat16)));
+        tma_load_3d_box(
+            &b_map, b_buffers + buffer * kBiasTileElements,
+            &b_barriers[buffer], key_tile * kBlockN, query_block, bias_plane);
+      }
+    }
+  };
 
   const int key_tiles = (sequence + kBlockN - 1) / kBlockN;
   issue_k(0, 0);
   issue_v(0, 0);
+  issue_b(0, 0);
 #pragma unroll 1
   for (int key_tile = 0; key_tile < key_tiles; ++key_tile) {
     const int key_start = key_tile * kBlockN;
@@ -715,6 +793,20 @@ stablefold_triangle_forward_tma_kernel(
     const uint32_t parity = (key_tile >> 1) & 1;
     __nv_bfloat16* sb_k = k_buffers + buffer * kTileElements;
     __nv_bfloat16* sv = v_buffers + buffer * kTileElements;
+    const __nv_bfloat16* sb =
+        b_buffers + (BiasTma ? buffer * kBiasTileElements : 0);
+    const float* tile_mask = smask + buffer * kBlockN;
+    const bool has_next = key_tile + 1 < key_tiles;
+
+    // Next tile's mask segment: loaded now, stored into the other mask
+    // buffer before this tile's trailing barrier. That buffer's readers all
+    // finished before the previous trailing barrier.
+    float next_mask = 0.0F;
+    if (has_next && threadIdx.x < kBlockN) {
+      const int key = key_start + kBlockN + threadIdx.x;
+      next_mask =
+          ExactTiles || key < sequence ? mask[mask_base + key] : 0.0F;
+    }
 
     // QK only needs K; V's completion wait is deferred to just before PV.
     mbarrier_wait_parity(&k_barriers[buffer], parity);
@@ -740,36 +832,67 @@ stablefold_triangle_forward_tma_kernel(
       wgmma_m64n64k16(score, q_frags[chain], descriptor, chain != 0);
     }
     wgmma_commit();
-    // Overlap window: stage the NEXT tile's K and V while the QK MMAs run.
-    if (key_tile + 1 < key_tiles) {
+    // Overlap window: stage the NEXT tile's K, V and bias while the QK MMAs
+    // run.
+    if (has_next) {
       issue_k(key_tile + 1, buffer ^ 1);
       issue_v(key_tile + 1, buffer ^ 1);
+      issue_b(key_tile + 1, buffer ^ 1);
     }
     wgmma_wait_zero();
+
+    // This tile's bias box (issued one tile ahead), then the async->generic
+    // proxy fence so ldmatrix sees it.
+    if constexpr (BiasTma) {
+      mbarrier_wait_parity(&b_barriers[buffer], parity);
+      proxy_fence();
+    }
 
     float tile_max[2] = {-std::numeric_limits<float>::infinity(),
                          -std::numeric_limits<float>::infinity()};
     const int group = lane >> 2;
     const int thread_in_group = lane & 3;
 #pragma unroll
-    for (int column = 0; column < kBlockN / 8; ++column) {
+    for (int key_pair = 0; key_pair < kBlockN / 16; ++key_pair) {
+      // 16 rows x 16 keys of bias in the accumulator fragment layout.
+      uint32_t bias_frag[4];
+      if constexpr (BiasTma) {
+        ldmatrix_bias_x4(sb, warp * kRowsPerWarp, key_pair, lane, bias_frag);
+      }
 #pragma unroll
-      for (int half = 0; half < 2; ++half) {
-        const int row = warp_query + group + half * 8;
+      for (int sub = 0; sub < 2; ++sub) {
+        const int column = key_pair * 2 + sub;
+        const float2 mask_pair = *reinterpret_cast<const float2*>(
+            tile_mask + column * 8 + thread_in_group * 2);
 #pragma unroll
-        for (int pair = 0; pair < 2; ++pair) {
-          const int key = key_start + column * 8 + thread_in_group * 2 + pair;
-          float value = score[column].v[half * 2 + pair];
-          if (ExactTiles || (key < sequence && row < sequence)) {
-            value = value * scale + mask[mask_base + key] +
-                __bfloat162float(
-                    bias[bias_base +
-                         static_cast<int64_t>(row) * sequence + key]);
-          } else {
-            value = -std::numeric_limits<float>::infinity();
+        for (int half = 0; half < 2; ++half) {
+          const int row = warp_query + group + half * 8;
+          const int first_key = key_start + column * 8 + thread_in_group * 2;
+#pragma unroll
+          for (int pair = 0; pair < 2; ++pair) {
+            const int key = first_key + pair;
+            float value = score[column].v[half * 2 + pair];
+            if (ExactTiles || (key < sequence && row < sequence)) {
+              float bias_value;
+              if constexpr (BiasTma) {
+                const __nv_bfloat16* pair_values =
+                    reinterpret_cast<const __nv_bfloat16*>(
+                        &bias_frag[sub * 2 + half]);
+                bias_value = __bfloat162float(pair_values[pair]);
+              } else {
+                // Hardware-ineligible bias layouts retain the original
+                // scalar load, including odd row strides and offset views.
+                bias_value = __bfloat162float(
+                    bias[bias_base + static_cast<int64_t>(row) * sequence + key]);
+              }
+              value = value * scale +
+                  (pair == 0 ? mask_pair.x : mask_pair.y) + bias_value;
+            } else {
+              value = -std::numeric_limits<float>::infinity();
+            }
+            score[column].v[half * 2 + pair] = value;
+            tile_max[half] = fmaxf(tile_max[half], value);
           }
-          score[column].v[half * 2 + pair] = value;
-          tile_max[half] = fmaxf(tile_max[half], value);
         }
       }
     }
@@ -798,28 +921,11 @@ stablefold_triangle_forward_tma_kernel(
       }
     }
 
+    // Evaluate each original probability expression immediately before its
+    // 16-key PV chunk. Each score keeps its own -inf guard, including when
+    // another score is NaN and fmaxf left the row maximum at -inf. Row-sum
+    // additions and each MMA accumulator still visit columns in original order.
     float row_sum[2] = {0.0F, 0.0F};
-#pragma unroll
-    for (int column = 0; column < kBlockN / 8; ++column) {
-#pragma unroll
-      for (int half = 0; half < 2; ++half) {
-        float p0 = score[column].v[half * 2];
-        float p1 = score[column].v[half * 2 + 1];
-        p0 = p0 == -std::numeric_limits<float>::infinity()
-            ? 0.0F
-            : __expf(p0 - m_state[half]);
-        p1 = p1 == -std::numeric_limits<float>::infinity()
-            ? 0.0F
-            : __expf(p1 - m_state[half]);
-        row_sum[half] += p0 + p1;
-        score[column].v[half * 2] = p0;
-        score[column].v[half * 2 + 1] = p1;
-      }
-    }
-#pragma unroll
-    for (int half = 0; half < 2; ++half) {
-      l_state[half] += quad_sum(row_sum[half]);
-    }
 
     // V's TMA completion, then the async->generic proxy fence so ldmatrix
     // sees the tile; PV keeps the proven mma.sync path over the swizzled
@@ -828,6 +934,24 @@ stablefold_triangle_forward_tma_kernel(
     proxy_fence();
 #pragma unroll
     for (int chunk = 0; chunk < kBlockN / 16; ++chunk) {
+#pragma unroll
+      for (int sub = 0; sub < 2; ++sub) {
+        const int column = chunk * 2 + sub;
+#pragma unroll
+        for (int half = 0; half < 2; ++half) {
+          float p0 = score[column].v[half * 2];
+          float p1 = score[column].v[half * 2 + 1];
+          p0 = p0 == -std::numeric_limits<float>::infinity()
+              ? 0.0F
+              : __expf(p0 - m_state[half]);
+          p1 = p1 == -std::numeric_limits<float>::infinity()
+              ? 0.0F
+              : __expf(p1 - m_state[half]);
+          row_sum[half] += p0 + p1;
+          score[column].v[half * 2] = p0;
+          score[column].v[half * 2 + 1] = p1;
+        }
+      }
       uint32_t p_frag[4];
       p_frag[0] = pack_bf16_pair(
           score[chunk * 2].v[0], score[chunk * 2].v[1]);
@@ -845,7 +969,15 @@ stablefold_triangle_forward_tma_kernel(
         mma_m16n8k16(o_acc[tile], p_frag, v_frag);
       }
     }
-    __syncthreads();  // all reads of this buffer done before its reuse
+#pragma unroll
+    for (int half = 0; half < 2; ++half) {
+      l_state[half] += quad_sum(row_sum[half]);
+    }
+
+    if (has_next && threadIdx.x < kBlockN) {
+      smask[(buffer ^ 1) * kBlockN + threadIdx.x] = next_mask;
+    }
+    __syncthreads();  // all reads of this tile's buffers done before reuse
   }
 
   const int group = lane >> 2;
@@ -889,10 +1021,14 @@ constexpr int shared_bytes() {
       static_cast<int>(sizeof(__nv_bfloat16));
 }
 
-template <int HeadDim>
+template <int HeadDim, bool BiasTma>
 constexpr int shared_bytes_tma() {
-  return (kBlockM * (HeadDim + 8) + 4 * kBlockN * HeadDim) *
-      static_cast<int>(sizeof(__nv_bfloat16));
+  // Per-warp Q, double-buffered K/V, optional double-buffered bias, and
+  // a double-buffered FP32 mask row. Each TMA box is 1024-byte aligned.
+  return (kBlockM * (HeadDim + 8) + 4 * kBlockN * HeadDim +
+          (BiasTma ? 2 * kBlockM * kBlockN : 0)) *
+      static_cast<int>(sizeof(__nv_bfloat16)) +
+      2 * kBlockN * static_cast<int>(sizeof(float));
 }
 
 // cuTensorMapEncodeTiled resolved through the runtime so the extension
@@ -957,8 +1093,43 @@ CUtensorMap make_kv_tensor_map(
   return tensor_map;
 }
 
-template <int HeadDim>
-void launch_forward_tma(
+// [planes, rows, keys] view of the contiguous [B, 1, H, N, N] bias, boxed per
+// (query block, key tile) with the 128-byte swizzle used by the
+// accumulator-layout ldmatrix reads. The caller checks
+// the 16-byte-aligned base and 16-byte-multiple row stride TMA requires.
+CUtensorMap make_bias_tensor_map(
+    const torch::Tensor& bias, int sequence, int64_t planes) {
+  CUtensorMap tensor_map;
+  const cuuint64_t global_dim[3] = {
+      static_cast<cuuint64_t>(sequence),
+      static_cast<cuuint64_t>(sequence),
+      static_cast<cuuint64_t>(planes)};
+  const cuuint64_t global_stride[2] = {
+      static_cast<cuuint64_t>(sequence) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(sequence) * sequence * sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[3] = {kBlockN, kBlockM, 1};
+  const cuuint32_t element_stride[3] = {1, 1, 1};
+  const CUresult result = tensor_map_encode_fn()(
+      &tensor_map,
+      CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
+      3,
+      bias.data_ptr(),
+      global_dim,
+      global_stride,
+      box_dim,
+      element_stride,
+      CU_TENSOR_MAP_INTERLEAVE_NONE,
+      CU_TENSOR_MAP_SWIZZLE_128B,
+      CU_TENSOR_MAP_L2_PROMOTION_NONE,
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  TORCH_CHECK(
+      result == CUDA_SUCCESS,
+      "cuTensorMapEncodeTiled (bias) failed: ", static_cast<int>(result));
+  return tensor_map;
+}
+
+template <int HeadDim, bool BiasTma>
+void launch_forward_tma_lane(
     const torch::Tensor& q,
     const torch::Tensor& k,
     const torch::Tensor& v,
@@ -978,6 +1149,11 @@ void launch_forward_tma(
       make_kv_tensor_map(k, HeadDim, sequence, planes);
   const CUtensorMap v_map =
       make_kv_tensor_map(v, HeadDim, sequence, planes);
+  CUtensorMap b_map{};
+  if constexpr (BiasTma) {
+    b_map = make_bias_tensor_map(
+        bias, sequence, static_cast<int64_t>(batch) * heads);
+  }
   const float scale = 1.0F / std::sqrt(static_cast<float>(HeadDim));
   const int query_blocks = (sequence + kBlockM - 1) / kBlockM;
   const int64_t outer_tasks = static_cast<int64_t>(batch) * outer_count;
@@ -997,18 +1173,19 @@ void launch_forward_tma(
   do {                                                                      \
     const cudaError_t status = cudaFuncSetAttribute(                        \
         stablefold_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,   \
-                                               OuterEq>,                    \
+                                               OuterEq, BiasTma>,                    \
         cudaFuncAttributeMaxDynamicSharedMemorySize,                        \
-        shared_bytes_tma<HeadDim>());                                       \
+        shared_bytes_tma<HeadDim, BiasTma>());                                       \
     TORCH_CHECK(                                                            \
         status == cudaSuccess,                                              \
         "failed to opt in StableFold TMA forward shared memory: ",          \
         cudaGetErrorString(status));                                        \
     stablefold_triangle_forward_tma_kernel<HeadDim, TileMajor, Exact,       \
-                                           OuterEq>                         \
-        <<<grid, kThreads, shared_bytes_tma<HeadDim>(), stream>>>(          \
+                                           OuterEq, BiasTma>                         \
+        <<<grid, kThreads, shared_bytes_tma<HeadDim, BiasTma>(), stream>>>(          \
             k_map,                                                          \
             v_map,                                                          \
+            b_map,                                                          \
             reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),           \
             mask.data_ptr<float>(),                                         \
             reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),        \
@@ -1039,6 +1216,37 @@ void launch_forward_tma(
     }
   }
 #undef LAUNCH_STABLEFOLD_FORWARD_TMA
+}
+
+template <int HeadDim>
+void launch_forward_tma(
+    const torch::Tensor& q,
+    const torch::Tensor& k,
+    const torch::Tensor& v,
+    const torch::Tensor& mask,
+    const torch::Tensor& bias,
+    torch::Tensor& out,
+    torch::Tensor& lse,
+    int sequence,
+    int outer_count,
+    int heads,
+    int batch,
+    __nv_bfloat16* shadow_residual,
+    cudaStream_t stream) {
+  // These are tensor-map hardware constraints, not crop/data special cases.
+  // Original TMA K/V handling remains active for every other bias layout;
+  // only bias reads use the scalar fallback there.
+  const bool bias_tma_ok = sequence % 8 == 0 &&
+      reinterpret_cast<std::uintptr_t>(bias.data_ptr()) % 16 == 0;
+  if (bias_tma_ok) {
+    launch_forward_tma_lane<HeadDim, true>(
+        q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch,
+        shadow_residual, stream);
+  } else {
+    launch_forward_tma_lane<HeadDim, false>(
+        q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch,
+        shadow_residual, stream);
+  }
 }
 
 template <int HeadDim>
@@ -1169,19 +1377,52 @@ std::vector<torch::Tensor> stablefold_pack_qkv(
       {batch_outer, heads64, sequence64, head_dim64}, options);
   auto out_k = torch::empty_like(out_q);
   auto out_v = torch::empty_like(out_q);
-  const dim3 block(std::min(head_dim / 2, 32), 8);
-  const dim3 grid(static_cast<unsigned int>(blocks));
-  stablefold_pack_qkv_kernel<<<grid, block, 0, stream>>>(
-      reinterpret_cast<const __nv_bfloat16*>(q_source.data_ptr()),
-      reinterpret_cast<const __nv_bfloat16*>(k_source.data_ptr()),
-      reinterpret_cast<const __nv_bfloat16*>(v_source.data_ptr()),
-      reinterpret_cast<__nv_bfloat16*>(out_q.data_ptr()),
-      reinterpret_cast<__nv_bfloat16*>(out_k.data_ptr()),
-      reinterpret_cast<__nv_bfloat16*>(out_v.data_ptr()),
-      rows,
-      heads,
-      sequence,
-      head_dim);
+  const auto aligned = [](const torch::Tensor& tensor, int bytes) {
+    return (reinterpret_cast<std::uintptr_t>(tensor.data_ptr()) &
+            static_cast<std::uintptr_t>(bytes - 1)) == 0;
+  };
+  const int row_bytes = head_dim * static_cast<int>(sizeof(__nv_bfloat16));
+  const auto safe_width = [&](int bytes) {
+    return row_bytes % bytes == 0 &&
+        aligned(q_source, bytes) && aligned(k_source, bytes) &&
+        aligned(v_source, bytes) && aligned(out_q, bytes) &&
+        aligned(out_k, bytes) && aligned(out_v, bytes);
+  };
+  // These are hardware copy widths, not a list of supported problem shapes.
+  // BF16 tensors guarantee the two-byte scalar alignment used by fallback.
+  const int copy_bytes = safe_width(16) ? 16
+      : (safe_width(8) ? 8 : (safe_width(4) ? 4 : 2));
+  const int64_t vectors_per_row = row_bytes / copy_bytes;
+  const int64_t total_vectors = rows * vectors_per_row;
+  constexpr int kCopyThreads = 128;
+  const int64_t copy_blocks = std::min<int64_t>(
+      (total_vectors + kCopyThreads - 1) / kCopyThreads, 2147483647LL);
+  const dim3 block(kCopyThreads);
+  const dim3 grid(static_cast<unsigned int>(copy_blocks));
+#define LAUNCH_STABLEFOLD_PACK_COPY(CopyType)                                  \
+  stablefold_pack_qkv_kernel<CopyType><<<grid, block, 0, stream>>>(              \
+      reinterpret_cast<const CopyType*>(q_source.data_ptr()),                 \
+      reinterpret_cast<const CopyType*>(k_source.data_ptr()),                 \
+      reinterpret_cast<const CopyType*>(v_source.data_ptr()),                 \
+      reinterpret_cast<CopyType*>(out_q.data_ptr()),                           \
+      reinterpret_cast<CopyType*>(out_k.data_ptr()),                           \
+      reinterpret_cast<CopyType*>(out_v.data_ptr()),                           \
+      total_vectors, heads, sequence, vectors_per_row)
+  switch (copy_bytes) {
+    case 16:
+      LAUNCH_STABLEFOLD_PACK_COPY(uint4);
+      break;
+    case 8:
+      LAUNCH_STABLEFOLD_PACK_COPY(uint2);
+      break;
+    case 4:
+      LAUNCH_STABLEFOLD_PACK_COPY(std::uint32_t);
+      break;
+    default:
+      LAUNCH_STABLEFOLD_PACK_COPY(std::uint16_t);
+      break;
+  }
+#undef LAUNCH_STABLEFOLD_PACK_COPY
   TORCH_CHECK(
       cudaGetLastError() == cudaSuccess,
       "StableFold pack QKV launch failed");
@@ -1254,6 +1495,13 @@ void stablefold_triangle_forward_impl(
               torch::IntArrayRef({batch, outer_count, heads, sequence}),
       "lse must be contiguous FP32 [B,O,H,N] on q.device");
 
+  // TMA rejects misaligned K/V addresses; the legacy cp.async lane also
+  // requires 16-byte addresses. Reject before either launch rather than
+  // falling through from a failed TMA eligibility check to unsafe cp.async.
+  TORCH_CHECK(
+      reinterpret_cast<std::uintptr_t>(k.data_ptr()) % 16 == 0 &&
+          reinterpret_cast<std::uintptr_t>(v.data_ptr()) % 16 == 0,
+      "StableFold forward K/V storage must be 16-byte aligned");
   const c10::cuda::CUDAGuard device_guard(q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   // TMA lanes need io_dim == storage lane AND the flattened (batch, outer,
