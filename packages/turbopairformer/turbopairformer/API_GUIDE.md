@@ -41,9 +41,9 @@ import torch
 from turbopairformer import turbo_attention
 
 B, O, H, N, D = 1, 128, 4, 128, 32
-options = dict(device="cuda", dtype=torch.bfloat16, requires_grad=True)
-q, k, v = [torch.randn(B, O, H, N, D, **options) for _ in range(3)]
-pair_bias = torch.randn(B, 1, H, N, N, **options)
+activation_options = dict(device="cuda", dtype=torch.bfloat16, requires_grad=True)
+q, k, v = [torch.randn(B, O, H, N, D, **activation_options) for _ in range(3)]
+pair_bias = torch.randn(B, 1, H, N, N, **activation_options)
 output = turbo_attention(q, k, v, pair_bias=pair_bias)
 output.float().square().mean().backward()
 print(output.shape)  # [1, 128, 128, 4, 32]
@@ -130,17 +130,17 @@ import torch
 from turbopairformer import turbo_trimul
 
 C, N = 128, 128
-options = dict(device="cuda", dtype=torch.float32)
+parameter_options = dict(device="cuda", dtype=torch.float32)
 weights = torch.nn.ParameterDict(
     {
-        "norm_in_weight": torch.nn.Parameter(torch.ones(C, **options)),
-        "norm_in_bias": torch.nn.Parameter(torch.zeros(C, **options)),
-        "p_in_weight": torch.nn.Parameter(torch.randn(2 * C, C, **options) / C**0.5),
-        "g_in_weight": torch.nn.Parameter(torch.randn(2 * C, C, **options) / C**0.5),
-        "norm_out_weight": torch.nn.Parameter(torch.ones(C, **options)),
-        "norm_out_bias": torch.nn.Parameter(torch.zeros(C, **options)),
-        "p_out_weight": torch.nn.Parameter(torch.randn(C, C, **options) / C**0.5),
-        "g_out_weight": torch.nn.Parameter(torch.randn(C, C, **options) / C**0.5),
+        "norm_in_weight": torch.nn.Parameter(torch.ones(C, **parameter_options)),
+        "norm_in_bias": torch.nn.Parameter(torch.zeros(C, **parameter_options)),
+        "p_in_weight": torch.nn.Parameter(torch.randn(2 * C, C, **parameter_options) / C**0.5),
+        "g_in_weight": torch.nn.Parameter(torch.randn(2 * C, C, **parameter_options) / C**0.5),
+        "norm_out_weight": torch.nn.Parameter(torch.ones(C, **parameter_options)),
+        "norm_out_bias": torch.nn.Parameter(torch.zeros(C, **parameter_options)),
+        "p_out_weight": torch.nn.Parameter(torch.randn(C, C, **parameter_options) / C**0.5),
+        "g_out_weight": torch.nn.Parameter(torch.randn(C, C, **parameter_options) / C**0.5),
     }
 )
 optimizer = torch.optim.Adam(weights.parameters(), lr=1e-3)
@@ -177,6 +177,8 @@ to distinguish omitted arguments across the two calling conventions.
 
 ```python
 from turbopairformer import (
+    turbo_attention,
+    turbo_trimul,
     is_triangle_attention_supported,
     check_trimul_support,
     evaluate_trimul_support,
@@ -188,18 +190,28 @@ from turbopairformer import (
 ```
 
 `is_triangle_attention_supported(q, k, v, res_mask=None, pair_bias=None)`
-returns `(supported: bool, reason: str)`. Unpack the tuple; a nonempty tuple is
-truthy even when its first element is `False`.
+returns two values:
+
+- `attention_supported` (`bool`): whether these inputs can use Turbo Attention.
+- `unsupported_reason` (`str`): explains why the inputs are unsupported when
+  `attention_supported` is `False`.
+
+Unpack both return values and check `attention_supported`. Testing the whole
+tuple as a boolean does not check whether the inputs are supported.
 
 ```python
-# Integration fragment: q/k/v/bias and stock_attention belong to your host.
-ok, reason = is_triangle_attention_supported(q, k, v, pair_bias=pair_bias)
-if ok:
-    output = turbo_attention(q, k, v, pair_bias=pair_bias)
-else:
-    print(reason)
-    output = stock_attention(q, k, v, pair_bias=pair_bias)
+# Use q, k, v and pair_bias from: turbopairformer api turbo_attention
+attention_supported, unsupported_reason = is_triangle_attention_supported(
+    q, k, v, pair_bias=pair_bias
+)
+if not attention_supported:
+    raise ValueError(f"Turbo Attention cannot use these inputs: {unsupported_reason}")
+
+output = turbo_attention(q, k, v, pair_bias=pair_bias)
 ```
+
+A host model that provides another attention backend can select it when
+`attention_supported` is `False`. TurboPairFormer does not supply that backend.
 
 `check_trimul_support(module, z, mask=None)` checks the module adapter.
 For functional weights use the module-level helper:
@@ -208,12 +220,20 @@ For functional weights use the module-level helper:
 from turbopairformer.trimul_support import check_trimul_tensor_support
 
 # z/weights/mask are the persistent tensors from the TriMul example.
-support = check_trimul_tensor_support(z, direction="incoming", mask=mask, **weights)
-if support:
-    output = turbo_trimul(z, direction="incoming", mask=mask, **weights)
-else:
-    print(support.code, support.reason)  # the host chooses its fallback
+trimul_support_result = check_trimul_tensor_support(
+    z, direction="incoming", mask=mask, **weights
+)
+if not trimul_support_result.supported:
+    raise ValueError(
+        f"Turbo TriMul cannot use these inputs "
+        f"({trimul_support_result.code}): {trimul_support_result.reason}"
+    )
+
+output = turbo_trimul(z, direction="incoming", mask=mask, **weights)
 ```
+
+`trimul_support_result.supported` is a boolean. Its `code` identifies the
+failed check, and `reason` explains that failure in text.
 
 The functional check accepts the same eight optional parameter keywords and
 `eps=1e-5` as the operator and validates before any demonstration allocation.
@@ -412,11 +432,12 @@ Workspace planning example (no kernel launch; importing the module needs Torch):
 ```python
 from turbopairformer.triangle_dq_dbias import workspace_plan, sr_workspace_plan
 
-plan = workspace_plan(
+workspace_plan_result = workspace_plan(
     128, 4, outer=128, batch=1, workspace_budget_bytes=256 * 1024 * 1024
 )
-print(plan.elements, plan.elements * 2)  # BF16 slab elements and bytes
-sr_plan = sr_workspace_plan(128, 4, 32, outer=128, batch=1)
+print(workspace_plan_result.elements, workspace_plan_result.elements * 2)  # BF16 slab elements and bytes
+sr_workspace_plan_result = sr_workspace_plan(128, 4, 32, outer=128, batch=1)
+print(sr_workspace_plan_result.elements, sr_workspace_plan_result.elements * 2)
 ```
 
 `WorkspacePlan` exposes query span, resident leaves, batch chunks, launch
