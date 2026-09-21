@@ -207,13 +207,15 @@ class OpenFold3(nn.Module):
 
         if use_protenix_triangle_attention:
             conflicts = [
-                name for name in (
+                name
+                for name in (
                     "use_stable_triangle_attention",
                     "use_stable_triangle_multiplicative",
                     "use_deepspeed_evo_attention",
                     "use_triton_triangle_kernels",
                     "use_lma",
-                ) if mode_mem_settings.get(name, False)
+                )
+                if mode_mem_settings.get(name, False)
             ]
             if conflicts:
                 raise ValueError(

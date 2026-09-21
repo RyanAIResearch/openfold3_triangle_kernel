@@ -169,17 +169,21 @@ class MSAModuleBlock(MSABlock):
         use_protenix_triangle_attention: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if use_protenix_triangle_attention:
-            if any((
-                use_stable_triangle_attention,
-                use_stable_triangle_multiplicative,
-                use_deepspeed_evo_attention,
-                use_triton_triangle_kernels,
-                use_lma,
-            )):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
                 raise ValueError("Protenix cannot be combined with other backends")
             if (
-                chunk_size is not None or _attn_chunk_size is not None
-                or inplace_safe or _offload_inference
+                chunk_size is not None
+                or _attn_chunk_size is not None
+                or inplace_safe
+                or _offload_inference
             ):
                 raise ValueError(
                     "Protenix requires unchunked, non-inplace execution "

@@ -225,15 +225,17 @@ class TemplatePairBlock(PairBlock):
         """
 
         if use_protenix_triangle_attention:
-            if any((
-                use_stable_triangle_attention,
-                use_stable_triangle_multiplicative,
-                use_deepspeed_evo_attention,
-                use_triton_triangle_kernels,
-                use_lma,
-            )):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
                 raise ValueError("Protenix cannot be combined with other backends")
-            if (chunk_size is not None or _attn_chunk_size is not None or inplace_safe):
+            if chunk_size is not None or _attn_chunk_size is not None or inplace_safe:
                 raise ValueError(
                     "Protenix requires unchunked, non-inplace execution "
                     "without inference offload"
@@ -500,15 +502,17 @@ class TemplatePairStack(nn.Module):
             [*, N_templ, N_res, N_res, C_t] template embedding update
         """
         if use_protenix_triangle_attention:
-            if any((
-                use_stable_triangle_attention,
-                use_stable_triangle_multiplicative,
-                use_deepspeed_evo_attention,
-                use_triton_triangle_kernels,
-                use_lma,
-            )):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
                 raise ValueError("Protenix cannot be combined with other backends")
-            if (chunk_size is not None or inplace_safe):
+            if chunk_size is not None or inplace_safe:
                 raise ValueError(
                     "Protenix requires unchunked, non-inplace execution "
                     "without inference offload"
@@ -612,13 +616,15 @@ class TemplateEmbedderAllAtom(nn.Module):
                 [*, N_token, N_token, C_z] Template embedding
         """
         if use_protenix_triangle_attention:
-            if any((
-                use_stable_triangle_attention,
-                use_stable_triangle_multiplicative,
-                use_deepspeed_evo_attention,
-                use_triton_triangle_kernels,
-                use_lma,
-            )):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
                 raise ValueError("Protenix cannot be combined with other backends")
             raise ValueError("Protenix does not support inference offload")
 
@@ -761,15 +767,17 @@ class TemplateEmbedderAllAtom(nn.Module):
                 [*, N_token, N_token, C_z] Template embedding
         """
         if use_protenix_triangle_attention:
-            if any((
-                use_stable_triangle_attention,
-                use_stable_triangle_multiplicative,
-                use_deepspeed_evo_attention,
-                use_triton_triangle_kernels,
-                use_lma,
-            )):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
                 raise ValueError("Protenix cannot be combined with other backends")
-            if (chunk_size is not None or inplace_safe or offload_inference):
+            if chunk_size is not None or inplace_safe or offload_inference:
                 raise ValueError(
                     "Protenix requires unchunked, non-inplace execution "
                     "without inference offload"

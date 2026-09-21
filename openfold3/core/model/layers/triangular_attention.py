@@ -155,8 +155,14 @@ class TriangleAttention(nn.Module):
                     "Protenix Triangle Attention requires chunk_size=None and "
                     "inplace_safe=False"
                 )
-            if any((use_stable_triangle_attention, use_deepspeed_evo_attention,
-                    use_triton_triangle_kernels, use_lma)):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
                 raise ValueError(
                     "Protenix Triangle Attention is mutually exclusive with "
                     "other attention backends"

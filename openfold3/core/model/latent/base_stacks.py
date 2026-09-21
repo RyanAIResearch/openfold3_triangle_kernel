@@ -195,13 +195,15 @@ class MSAStack(nn.Module, ABC):
         use_protenix_triangle_attention: bool = False,
     ):
         if use_protenix_triangle_attention:
-            if any((
-                use_stable_triangle_attention,
-                use_stable_triangle_multiplicative,
-                use_deepspeed_evo_attention,
-                use_triton_triangle_kernels,
-                use_lma,
-            )):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
                 raise ValueError("Protenix cannot be combined with other backends")
             raise ValueError("Protenix does not support inference offload")
 
@@ -292,15 +294,17 @@ class MSAStack(nn.Module, ABC):
                 [*, N_res, N_res, C_z] pair embedding
         """
         if use_protenix_triangle_attention:
-            if any((
-                use_stable_triangle_attention,
-                use_stable_triangle_multiplicative,
-                use_deepspeed_evo_attention,
-                use_triton_triangle_kernels,
-                use_lma,
-            )):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
                 raise ValueError("Protenix cannot be combined with other backends")
-            if (chunk_size is not None or inplace_safe):
+            if chunk_size is not None or inplace_safe:
                 raise ValueError(
                     "Protenix requires unchunked, non-inplace execution "
                     "without inference offload"

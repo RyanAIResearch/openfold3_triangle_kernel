@@ -95,7 +95,9 @@ DEFAULT_LMA_KV_CHUNK_SIZE = 4096
 _ZERO_PAIR_BIAS_CACHE: dict = {}
 
 
-def _raise_if_strict_turbopairformer_fallback(reason: str, shape: tuple[int, ...]) -> None:
+def _raise_if_strict_turbopairformer_fallback(
+    reason: str, shape: tuple[int, ...]
+) -> None:
     from openfold3.core.utils.distributed_contract import (
         turbopairformer_distributed_strict_enabled,
     )
@@ -415,8 +417,15 @@ class Attention(nn.Module):
             )
 
         if use_protenix_triangle_attention:
-            if any((use_stable_triangle_attention, use_deepspeed_evo_attention,
-                    use_triton_triangle_kernels, use_lma, use_high_precision)):
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                    use_high_precision,
+                )
+            ):
                 raise ValueError(
                     "use_protenix_triangle_attention is mutually exclusive with "
                     "other attention backends and high-precision attention"
@@ -562,7 +571,8 @@ class Attention(nn.Module):
             orig_dtype = q.dtype
             if orig_dtype != torch.bfloat16:
                 q_s, k_s, v_s = (
-                    q.to(torch.bfloat16), k.to(torch.bfloat16),
+                    q.to(torch.bfloat16),
+                    k.to(torch.bfloat16),
                     v.to(torch.bfloat16),
                 )
                 bias_s = [biases[0], biases[1].to(torch.bfloat16)]
@@ -586,11 +596,10 @@ class Attention(nn.Module):
                     _TURBOPAIRFORMER_FALLBACK_LOGGED.add(key)
                     logging.getLogger(__name__).warning(
                         "turbopairformer fallback to stock at shape %s: %s",
-                        tuple(q.shape), reason,
+                        tuple(q.shape),
+                        reason,
                     )
-                o = _attention(
-                    q * (1.0 / math.sqrt(self.c_hidden)), k, v, biases
-                )
+                o = _attention(q * (1.0 / math.sqrt(self.c_hidden)), k, v, biases)
                 o = o.transpose(-2, -3)
         # cuequivariance kernel takes precedence over use_deepspeed_evo_attention.
         # NOTE: this chain must stay exclusive with the stable branch above —

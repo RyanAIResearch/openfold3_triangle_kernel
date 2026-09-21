@@ -73,7 +73,9 @@ def test_aqlab_selects_native_stock_routes():
 def test_each_accelerated_backend_has_exactly_one_operator_family():
     assert BACKEND_FLAGS["cueq"]["use_cueq_triangle_kernels"] is True
     assert BACKEND_FLAGS["turbopairformer"]["use_stable_triangle_attention"] is True
-    assert BACKEND_FLAGS["turbopairformer"]["use_stable_triangle_multiplicative"] is True
+    assert (
+        BACKEND_FLAGS["turbopairformer"]["use_stable_triangle_multiplicative"] is True
+    )
     assert BACKEND_FLAGS["deepspeed-evo"]["use_deepspeed_evo_attention"] is True
     assert BACKEND_FLAGS["triton"]["use_triton_triangle_kernels"] is True
     for name, flags in BACKEND_FLAGS.items():
@@ -136,6 +138,7 @@ def test_protenix_selects_attention_plus_cueq_trimul():
 def test_switching_backend_clears_the_previous_protenix_selection(backend):
     config = configure_training_backend({}, backend="protenix")
     configure_training_backend(config, backend=backend)
-    assert config["model_update"]["custom"]["settings"]["memory"]["train"] == (
-        BACKEND_FLAGS[backend]
+    assert (
+        config["model_update"]["custom"]["settings"]["memory"]["train"]
+        == (BACKEND_FLAGS[backend])
     )
