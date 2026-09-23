@@ -196,7 +196,7 @@ In a Linux CPython 3.14 environment with `torch==2.10.0` installed from PyPI:
 ```bash
 python -m pip install setuptools wheel patchelf
 CUDA_HOME=/absolute/path/to/cuda-12.9 bash tools/build_sm90_wheel.sh
-python -m pip install dist/turbopairformer-0.1.1-cp314-cp314-linux_x86_64.whl
+python -m pip install dist/turbopairformer-0.1.2-cp314-cp314-linux_x86_64.whl
 cd /tmp
 python /absolute/path/to/packages/turbopairformer/tools/smoke_installed.py
 ```
@@ -204,7 +204,10 @@ python /absolute/path/to/packages/turbopairformer/tools/smoke_installed.py
 The builder copies clean source files to an isolated directory, builds all five
 extensions, removes build-host RPATH/RUNPATH entries with `patchelf` before
 hashing the binaries, validates the wheel, and checks imports from a pip target install
-with no compiler/JIT available. Source placeholders remain unchanged. To build
+with no compiler/JIT available. Wheels contain compiled kernels and Python
+interfaces, never CUDA/C++ sources or PTX. Source distributions are disabled.
+The manifest retains build-input hashes separately from the files shipped and
+verified at runtime. Source placeholders remain unchanged. To build
 uncommitted development changes, explicitly set `TURBOPAIRFORMER_ALLOW_DIRTY_BUILD=1`;
 such wheels are marked dirty and are not release artifacts.
 

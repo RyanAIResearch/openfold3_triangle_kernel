@@ -5,6 +5,7 @@ Build wheels with ``TURBOPAIRFORMER_BUILD_AOT=1`` in the pinned environment.
 Source-only developer installs require ``TURBOPAIRFORMER_SOURCE_ONLY=1`` explicitly;
 metadata generation remains available without importing Torch or CUDA.
 The canonical wheel builder is ``tools/build_sm90_wheel.sh``.
+CUDA sources stay in the private build checkout. Source distributions are disabled.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pathlib import Path
 from setuptools import setup
 from setuptools.command.build_py import build_py
 from setuptools.command.editable_wheel import editable_wheel
+from setuptools.command.sdist import sdist
 
 BUILD_AOT = os.environ.get("TURBOPAIRFORMER_BUILD_AOT") == "1"
 SOURCE_ONLY = os.environ.get("TURBOPAIRFORMER_SOURCE_ONLY") == "1"
@@ -34,6 +36,24 @@ else:
 
 ROOT = Path(__file__).resolve().parent
 PACKAGE = ROOT / "turbopairformer"
+NATIVE_SOURCE_SUFFIXES = frozenset(
+    (
+        ".cu",
+        ".cuh",
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cxx",
+        ".h",
+        ".hh",
+        ".hpp",
+        ".hxx",
+        ".inl",
+        ".ipp",
+        ".tpp",
+        ".ptx",
+    )
+)
 EXPECTED_PYTHON = (3, 14)
 EXPECTED_TORCH = "2.10.0"
 EXPECTED_TORCH_CUDA = "12.8"
@@ -285,6 +305,12 @@ if BUILD_AOT:
                     "nvcc_flags": NVCC_FLAGS,
                 },
                 "sources": source_records,
+                "packaged_sources": {
+                    relative: digest
+                    for relative, digest in source_records.items()
+                    if relative.startswith("turbopairformer/")
+                    and Path(relative).suffix in (".py", ".md")
+                },
                 "extensions": extension_records,
             }
             payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -329,6 +355,29 @@ class CheckedBuildPy(build_py):
     def run(self) -> None:
         _require_build_mode()
         super().run()
+        leaked_sources = [
+            path.relative_to(self.build_lib).as_posix()
+            for path in Path(self.build_lib).rglob("*")
+            if path.is_file()
+            and any(
+                suffix.lower() in NATIVE_SOURCE_SUFFIXES for suffix in path.suffixes
+            )
+        ]
+        if leaked_sources:
+            raise RuntimeError(
+                "CUDA/C++ source files must not be included in a binary wheel; "
+                "use a clean build directory. Unexpected files: "
+                + ", ".join(sorted(leaked_sources))
+            )
+
+
+class CheckedSDist(sdist):
+    def run(self) -> None:
+        raise RuntimeError(
+            "TurboPairFormer distributes CUDA kernels only as compiled binaries. "
+            "Source distributions are disabled; use tools/build_sm90_wheel.sh "
+            "to build a wheel from the private checkout."
+        )
 
 
 class CheckedEditableWheel(editable_wheel):
@@ -338,7 +387,11 @@ class CheckedEditableWheel(editable_wheel):
 
 
 command_classes.update(
-    {"build_py": CheckedBuildPy, "editable_wheel": CheckedEditableWheel}
+    {
+        "build_py": CheckedBuildPy,
+        "editable_wheel": CheckedEditableWheel,
+        "sdist": CheckedSDist,
+    }
 )
 
 setup(

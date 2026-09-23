@@ -80,8 +80,10 @@ facade 的未填充 direct ABI 调用才走 `StaticSequence=0` 的显式尾块 g
 | `triangle_dkdv.{py,cu}` | generic/runtime dK+dV |
 | `triangle_dq_dbias.{py,cu}` | fixed-tree dQ+dBias |
 
-上述四组 CUDA 源作为 build receipt/source distribution 进入 package-data，
-但 production runtime 只 import wheel 内四个 `.so`，不调用 NVCC。只有开发者
+上述四组 CUDA 源仅保留在私有构建 checkout，不进入 wheel；禁止生成源码发行包。
+production runtime 只 import wheel 内四个 Attention `.so`，不调用 NVCC。
+manifest 的 `sources` 保留构建输入的 SHA-256，`packaged_sources` 记录并验证随包
+Python/Markdown 文件；运行时不要求 CUDA 源文件存在。只有持有源码的开发者
 显式设置 `TURBOPAIRFORMER_ALLOW_JIT=1` 时 loader 才允许 source JIT；缺失、
 损坏或 ABI 不匹配的生产二进制会直接报错。生产 facade 不允许依赖
 `scripts/benchmarks` 或任何历史 backward loader。

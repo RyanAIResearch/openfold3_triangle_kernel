@@ -1,5 +1,6 @@
 """Runtime policy and receipt checks that do not need a CUDA device."""
 
+import hashlib
 import json
 import os
 import subprocess
@@ -167,6 +168,139 @@ def test_installed_wheel_ignores_unowned_local_receipt(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "_MANIFEST_PATH", embedded)
     assert runtime._manifest_path() == embedded
     assert runtime._manifest()["built"] is False
+
+
+@pytest.fixture
+def binary_runtime_install(tmp_path, monkeypatch):
+    """An installed package whose CUDA sources exist only in build provenance."""
+    package = tmp_path / "turbopairformer"
+    package.mkdir()
+    contents = {
+        "__init__.py": b"# public Python API\n",
+        "_aot_runtime.py": b"# installed runtime\n",
+        "API_GUIDE.md": b"# operator contracts\n",
+    }
+    for filename, data in contents.items():
+        (package / filename).write_bytes(data)
+    packaged_sources = {
+        f"turbopairformer/{name}": hashlib.sha256(data).hexdigest()
+        for name, data in contents.items()
+    }
+    native_source = b"// private CUDA source\n"
+    manifest = {
+        "schema_version": 1,
+        "built": True,
+        "git": {"commit": "a" * 40, "dirty": False},
+        "target": {"cuda_arch": "sm_90a", "ptx_embedded": False},
+        "sources": {
+            **packaged_sources,
+            "turbopairformer/triangle_forward.cu": hashlib.sha256(
+                native_source
+            ).hexdigest(),
+        },
+        "packaged_sources": packaged_sources,
+    }
+    receipt = package / "_build_manifest.json"
+    receipt.write_text(json.dumps(manifest))
+    monkeypatch.setattr(runtime, "__file__", str(package / "_aot_runtime.py"))
+    monkeypatch.setattr(runtime, "_MANIFEST_PATH", receipt)
+    monkeypatch.setattr(runtime, "_manifest", lambda: manifest)
+    return package, manifest, native_source
+
+
+def test_binary_runtime_identity_keeps_cuda_provenance_without_cuda_sources(
+    binary_runtime_install,
+):
+    package, manifest, _ = binary_runtime_install
+    source = package / "triangle_forward.cu"
+
+    assert not source.exists()
+    identity = runtime.distributed_aot_identity(())
+    assert identity["packaged_source_sha256"] == manifest["packaged_sources"]
+    assert runtime.source_sha256_for("turbopairformer_forward", source) == {
+        "triangle_forward.cu": manifest["sources"][
+            "turbopairformer/triangle_forward.cu"
+        ]
+    }
+
+
+@pytest.mark.parametrize("change", ("missing", "tampered", "unrecorded"))
+def test_binary_runtime_identity_rejects_changed_python_files(
+    binary_runtime_install, change
+):
+    package, _, _ = binary_runtime_install
+    if change == "missing":
+        (package / "__init__.py").unlink()
+    elif change == "tampered":
+        (package / "__init__.py").write_text("# modified API\n")
+    else:
+        (package / "unexpected.py").write_text("# unrecorded module\n")
+
+    with pytest.raises(runtime.AOTExtensionError, match="packaged source"):
+        runtime.distributed_aot_identity(())
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    (
+        None,
+        {},
+        [],
+        {"turbopairformer/__init__.py": "not-a-sha256"},
+        {"turbopairformer/__init__.py": None},
+        {1: "a" * 64},
+        {"../outside.py": "a" * 64},
+        {"turbopairformer/../outside.py": "a" * 64},
+        {"turbopairformer//__init__.py": "a" * 64},
+        {"turbopairformer/triangle_forward.cu": "a" * 64},
+    ),
+)
+def test_binary_runtime_identity_does_not_fall_back_from_invalid_shipped_map(
+    binary_runtime_install, recorded
+):
+    package, manifest, native_source = binary_runtime_install
+    # Even a complete legacy source tree cannot hide a malformed explicit map.
+    (package / "triangle_forward.cu").write_bytes(native_source)
+    manifest["packaged_sources"] = recorded
+
+    with pytest.raises(runtime.AOTExtensionError, match="packaged source"):
+        runtime.distributed_aot_identity(())
+
+
+def test_binary_runtime_identity_rejects_missing_shipped_receipt_entry(
+    binary_runtime_install,
+):
+    _, manifest, _ = binary_runtime_install
+    del manifest["packaged_sources"]["turbopairformer/__init__.py"]
+
+    with pytest.raises(runtime.AOTExtensionError, match="coverage"):
+        runtime.distributed_aot_identity(())
+
+
+def test_legacy_runtime_identity_uses_sources_only_when_shipped_map_absent(
+    binary_runtime_install,
+):
+    package, manifest, native_source = binary_runtime_install
+    del manifest["packaged_sources"]
+    source = package / "triangle_forward.cu"
+    with pytest.raises(runtime.AOTExtensionError, match="triangle_forward.cu"):
+        runtime.distributed_aot_identity(())
+
+    source.write_bytes(native_source)
+    identity = runtime.distributed_aot_identity(())
+    assert identity["packaged_source_sha256"] == manifest["sources"]
+
+
+def test_binary_runtime_jit_reports_missing_private_source_before_compiling(
+    binary_runtime_install,
+):
+    package, _, _ = binary_runtime_install
+    with pytest.raises(runtime.AOTExtensionError, match="development CUDA source is missing"):
+        runtime._load_development_jit(
+            module_key="turbopairformer_forward",
+            source=package / "triangle_forward.cu",
+            verbose=False,
+        )
 
 
 @pytest.mark.parametrize("canonical", policy.EXECUTION_ENV_KEYS)

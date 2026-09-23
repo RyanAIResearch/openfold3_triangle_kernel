@@ -112,16 +112,14 @@ def test_loader_contract_matches_setup_symbols():
         assert f"turbopairformer._ext.{module}" in setup
 
 
-def test_pyproject_ships_sources_and_manifest_as_package_data():
+def test_pyproject_ships_python_docs_and_manifest_without_native_sources():
     project = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
     assert project["project"]["name"] == "turbopairformer"
     assert project["project"]["requires-python"] == "==3.14.*"
     assert project["project"]["dependencies"] == ["torch==2.10.0"]
     package_data = project["tool"]["setuptools"]["package-data"]["turbopairformer"]
-    for pattern in ("*.cu", "_build_manifest.json", "*.md"):
-        assert pattern in package_data
-    manifest = (REPOSITORY / "MANIFEST.in").read_text()
-    assert "recursive-include turbopairformer *.cu *.py *.json *.md" in manifest
+    assert set(package_data) == {"_build_manifest.json", "*.md"}
+    assert project["tool"]["setuptools"]["include-package-data"] is False
 
 
 def test_project_metadata_preserves_all_nine_authors_in_order():
@@ -265,12 +263,49 @@ def test_explicit_source_only_wheel_excludes_editable_receipts_and_binaries(
         assert not any(
             name.endswith((".local.json", ".so")) for name in archive.namelist()
         )
+        assert not any(
+            suffix.lower() in _wheel_validator().NATIVE_SOURCE_SUFFIXES
+            for name in archive.namelist()
+            for suffix in Path(name).suffixes
+        )
         assert (
             json.loads(archive.read("turbopairformer/_build_manifest.json"))["built"]
             is False
         )
     with pytest.raises(ValueError, match="binary"):
         _wheel_validator().validate_wheel(wheel)
+
+
+def test_build_py_excludes_native_sources(source_copy, tmp_path):
+    destination = tmp_path / "build-lib"
+    result = _setup(
+        source_copy, "build_py", "--build-lib", str(destination), source_only=True
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (destination / "turbopairformer/__init__.py").is_file()
+    assert (destination / "turbopairformer/_build_manifest.json").is_file()
+    assert (destination / "turbopairformer/API_GUIDE.md").is_file()
+    assert not any(
+        suffix.lower() in _wheel_validator().NATIVE_SOURCE_SUFFIXES
+        for path in destination.rglob("*")
+        for suffix in path.suffixes
+    )
+    # Excluding native sources from artifacts must not destroy the build inputs.
+    assert len(list((source_copy / "turbopairformer").glob("*.cu"))) == 5
+
+
+@pytest.mark.parametrize("filename", ["stale.cu", "nested/stale.CUH.bak"])
+def test_build_py_refuses_stale_native_sources(source_copy, tmp_path, filename):
+    destination = tmp_path / "build-lib"
+    stale = destination / "turbopairformer" / filename
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("// Stale native source must not enter the next wheel.\n")
+    result = _setup(
+        source_copy, "build_py", "--build-lib", str(destination), source_only=True
+    )
+    assert result.returncode != 0
+    assert "CUDA/C++ source" in result.stdout + result.stderr
+    assert stale.is_file(), "the build must refuse, not delete arbitrary input files"
 
 
 def test_fresh_source_only_install_exports_short_callable_api(source_copy, tmp_path):
@@ -408,20 +443,12 @@ def test_trimul_custom_ops_use_the_package_namespace():
     }
 
 
-def test_sdist_excludes_generated_artifacts(source_copy):
-    import tarfile
-
-    (source_copy / "turbopairformer/_build_manifest.local.json").write_text(
-        '{"built":true}'
-    )
-    (source_copy / "turbopairformer/_ext/stale.so").write_bytes(b"stale binary")
-    result = _setup(source_copy, "sdist")
-    assert result.returncode == 0, result.stdout + result.stderr
-    (archive_path,) = (source_copy / "dist").glob("*.tar.gz")
-    with tarfile.open(archive_path) as archive:
-        names = archive.getnames()
-        assert not any(name.endswith((".local.json", ".so")) for name in names)
-        assert any(name.endswith("/tools/validate_wheel.py") for name in names)
+@pytest.mark.parametrize("source_only", [False, True])
+def test_sdist_refuses_source_publication(source_copy, source_only):
+    result = _setup(source_copy, "sdist", source_only=source_only)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert not list((source_copy / "dist").glob("*.tar.gz"))
+    assert not list((source_copy / "dist").glob("*.zip"))
 
 
 def _elf_fixture(runtime_path=None, *, tag=15):
@@ -509,6 +536,11 @@ def synthetic_aot_wheel(tmp_path):
         "extensions": records,
         "sources": {
             "turbopairformer/__init__.py": hashlib.sha256(source).hexdigest(),
+            # Build provenance records native inputs without distributing them.
+            "turbopairformer/triangle_forward.cu": "c" * 64,
+        },
+        "packaged_sources": {
+            "turbopairformer/__init__.py": hashlib.sha256(source).hexdigest(),
         },
     }
     metadata = (
@@ -525,6 +557,11 @@ def synthetic_aot_wheel(tmp_path):
         platform="linux_x86_64",
         missing_source_record=False,
         extra_source=False,
+        missing_packaged_receipt=False,
+        provenance_mismatch=False,
+        source_hash_mismatch=False,
+        extra_packaged_record=False,
+        native_source=None,
         runtime_path=None,
     ):
         manifest["git"]["dirty"] = dirty
@@ -535,9 +572,24 @@ def synthetic_aot_wheel(tmp_path):
                 record["size_bytes"] = len(binary)
                 record["sha256"] = hashlib.sha256(binary).hexdigest()
         if missing_source_record:
-            manifest["sources"].pop("turbopairformer/__init__.py")
+            manifest["packaged_sources"].pop("turbopairformer/__init__.py")
         if extra_source:
             files["turbopairformer/unrecorded.py"] = b"# Unrecorded source file.\n"
+        if missing_packaged_receipt:
+            manifest.pop("packaged_sources")
+        if provenance_mismatch:
+            manifest["sources"]["turbopairformer/__init__.py"] = "b" * 64
+        if source_hash_mismatch:
+            files["turbopairformer/__init__.py"] = b"# Tampered Python source.\n"
+        if extra_packaged_record:
+            manifest["packaged_sources"]["turbopairformer/triangle_forward.cu"] = (
+                "c" * 64
+            )
+        if native_source:
+            files[native_source] = b"// Native source must not be distributed.\n"
+            manifest["sources"][native_source] = hashlib.sha256(
+                files[native_source]
+            ).hexdigest()
         files["turbopairformer/_build_manifest.json"] = json.dumps(manifest).encode()
         files["turbopairformer-0.1.0.dist-info/WHEEL"] = (
             f"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: cp314-cp314-{platform}\n"
@@ -556,8 +608,62 @@ def synthetic_aot_wheel(tmp_path):
 
 
 def test_wheel_validator_accepts_a_complete_local_receipt(synthetic_aot_wheel):
-    result = _wheel_validator().validate_wheel(synthetic_aot_wheel())
+    wheel = synthetic_aot_wheel()
+    result = _wheel_validator().validate_wheel(wheel)
     assert result["git"] == {"commit": "a" * 40, "dirty": False}
+    with zipfile.ZipFile(wheel) as archive:
+        manifest = json.loads(archive.read("turbopairformer/_build_manifest.json"))
+        assert "turbopairformer/triangle_forward.cu" in manifest["sources"]
+        assert "turbopairformer/triangle_forward.cu" not in archive.namelist()
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        *(
+            f"turbopairformer/kernel{suffix}"
+            for suffix in (
+                ".cu",
+                ".cuh",
+                ".c",
+                ".cc",
+                ".cpp",
+                ".cxx",
+                ".h",
+                ".hh",
+                ".hpp",
+                ".hxx",
+                ".inl",
+                ".ipp",
+                ".tpp",
+                ".ptx",
+            )
+        ),
+        "turbopairformer/nested/kernel.CU",
+        "turbopairformer/nested/kernel.CUH.bak",
+        "turbopairformer-0.1.0.dist-info/kernel.cpp",
+        "turbopairformer.libs/kernel.ptx.gz",
+    ],
+)
+def test_wheel_validator_rejects_native_sources_anywhere(synthetic_aot_wheel, filename):
+    with pytest.raises(ValueError, match="CUDA/C\\+\\+ source or PTX"):
+        _wheel_validator().validate_wheel(synthetic_aot_wheel(native_source=filename))
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("missing_packaged_receipt", "missing packaged source receipt"),
+        ("provenance_mismatch", "packaged source provenance mismatch"),
+        ("source_hash_mismatch", "packaged source hash mismatch"),
+        ("extra_packaged_record", "source receipt coverage mismatch"),
+    ],
+)
+def test_wheel_validator_requires_packaged_receipt_integrity(
+    synthetic_aot_wheel, change, message
+):
+    with pytest.raises(ValueError, match=message):
+        _wheel_validator().validate_wheel(synthetic_aot_wheel(**{change: True}))
 
 
 def test_wheel_validator_rejects_corrupt_binaries(synthetic_aot_wheel):
@@ -656,6 +762,30 @@ def test_release_record_detects_nonbinary_metadata_tampering(
         for name, content in members.items():
             archive.writestr(name, content)
     with pytest.raises(ValueError, match="RECORD mismatch"):
+        _wheel_validator().validate_wheel(output, require_pypi=True)
+
+
+def test_release_rejects_native_source_even_with_valid_hashes_and_record(
+    synthetic_aot_wheel, wheel_repair, tmp_path
+):
+    import hashlib
+
+    result = wheel_repair.repair_wheel(
+        synthetic_aot_wheel(), tmp_path / "releases", "manylinux_2_28_x86_64"
+    )
+    output = tmp_path / "releases" / result["wheel"]
+    members = wheel_repair._members(output)
+    filename = "turbopairformer/nested/leaked.CU.bak"
+    members[filename] = b"__global__ void kernel() {}\n"
+    manifest = json.loads(members[wheel_repair.MANIFEST])
+    manifest["sources"][filename] = hashlib.sha256(members[filename]).hexdigest()
+    members[wheel_repair.MANIFEST] = json.dumps(manifest).encode()
+    wheel_repair._write_wheel(output, members)
+    with zipfile.ZipFile(output) as archive:
+        _wheel_validator()._validate_record(
+            archive, "turbopairformer-0.1.0.dist-info/METADATA"
+        )
+    with pytest.raises(ValueError, match="CUDA/C\\+\\+ source or PTX"):
         _wheel_validator().validate_wheel(output, require_pypi=True)
 
 

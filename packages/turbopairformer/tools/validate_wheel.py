@@ -27,6 +27,22 @@ MODULES = {
     "turbopairformer_trimul": "turbopairformer._ext._turbopairformer_trimul_sm90a",
 }
 PYPI_PLATFORMS = ("manylinux_2_28_x86_64", "manylinux_2_34_x86_64")
+NATIVE_SOURCE_SUFFIXES = {
+    ".cu",
+    ".cuh",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".inl",
+    ".ipp",
+    ".tpp",
+    ".ptx",
+}
 # These libraries are supplied by the pinned PyPI Torch distribution and its
 # CUDA runtime dependency. Do not extend this list with system/build-host libs.
 EXTERNAL_PROVIDERS = {
@@ -179,6 +195,19 @@ def validate_wheel(
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         require(len(names) == len(set(names)), "duplicate wheel archive members")
+        native_sources = [
+            name
+            for name in names
+            if any(
+                suffix.lower() in NATIVE_SOURCE_SUFFIXES
+                for suffix in Path(name).suffixes
+            )
+        ]
+        require(
+            not native_sources,
+            "CUDA/C++ source or PTX must not be packaged: "
+            + ", ".join(sorted(native_sources)),
+        )
         require(
             not any(name.endswith(".local.json") for name in names),
             "editable build receipt leaked into the wheel",
@@ -376,24 +405,31 @@ def validate_wheel(
         packaged_sources = {
             name
             for name in names
-            if name.startswith("turbopairformer/")
-            and name.endswith((".py", ".cu", ".md"))
+            if name.startswith("turbopairformer/") and name.endswith((".py", ".md"))
         }
-        recorded_sources = {
-            name for name in manifest["sources"] if name.startswith("turbopairformer/")
-        }
+        recorded_hashes = manifest.get("packaged_sources")
+        require(
+            isinstance(recorded_hashes, dict),
+            "missing packaged source receipt",
+        )
+        recorded_sources = set(recorded_hashes)
         require(
             recorded_sources == packaged_sources,
             "source receipt coverage mismatch: "
             f"missing={sorted(packaged_sources - recorded_sources)}, "
             f"extra={sorted(recorded_sources - packaged_sources)}",
         )
-        for filename, expected_hash in manifest["sources"].items():
-            if filename.startswith("turbopairformer/"):
-                require(
-                    hashlib.sha256(archive.read(filename)).hexdigest() == expected_hash,
-                    f"packaged source hash mismatch: {filename}",
-                )
+        sources = manifest.get("sources")
+        require(isinstance(sources, dict), "missing build source provenance")
+        for filename, expected_hash in recorded_hashes.items():
+            require(
+                sources.get(filename) == expected_hash,
+                f"packaged source provenance mismatch: {filename}",
+            )
+            require(
+                hashlib.sha256(archive.read(filename)).hexdigest() == expected_hash,
+                f"packaged source hash mismatch: {filename}",
+            )
     return {
         "wheel": path.name,
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),

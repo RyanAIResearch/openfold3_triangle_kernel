@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turbopairformer"
-version = "0.1.1.post1"
+version = "0.1.2"
 authors = [
     { name = "Yide Ran" },
     { name = "Chelsea Lowman" },
@@ -45,20 +45,23 @@ lightning = ["pytorch-lightning==2.6.1"]
 test = ["pytest>=8", "pytorch-lightning==2.6.1"]
 
 [tool.setuptools]
-include-package-data = true
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["turbopairformer*"]
 
 [tool.setuptools.package-data]
-turbopairformer = ["*.cu", "_build_manifest.json", "*.md"]
+turbopairformer = ["_build_manifest.json", "*.md"]
 
 [tool.setuptools.exclude-package-data]
-turbopairformer = ["*.local.json"]
+turbopairformer = [
+    "*.local.json", "*.cu", "*.cuh", "*.c", "*.cc", "*.cpp", "*.cxx",
+    "*.h", "*.hh", "*.hpp", "*.hxx", "*.inl", "*.ipp", "*.tpp", "*.ptx",
+]
 
 [tool.ruff]
-# Keep the standalone sdist independent of the host repository configuration.
+# Keep the standalone package independent of the host repository configuration.
 line-length = 88
 extend-exclude = ["integration"]
 
