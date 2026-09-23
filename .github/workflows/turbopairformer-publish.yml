@@ -90,3 +90,65 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  validate-restoration:
+    # This separate lane is restricted to three historical wheels with pinned
+    # original/recovery hashes. It never replaces the new-release GPU gate.
+    if: >-
+      github.repository == 'RyanAIResearch/openfold3_triangle_kernel' &&
+      github.event.release.tag_name == 'turbopairformer-restore-20260922'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Install metadata validation tools
+        run: python -m pip install twine
+      - name: Download original and build-1 recovery wheels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir recovery-input --pattern 'turbopairformer-*.whl'
+      - name: Verify pinned archives and unchanged payloads
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          python scripts/turbopairformer/restore_releases.py recovery-input \
+            --tag "$RELEASE_TAG" --output-dir dist | tee restoration-report.json
+          python -m twine check --strict dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turbopairformer-validated-restoration-wheels
+          path: dist/*.whl
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turbopairformer-restoration-evidence
+          path: restoration-report.json
+          if-no-files-found: error
+
+  publish-restoration:
+    needs: validate-restoration
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: turbopairformer-validated-restoration-wheels
+          path: dist
+      - name: Republish the three verified historical versions
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
