@@ -80,8 +80,9 @@ loading an extension and reports mismatches instead of silently compiling.
 
 Each public wheel is built from a clean commit and released with its own H100
 installation and numerical-test receipts. Historical wheels under other names
-do not certify TurboPairFormer artifacts. H200 execution is validated separately
-using the same release wheel; its receipt identifies the actual device and runtime.
+do not certify TurboPairFormer artifacts. H200 compatibility is supported by
+the identical CUDA sources validated in the host package. Execution of a
+standalone wheel on H200 is recorded separately for its exact wheel and runtime.
 
 GPU eligibility uses compute capability 9.0; it does not require the device
 name to contain H100. NVIDIA lists both H100 and H200 as
