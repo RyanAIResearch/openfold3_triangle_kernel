@@ -6,6 +6,6 @@ include LICENSE
 include NOTICE
 recursive-include tools *.sh *.py
 include tools/Dockerfile.manylinux
-recursive-include turbopairformer *.py *.json *.md
+recursive-include turbopairformer *.cu *.py *.json *.md
 exclude turbopairformer/*.local.json
-global-exclude *.so *.pyc *.cu *.cuh *.c *.cc *.cpp *.cxx *.h *.hh *.hpp *.hxx *.inl *.ipp *.tpp *.ptx
+global-exclude *.so *.pyc

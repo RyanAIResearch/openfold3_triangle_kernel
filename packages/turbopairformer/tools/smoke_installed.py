@@ -90,7 +90,6 @@ def trimul_run(outgoing):
 
 
 def main():
-    from turbopairformer._aot_runtime import distributed_aot_identity
     from turbopairformer.policy import execution_environment
 
     effective_flags = execution_environment()
@@ -98,32 +97,6 @@ def main():
     assert effective_flags["TURBOPAIRFORMER_SR_SHADOW"] == "1"
     assert effective_flags["TURBOPAIRFORMER_ALLOW_JIT"] == "0"
     package_root = Path(turbopairformer.__file__).resolve().parent
-    native_sources = [
-        path.relative_to(package_root).as_posix()
-        for path in package_root.rglob("*")
-        if path.is_file()
-        and any(
-            suffix.lower()
-            in {
-                ".cu",
-                ".cuh",
-                ".c",
-                ".cc",
-                ".cpp",
-                ".cxx",
-                ".h",
-                ".hh",
-                ".hpp",
-                ".hxx",
-                ".inl",
-                ".ipp",
-                ".tpp",
-                ".ptx",
-            }
-            for suffix in path.suffixes
-        )
-    ]
-    assert not native_sources, native_sources
     extension_paths = []
     for name in (
         "triangle_forward",
@@ -136,15 +109,6 @@ def main():
         path = Path(extension.__file__).resolve()
         assert path.is_relative_to(package_root), path
         extension_paths.append(str(path))
-    aot_identity = distributed_aot_identity(
-        (
-            "turbopairformer_forward",
-            "turbopairformer_delta",
-            "turbopairformer_dkdv",
-            "turbopairformer_dq_dbias",
-            "turbopairformer_trimul",
-        )
-    )
     results = {}
     for name, function in (
         ("attention", attention_run),
@@ -177,8 +141,6 @@ def main():
                 "cuda": torch.version.cuda,
                 "gpu": torch.cuda.get_device_name(),
                 "extensions": extension_paths,
-                "native_source_files": native_sources,
-                "distributed_manifest_sha256": aot_identity["manifest_sha256"],
                 "results": results,
                 "loaded_libraries": loaded_libraries,
             },

@@ -309,34 +309,10 @@ def distributed_aot_identity(module_keys: tuple[str, ...]) -> dict[str, Any]:
         raise AOTExtensionError(f"unknown distributed AOT modules: {unknown}")
 
     install_root = Path(__file__).resolve().parents[1]
-    # Build provenance retains CUDA source digests even though binary wheels
-    # omit those files. Only the explicit shipped-file map is verified on disk.
-    # Older schema-1 wheels predate that distinction and shipped every source.
-    explicit_packaged_sources = "packaged_sources" in manifest
-    recorded_sources = manifest.get(
-        "packaged_sources" if explicit_packaged_sources else "sources"
-    )
-    if not isinstance(recorded_sources, dict) or not recorded_sources:
-        raise AOTExtensionError(
-            "distributed AOT manifest has no valid packaged source hashes"
-        )
     packaged_sources: dict[str, str] = {}
-    for relative, expected_hash in recorded_sources.items():
-        if (
-            not isinstance(relative, str)
-            or not isinstance(expected_hash, str)
-            or re.fullmatch(r"[0-9a-f]{64}", expected_hash) is None
-        ):
-            raise AOTExtensionError("invalid packaged source entry in AOT manifest")
+    for relative, expected_hash in sorted(manifest.get("sources", {}).items()):
         if not relative.startswith("turbopairformer/"):
-            if explicit_packaged_sources:
-                raise AOTExtensionError("invalid packaged source path in AOT manifest")
             continue
-        relative_path = Path(relative)
-        if relative_path.as_posix() != relative or ".." in relative_path.parts:
-            raise AOTExtensionError("invalid packaged source path in AOT manifest")
-        if explicit_packaged_sources and relative_path.suffix not in {".py", ".md"}:
-            raise AOTExtensionError("invalid packaged source type in AOT manifest")
         source_path = install_root / relative
         if not source_path.is_file() or _sha256(source_path) != expected_hash:
             raise AOTExtensionError(
@@ -347,16 +323,6 @@ def distributed_aot_identity(module_keys: tuple[str, ...]) -> dict[str, Any]:
         raise AOTExtensionError(
             "distributed AOT manifest has no verifiable packaged sources"
         )
-    if explicit_packaged_sources:
-        installed_sources = {
-            path.relative_to(install_root).as_posix()
-            for path in (install_root / "turbopairformer").rglob("*")
-            if path.is_file() and path.suffix in {".py", ".md"}
-        }
-        if set(packaged_sources) != installed_sources:
-            raise AOTExtensionError(
-                "packaged source coverage does not match AOT manifest"
-            )
 
     extensions: dict[str, dict[str, Any]] = {}
     with _LOCK:

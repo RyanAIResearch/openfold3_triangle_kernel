@@ -45,23 +45,20 @@ lightning = ["pytorch-lightning==2.6.1"]
 test = ["pytest>=8", "pytorch-lightning==2.6.1"]
 
 [tool.setuptools]
-include-package-data = false
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["turbopairformer*"]
 
 [tool.setuptools.package-data]
-turbopairformer = ["_build_manifest.json", "*.md"]
+turbopairformer = ["*.cu", "_build_manifest.json", "*.md"]
 
 [tool.setuptools.exclude-package-data]
-turbopairformer = [
-    "*.local.json", "*.cu", "*.cuh", "*.c", "*.cc", "*.cpp", "*.cxx",
-    "*.h", "*.hh", "*.hpp", "*.hxx", "*.inl", "*.ipp", "*.tpp", "*.ptx",
-]
+turbopairformer = ["*.local.json"]
 
 [tool.ruff]
-# Keep the standalone package independent of the host repository configuration.
+# Keep the standalone sdist independent of the host repository configuration.
 line-length = 88
 extend-exclude = ["integration"]
 

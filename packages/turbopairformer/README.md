@@ -8,10 +8,9 @@ Developed collaboratively by researchers from **Stevens Institute of Technology*
 
 ## Requirements
 
-- **GPU**: NVIDIA Hopper architecture (`sm_90a`, H100 validated; H200 experimental)
+- **GPU**: NVIDIA Hopper architecture (`sm_90a`, H100 and H200 supported in v0.1.2)
 - **Environment**: Linux x86-64 (glibc ≥ 2.28), Python 3.14, PyTorch 2.10.0 with CUDA Runtime 12.8
 - **No CUDA Toolkit Required**: Pre-compiled AOT wheels include the kernel binaries.
-- **Binary Kernel Distribution**: Wheels include compiled CUDA kernels and Python interfaces; CUDA/C++ source files are not included.
 
 ---
 
@@ -27,10 +26,21 @@ hash -r
 pip install turbopairformer
 ```
 
-Install this binary-kernel release explicitly:
+### Versions
+
+- [0.1.2](https://pypi.org/project/turbopairformer/0.1.2/): supports NVIDIA H100 and H200, with open-source CUDA kernels and pre-compiled AOT binaries.
+
+Earlier releases remain available on PyPI:
+
+- [0.1.1](https://pypi.org/project/turbopairformer/0.1.1/): updated kernels, functional TriMul, and offline CLI documentation.
+- [0.1.0](https://pypi.org/project/turbopairformer/0.1.0/): initial release.
+
+Install a specific version:
 
 ```bash
 pip install turbopairformer==0.1.2
+pip install turbopairformer==0.1.1
+pip install turbopairformer==0.1.0
 ```
 
 ## Offline CLI Documentation
