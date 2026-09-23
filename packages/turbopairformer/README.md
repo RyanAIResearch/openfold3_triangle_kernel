@@ -28,10 +28,7 @@ pip install turbopairformer
 
 ### Versions
 
-- [0.1.2](https://pypi.org/project/turbopairformer/0.1.2/): supports NVIDIA H100 and H200, with open-source CUDA kernels and pre-compiled AOT binaries.
-
-Earlier releases remain available on PyPI:
-
+- [0.1.2](https://pypi.org/project/turbopairformer/0.1.2/): supports NVIDIA H100 and H200
 - [0.1.1](https://pypi.org/project/turbopairformer/0.1.1/): updated kernels, functional TriMul, and offline CLI documentation.
 - [0.1.0](https://pypi.org/project/turbopairformer/0.1.0/): initial release.
 
