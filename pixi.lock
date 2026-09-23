@@ -6561,6 +6561,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/19/26/42d94dfb9667fadedb91427eb03db917cd4c828c4a284456a004b3072dc3/pdbeccdutils-1.0.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/1a/7a/7d79170c6ce6f12e109df2b3879d6b934010cf4f99aea8de8b7e5408c174/googleapis_common_protos-1.75.3-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/1c/f9/5ef4ef1aef7220f08d9ad1df97f29777e64a9f96dde9baee8a9cb452e1ae/turbopairformer-0.1.2-cp314-cp314-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/1f/13/ee4e00f30e676b66ae65b4f08cb5bcbb8392c03f54f2d5413ea99a5d1c80/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/23/0a/ba69d2dde1ae12ef1d389ea5a216384c5ff6ef7a1e7a48d1e9b6686f6790/py_cpuinfo2-10.1.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl
@@ -6659,7 +6660,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e7/23/ff077e61886ee020a17ce9c8b6fa11c601c8d8345b09ea24f605445df62a/opentelemetry_sdk-1.44.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e9/93/0c0f002031f18b53af7a6166103c02b9c0667be528944137cc954ec921b3/rsa-4.7.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/ea/4f/2f4de8d72ceb6e91008311eef1fb1870f34cd596ef9e08694ef0ad00e022/turbopairformer-0.1.1.post1-cp314-cp314-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/eb/42/7e80f7cfa191e0a766d1de99b4661847415ad5db34f8209d81fd42175b59/pytest_benchmark-5.3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/eb/47/c95ffc2009878c7aac0c5e08528022dcb885933252a88b5f170058014464/pydantic-2.13.5-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl
@@ -26779,6 +26779,16 @@ packages:
   - graphviz ; extra == 'dev'
   - pytest ; extra == 'dev'
   requires_python: '>=3.10'
+- pypi: https://files.pythonhosted.org/packages/1c/f9/5ef4ef1aef7220f08d9ad1df97f29777e64a9f96dde9baee8a9cb452e1ae/turbopairformer-0.1.2-cp314-cp314-manylinux_2_28_x86_64.whl
+  name: turbopairformer
+  version: 0.1.2
+  sha256: 783a5aa3618d8be419bbc5adfbb08677acc3d4c7eafb60224d4c5fb7fad08312
+  requires_dist:
+  - torch==2.10.0
+  - pytorch-lightning==2.6.1 ; extra == 'lightning'
+  - pytest>=8 ; extra == 'test'
+  - pytorch-lightning==2.6.1 ; extra == 'test'
+  requires_python: ==3.14.*
 - pypi: https://files.pythonhosted.org/packages/1d/6a/03aa43cc9bd3ad91553a88b5f6fb25ed6a3752ae86ce2180221962bc2aa5/nvidia_nvshmem_cu12-3.4.5-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
   name: nvidia-nvshmem-cu12
   version: 3.4.5
@@ -30633,16 +30643,6 @@ packages:
   requires_dist:
   - pyasn1>=0.1.3
   requires_python: '>=3.5,<4'
-- pypi: https://files.pythonhosted.org/packages/ea/4f/2f4de8d72ceb6e91008311eef1fb1870f34cd596ef9e08694ef0ad00e022/turbopairformer-0.1.1.post1-cp314-cp314-manylinux_2_28_x86_64.whl
-  name: turbopairformer
-  version: 0.1.1.post1
-  sha256: 995db45c8b8e9620bf310676f7768a4cb1f43584b21683c7fb21d1ee9d0bc4e1
-  requires_dist:
-  - torch==2.10.0
-  - pytorch-lightning==2.6.1 ; extra == 'lightning'
-  - pytest>=8 ; extra == 'test'
-  - pytorch-lightning==2.6.1 ; extra == 'test'
-  requires_python: ==3.14.*
 - pypi: https://files.pythonhosted.org/packages/eb/42/7e80f7cfa191e0a766d1de99b4661847415ad5db34f8209d81fd42175b59/pytest_benchmark-5.3.0-py3-none-any.whl
   name: pytest-benchmark
   version: 5.3.0

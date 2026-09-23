@@ -98,7 +98,7 @@ pip install openfold3[cuequivariance]
 ```
 
 **TurboPairFormer**
-To use the {doc}`TurboPairFormer triangle kernels <turbopairformer>` for training on Hopper GPUs, use the `openfold3-turbopairformer` pixi environment or install the `turbopairformer` wheel in a Python 3.14 environment as described on that page.
+To use the {doc}`TurboPairFormer triangle kernels <turbopairformer>` for training on Hopper GPUs, first follow that page's instructions to clone our `feat/turbopairformer-aqlab-integration` branch (private repository; access required). That branch defines the `openfold3-turbopairformer` pixi environment and training flag. The same page also gives a Python 3.14 conda installation option.
 
 **Triton** To use AMD ROCm-compatible Triton kernels, first install the ROCm PyTorch wheel (which bundles ROCm Triton), then install openfold3:
 
