@@ -24,8 +24,11 @@ test case -- 8 train / 4 val structures, gradient checkpointing, small MSA chunk
 diffusion loss chunking, etc, picked by ``generate_subset_cache.py``. ``full_subset``
 runs it as checked in (only ``output_dir`` is redirected). ``smoke`` additionally trims
 epoch length/count and disables dataloader workers, for a faster opt-in sanity check.
+``turbopairformer`` is ``smoke`` with the TurboPairFormer triangle kernels enabled; it
+only runs where they can engage (``turbopairformer`` installed, Hopper GPU), e.g. in
+the ``openfold3`` pixi environment, which adds TurboPairFormer to ``openfold3-cuda12``.
 
-To mimic a real user's workflow (not just the internal Python API), both cases invoke
+To mimic a real user's workflow (not just the internal Python API), all cases invoke
 the actual ``run_openfold train --runner-yaml ...`` console script as a subprocess --
 the same command documented in docs/source/training.md -- against a materialized copy
 of the runner yaml with the per-case overrides applied. Its output (including
@@ -35,8 +38,10 @@ Lightning's per-step progress bar) streams live to the real terminal via
 Run with:
     pytest openfold3/tests/test_training_full.py
     pytest openfold3/tests/test_training_full.py -k smoke  # fast case only
+    pytest openfold3/tests/test_training_full.py -k turbopairformer
 """
 
+import importlib.util
 import logging
 import os
 import shutil
@@ -46,6 +51,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+import torch
 import yaml
 
 import openfold3
@@ -77,28 +83,37 @@ class TrainCase:
     timeout_s: int = 900
 
 
+# No dataloader worker subprocesses (each forks a copy of the dataset
+# cache/process state -- a real contributor to memory blowups on
+# constrained machines) and a single-batch epoch.
+SMOKE_OVERRIDES = {
+    "data_module_args": {
+        "num_workers": 0,
+        "num_workers_validation": 0,
+        "epoch_len": 1,
+    },
+    "pl_trainer_args": {
+        "max_epochs": 1,
+        "log_every_n_steps": 1,
+    },
+}
+
+
+def _turbopairformer_can_engage() -> bool:
+    # The kernels are sm_90a-only and fall back silently elsewhere, so a run on
+    # another GPU would pass without exercising them.
+    return (
+        importlib.util.find_spec("turbopairformer") is not None
+        and torch.cuda.is_available()
+        and torch.cuda.get_device_capability() == (9, 0)
+    )
+
+
 # The default runner.yaml settings can be found in
 # scripts/datasets/pdb_subset_helpers.py `build_runner_yaml_config`
 CASES = [
     pytest.param(
-        TrainCase(
-            "smoke",
-            overrides={
-                # No dataloader worker subprocesses (each forks a copy of the dataset
-                # cache/process state -- a real contributor to memory blowups on
-                # constrained machines) and a single-batch epoch.
-                "data_module_args": {
-                    "num_workers": 0,
-                    "num_workers_validation": 0,
-                    "epoch_len": 1,
-                },
-                "pl_trainer_args": {
-                    "max_epochs": 1,
-                    "log_every_n_steps": 1,
-                },
-            },
-            timeout_s=600,
-        ),
+        TrainCase("smoke", overrides=SMOKE_OVERRIDES, timeout_s=600),
         marks=pytest.mark.slow,
         id="smoke",
     ),
@@ -106,6 +121,32 @@ CASES = [
         TrainCase("full_subset", timeout_s=1800),
         marks=pytest.mark.slow,
         id="full_subset",
+    ),
+    pytest.param(
+        TrainCase(
+            "turbopairformer",
+            overrides=SMOKE_OVERRIDES
+            | {
+                "model_update": {
+                    "custom": {
+                        "settings": {
+                            "memory": {
+                                "train": {"use_turbopairformer_triangle_kernels": True}
+                            }
+                        }
+                    }
+                }
+            },
+            timeout_s=600,
+        ),
+        marks=[
+            pytest.mark.slow,
+            pytest.mark.skipif(
+                not _turbopairformer_can_engage(),
+                reason="Requires turbopairformer and a Hopper (sm_90) GPU",
+            ),
+        ],
+        id="turbopairformer",
     ),
 ]
 

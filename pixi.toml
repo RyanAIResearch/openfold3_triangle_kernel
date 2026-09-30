@@ -25,6 +25,9 @@
 #                                                     keeping the environments as sane and consistent as possible
 #                                                     (useful if requiring deps not yet in conda-forge)
 #   - openfold3-rocm7: environment for AMD GPU support with ROCm 7.x (linux-64 only at the moment)
+#   - openfold3: openfold3-cuda12 plus the TurboPairFormer triangle kernels for NVIDIA Hopper
+#                training (linux-64 only; Python 3.14, PyPI torch 2.10.0 / CUDA 12.8 and
+#                DeepSpeed from PyPI)
 #   - openfold3-msa: environment for OpenFold3 style MSA generation (with snakemake, hmmer, and hhsuite)
 #
 # The current environments pass all inference tests available in each platform.
@@ -166,9 +169,15 @@ openfold3-rocm7 = { no-default-feature = true, features = [
     "openfold3-editable",
     "tests",
 ] }
-openfold3-turbopairformer = { no-default-feature = true, features = [
+# openfold3-cuda12 with the PyPI torch build the TurboPairFormer wheel is compiled
+# against: "turbopairformer" replaces "pytorch-conda-cuda" and "deepspeed".
+openfold3 = { no-default-feature = true, features = [
     "python",
+    "openfold3-base",
+    "cuda12",
     "turbopairformer",
+    "deepspeed-build",
+    "cuequivariance-cuda12",
     "openfold3-editable",
     "tests"
 ] }
@@ -426,6 +435,36 @@ cuequivariance-torch = ">=0.8"
 cuequivariance-ops-torch-cu13 = ">=0.8"
 
 
+# --- TurboPairFormer triangle kernels
+# https://pypi.org/project/turbopairformer/
+# The wheel only loads with the PyPI torch==2.10.0 build (torch.__version__ 2.10.0+cu128,
+# CUDA 12.8) on Python 3.14 / Linux x86-64; its loader rejects the conda-forge build that
+# openfold3-cuda12 uses (2.10.0, CUDA 12.9). This feature therefore brings torch and
+# DeepSpeed from PyPI (conda-forge deepspeed depends on the conda pytorch build, as in the
+# *-pypi environments), pins the conda CUDA toolkit used for DeepSpeed's JIT builds and
+# Triton's ptxas to the same CUDA 12.8, and leaves everything else to the features shared
+# with openfold3-cuda12. Kernels only engage on Hopper (H100/H200).
+# Re-lock this environment from a Linux machine: on other hosts pixi cannot build the
+# editable openfold3 metadata for a linux-only environment.
+
+[feature.turbopairformer]
+
+  platforms = ["linux-64-cuda12"]
+
+  [feature.turbopairformer.dependencies]
+  python = "3.14.*"
+  cuda-version = "12.8.*"
+  matplotlib-base = "*"
+
+  [feature.turbopairformer.pypi-dependencies]
+  torch = "==2.10.0"
+  turbopairformer = { version = "==0.1.2", extras = ["lightning"] }
+  deepspeed = ">=0.18.7"
+
+  [feature.turbopairformer.tasks]
+  compare-triangle-kernels = "python -u scripts/compare_triangle_kernels.py"
+
+
 # --- Openfold3 style MSA generation
 
 # snakemake, hmmer, and hhsuite are only used when computing OpenFold3 style MSAs (docs)
@@ -433,26 +472,6 @@ cuequivariance-ops-torch-cu13 = ">=0.8"
 #   https://github.com/aqlaboratory/openfold-3/blob/main/scripts
 # This mirrors aln_env.yml but unpins everything (note that then we do not need the pypi pinning)
 #   https://github.com/aqlaboratory/openfold-3/blob/main/scripts/snakemake_msa/aln_env.yml
-# --- TurboPairFormer triangle kernels (PyPI wheel: Python 3.14, PyTorch 2.10.0 / CUDA 12.8, Linux x86-64)
-[feature.turbopairformer]
-platforms = ["linux-64"]
-
-[feature.turbopairformer.dependencies]
-python = "3.14.*"
-
-[feature.turbopairformer.pypi-dependencies]
-turbopairformer = "==0.1.2"
-matplotlib = "*"
-pytest = "*"
-pytest-xdist = "*"
-pytest-cov = "*"
-pytest-benchmark = "*"
-pytest-regressions = "*"
-pytest-vcr = "*"
-
-[feature.turbopairformer.tasks]
-compare-triangle-kernels = "python -u scripts/compare_triangle_kernels.py"
-
 [feature.openfold3-msa.dependencies]
 python = "*"    # 3.10
 biopython = "*"

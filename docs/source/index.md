@@ -55,7 +55,6 @@ and more features to come...
 
 Installation.md
 kernels.md
-turbopairformer.md
 ```
 
 ```{toctree}
@@ -64,6 +63,7 @@ turbopairformer.md
 
 inference
 training
+turbopairformer
 data_pipeline_reference
 precomputed_msa_generation_how_to
 precomputed_msa_how_to
