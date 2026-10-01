@@ -25,8 +25,7 @@ diffusion loss chunking, etc, picked by ``generate_subset_cache.py``. ``full_sub
 runs it as checked in (only ``output_dir`` is redirected). ``smoke`` additionally trims
 epoch length/count and disables dataloader workers, for a faster opt-in sanity check.
 ``turbopairformer`` is ``smoke`` with the TurboPairFormer triangle kernels enabled; it
-only runs where they can engage (``turbopairformer`` installed, Hopper GPU), e.g. in
-the ``openfold3`` pixi environment, which adds TurboPairFormer to ``openfold3-cuda12-pypi``.
+only runs where they can engage (``turbopairformer`` installed, Hopper GPU).
 
 To mimic a real user's workflow (not just the internal Python API), all cases invoke
 the actual ``run_openfold train --runner-yaml ...`` console script as a subprocess --
