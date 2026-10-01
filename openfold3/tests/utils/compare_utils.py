@@ -120,11 +120,11 @@ def skip_unless_turbopairformer_installed():
         reason = "Requires turbopairformer to be installed"
     elif not torch.cuda.is_available():
         reason = "Requires CUDA (turbopairformer is installed but no GPU available)"
+    elif torch.cuda.get_device_capability() != (9, 0):
+        reason = "Requires a Hopper (sm_90) GPU"
     else:
-        reason = "turbopairformer not available"
-    return pytest.mark.skipif(
-        not (turbopairformer_is_installed and torch.cuda.is_available()), reason=reason
-    )
+        return _no_skip("TurboPairFormer is installed on a Hopper GPU")
+    return pytest.mark.skipif(True, reason=reason)
 
 
 def skip_unless_triton_installed():

@@ -52,6 +52,21 @@ pytestmark = [pytest.mark.slow]
 torch.backends.cuda.preferred_blas_library("cublas")
 
 
+def _assert_turbopairformer_grad_close(actual, reference, name):
+    """Also check relative error for gradients smaller than the absolute tolerance."""
+    reference = reference.float()
+    reference_norm = torch.linalg.vector_norm(reference)
+    error_norm = torch.linalg.vector_norm(actual.float() - reference)
+    assert torch.isfinite(reference_norm) and reference_norm > 0, (
+        f"Non-finite or zero reference gradient for {name}"
+    )
+    # Keep the existing absolute check and require relative L2 error <= 5%.
+    # A missing/zero gradient has relative error 100%, even for a tiny mean loss.
+    assert torch.isfinite(error_norm) and error_norm <= 0.05 * reference_norm, (
+        f"Relative gradient error for {name}: {error_norm / reference_norm}"
+    )
+
+
 @contextlib.contextmanager
 def _expect_turbopairformer_kernels(attention=False, trimul=False):
     """Fail unless the requested TurboPairFormer kernels ran inside the block.
@@ -100,6 +115,15 @@ def _expect_turbopairformer_kernels(attention=False, trimul=False):
         assert trimul_calls.called, (
             f"TurboPairFormer TriMul never ran: {dict(rejected)}"
         )
+    unexpected_fallbacks = {
+        reason: count
+        for reason, count in rejected.items()
+        if (attention and reason.startswith("attention:"))
+        or (trimul and reason.startswith("trimul:"))
+    }
+    assert not unexpected_fallbacks, (
+        f"TurboPairFormer kernels fell back: {unexpected_fallbacks}"
+    )
 
 
 @compare_utils.skip_unless_gpu_available()
@@ -303,6 +327,10 @@ class TestKernels:
             t_repro, t_gt = item
             err = torch.max(torch.abs(t_repro.grad.cpu() - t_gt.grad.cpu()))
             assert err < eps, f"Error item #{i}: {err}"
+            if use_turbopairformer_triangle_kernels:
+                _assert_turbopairformer_grad_close(
+                    t_repro.grad, t_gt.grad, f"attention input #{i}"
+                )
 
         # Compare the grads of model weights
         a_repro_params = dict(a_repro.named_parameters())
@@ -312,6 +340,8 @@ class TestKernels:
             t_gt = a_gt_params[name]
             err = torch.max(torch.abs(t_repro.grad.cpu() - t_gt.grad.cpu()))
             assert err < eps, f"Error item {name}: {err}"
+            if use_turbopairformer_triangle_kernels:
+                _assert_turbopairformer_grad_close(t_repro.grad, t_gt.grad, name)
 
     @compare_utils.skip_unless_ds4s_installed()
     def test_dsk_backward_bf16(self):
@@ -501,13 +531,14 @@ class TestKernels:
         return tm
 
     @compare_utils.skip_unless_turbopairformer_installed()
-    def test_turbopairformer_tri_mult_fwd(self):
+    @pytest.mark.parametrize("outgoing", [True, False], ids=["outgoing", "incoming"])
+    def test_turbopairformer_tri_mult_fwd(self, outgoing, seeded_rng):
         batch = consts.batch_size
         n_tmpl = 20
         # TurboPairFormer's TriMul falls back to PyTorch for N <= 100
         seq_len = 128
         c_z = 128
-        tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z)
+        tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z, outgoing=outgoing)
         z = torch.randn(batch, n_tmpl, seq_len, seq_len, c_z, dtype=torch.bfloat16)
         z = z.to("cuda")
         mask = torch.ones(batch, n_tmpl, seq_len, seq_len).to("cuda")
@@ -516,25 +547,27 @@ class TestKernels:
             with _expect_turbopairformer_kernels(trimul=True):
                 fwd_tpf = tm(z=z, mask=mask, use_turbopairformer_triangle_kernels=True)
         err = torch.max(torch.abs(fwd_reg.float() - fwd_tpf.float()))
-        # Both outputs are BF16 (magnitudes up to ~5): each is ~0.03 from an FP32
-        # reference, so they can differ by about one BF16 ulp at that scale.
+        # The BF16-input stock path returns FP32 here because the mask is FP32;
+        # TurboPairFormer returns BF16. Both differ by ~0.03 from an FP32-input
+        # reference at output magnitudes up to ~5.
         eps = 4e-2
         assert err < eps, f"Error: {err}"
 
     @compare_utils.skip_unless_turbopairformer_installed()
-    def test_turbopairformer_tri_mult_bwd(self):
+    @pytest.mark.parametrize("outgoing", [True, False], ids=["outgoing", "incoming"])
+    def test_turbopairformer_tri_mult_bwd(self, outgoing, seeded_rng):
         batch = consts.batch_size
         n_tmpl = 20
         # TurboPairFormer's TriMul falls back to PyTorch for N <= 100
         seq_len = 128
         c_z = 128
         eps = consts.eps
-        tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z)
+        tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z, outgoing=outgoing)
         z = torch.randn(batch, n_tmpl, seq_len, seq_len, c_z, dtype=torch.bfloat16)
         mask = torch.ones(batch, n_tmpl, seq_len, seq_len).to("cuda")
 
         def run(use_turbopairformer_triangle_kernels):
-            tm_run = self._init_tri_mult(c_z=c_z, c_hidden=c_z)
+            tm_run = self._init_tri_mult(c_z=c_z, c_hidden=c_z, outgoing=outgoing)
             tm_run.load_state_dict(tm.state_dict())
             z_run = z.clone().to("cuda").requires_grad_(True)
             out = tm_run(
@@ -551,10 +584,12 @@ class TestKernels:
 
         err = torch.max(torch.abs(z_repro.grad.float() - z_gt.grad.float()))
         assert err < eps, f"Error z.grad: {err}"
+        _assert_turbopairformer_grad_close(z_repro.grad, z_gt.grad, "trimul z")
         for name in params_gt:
             t_repro, t_gt = params_repro[name], params_gt[name]
             err = torch.max(torch.abs(t_repro.grad.float() - t_gt.grad.float()))
             assert err < eps, f"Error item {name}: {err}"
+            _assert_turbopairformer_grad_close(t_repro.grad, t_gt.grad, name)
 
     def _initialize_model_weights(self, model):
         for module in model.modules():
@@ -878,6 +913,7 @@ class TestKernels:
         use_triton_triangle_kernels=False,
         use_turbopairformer_triangle_kernels=False,
         dtype=torch.float32,
+        input_dtype=torch.float32,
         chunk_size=None,
         eps=2e-2,
     ):
@@ -926,7 +962,7 @@ class TestKernels:
 
         batch = tensor_tree_map(to_device, batch)
 
-        z = torch.ones((batch_size, n_token, n_token, c_in))
+        z = torch.ones((batch_size, n_token, n_token, c_in), dtype=input_dtype)
         pair_mask = torch.randint(0, 2, size=(batch_size, n_token, n_token))
 
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
@@ -1006,6 +1042,8 @@ class TestKernels:
             self._compare_template_stack(
                 use_turbopairformer_triangle_kernels=True,
                 dtype=torch.bfloat16,
+                # Keep pair masks and transition residuals in BF16, as in training.
+                input_dtype=torch.bfloat16,
                 eps=4e-2,
             )
 
