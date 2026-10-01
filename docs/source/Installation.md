@@ -52,7 +52,7 @@ Available pixi environments:
 | `openfold3-cuda12` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 12.                                |
 | `openfold3-cuda13` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 13.                                |
 | `openfold3-rocm7`  | `linux-64`                                         | AMD GPU environment using ROCm 7.                                    |
-| `openfold3` | `linux-64`                                | `openfold3-cuda12` plus the {doc}`TurboPairFormer triangle kernels <turbopairformer>` for training on NVIDIA Hopper GPUs (Python 3.14; PyTorch 2.10.0 / CUDA 12.8 and DeepSpeed from PyPI). |
+| `openfold3` | `linux-64`                                | `openfold3-cuda12-pypi` plus the {doc}`TurboPairFormer triangle kernels <turbopairformer>` for training on NVIDIA Hopper GPUs (Python 3.14, PyTorch 2.10.0 / CUDA 12.8). |
 
 Choose the environment that matches your system. For example, use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12` or `openfold3-cuda13` for NVIDIA GPU systems, and `openfold3-rocm7` for AMD ROCm systems.
 

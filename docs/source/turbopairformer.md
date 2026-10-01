@@ -19,8 +19,8 @@ cd openfold3-turbopairformer
 pixi install --locked -e openfold3
 ```
 
-`openfold3` is the `openfold3-cuda12` environment with TurboPairFormer added: the same OpenFold3 dependencies, DeepSpeed, cuEquivariance, CUDA toolkit and test tools.
-Only PyTorch (`torch==2.10.0`, CUDA 12.8) and DeepSpeed come from PyPI instead of conda-forge, because the TurboPairFormer wheel only loads with the PyPI PyTorch build; the CUDA toolkit is pinned to 12.8 to match.
+`openfold3` is the `openfold3-cuda12-pypi` environment with TurboPairFormer added: Python and the CUDA toolkit come from conda-forge, and OpenFold3 with its dependencies, DeepSpeed, cuEquivariance and the test tools come from PyPI.
+Its PyTorch is `torch==2.10.0` (CUDA 12.8), the build the TurboPairFormer wheel loads with, and the CUDA toolkit is pinned to 12.8 to match.
 Pixi checks for an NVIDIA driver before installing; on a node without a GPU (for example a login node), prefix the install with `CONDA_OVERRIDE_CUDA=12.0`.
 
 Optionally test your installation for training OpenFold3 using a small subset of the PDB dataset. The command `setup-pdb-subset`, comprised of `generate-pdb-subset` + `download-pdb-subset` will create a mini PDB training set complete with the MSAs, template files, and OpenFold cache files.
