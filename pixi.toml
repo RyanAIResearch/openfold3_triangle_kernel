@@ -460,6 +460,12 @@ cuequivariance-ops-torch-cu13 = ">=0.8"
   turbopairformer = { version = "==0.1.2", extras = ["lightning"] }
   matplotlib = "*"
 
+  [feature.turbopairformer.activation]
+  # cuda-nvcc 12.8 sets TORCH_CUDA_ARCH_LIST (when unset) to a list with sm_101, which
+  # torch 2.10 rejects, so JIT-built extensions such as DeepSpeed's evoformer attention
+  # fail to compile. Use the architectures of docker/Dockerfile.pixi.
+  env.TORCH_CUDA_ARCH_LIST = "8.0;8.6;9.0"
+
   [feature.turbopairformer.tasks]
   compare-triangle-kernels = "python -u scripts/compare_triangle_kernels.py"
 
