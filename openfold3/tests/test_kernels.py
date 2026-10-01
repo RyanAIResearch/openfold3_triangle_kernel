@@ -19,10 +19,16 @@ attention kernel, DS4Sci_EvoformerAttention vs. a stock PyTorch attention
 implementation.
 """
 
+import collections
+import contextlib
+from unittest import mock
+
 import pytest
 import torch
 from torch.nn import functional as F
 
+import openfold3.core.model.layers.triangular_multiplicative_update as tri_mul_module
+import openfold3.core.model.primitives.attention as attention_module
 import openfold3.tests.utils.compare_utils as compare_utils
 from openfold3.core.model.latent.pairformer import PairFormerStack
 from openfold3.core.model.latent.template_module import TemplateEmbedderAllAtom
@@ -44,6 +50,56 @@ torch.backends.cuda.matmul.allow_tf32 = True
 pytestmark = [pytest.mark.slow]
 
 torch.backends.cuda.preferred_blas_library("cublas")
+
+
+@contextlib.contextmanager
+def _expect_turbopairformer_kernels(attention=False, trimul=False):
+    """Fail unless the requested TurboPairFormer kernels ran inside the block.
+
+    Inputs the kernels do not support fall back to the stock implementations
+    silently, which would let a comparison against those pass without running
+    the kernels at all.
+    """
+    rejected = collections.Counter()
+    attention_supported = attention_module.is_triangle_attention_supported
+    trimul_supported = tri_mul_module.check_trimul_support
+
+    def record_attention(*args, **kwargs):
+        supported, reason = attention_supported(*args, **kwargs)
+        if not supported:
+            rejected[f"attention: {reason}"] += 1
+        return supported, reason
+
+    def record_trimul(*args, **kwargs):
+        result = trimul_supported(*args, **kwargs)
+        if not result:
+            rejected[f"trimul: {result.reason}"] += 1
+        return result
+
+    with (
+        mock.patch.object(
+            attention_module, "is_triangle_attention_supported", record_attention
+        ),
+        mock.patch.object(tri_mul_module, "check_trimul_support", record_trimul),
+        mock.patch.object(
+            attention_module,
+            "turbo_attention",
+            wraps=attention_module.turbo_attention,
+        ) as attention_calls,
+        mock.patch.object(
+            tri_mul_module, "turbo_trimul", wraps=tri_mul_module.turbo_trimul
+        ) as trimul_calls,
+    ):
+        yield
+
+    if attention:
+        assert attention_calls.called, (
+            f"TurboPairFormer triangle attention never ran: {dict(rejected)}"
+        )
+    if trimul:
+        assert trimul_calls.called, (
+            f"TurboPairFormer TriMul never ran: {dict(rejected)}"
+        )
 
 
 @compare_utils.skip_unless_gpu_available()
@@ -298,17 +354,19 @@ class TestKernels:
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_turbopairformer_forward_bf16(self):
-        self._compare_attn_kernel_forward(
-            use_turbopairformer_triangle_kernels=True,
-            dtype=torch.bfloat16,
-        )
+        with _expect_turbopairformer_kernels(attention=True):
+            self._compare_attn_kernel_forward(
+                use_turbopairformer_triangle_kernels=True,
+                dtype=torch.bfloat16,
+            )
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_turbopairformer_backward_bf16(self):
-        self._compare_attn_kernel_backward(
-            use_turbopairformer_triangle_kernels=True,
-            dtype=torch.bfloat16,
-        )
+        with _expect_turbopairformer_kernels(attention=True):
+            self._compare_attn_kernel_backward(
+                use_turbopairformer_triangle_kernels=True,
+                dtype=torch.bfloat16,
+            )
 
     @compare_utils.skip_unless_cueq_installed()
     def test_cueq_tri_mult_fwd(self):
@@ -446,7 +504,8 @@ class TestKernels:
     def test_turbopairformer_tri_mult_fwd(self):
         batch = consts.batch_size
         n_tmpl = 20
-        seq_len = 84
+        # TurboPairFormer's TriMul falls back to PyTorch for N <= 100
+        seq_len = 128
         c_z = 128
         tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z)
         z = torch.randn(batch, n_tmpl, seq_len, seq_len, c_z, dtype=torch.bfloat16)
@@ -454,16 +513,20 @@ class TestKernels:
         mask = torch.ones(batch, n_tmpl, seq_len, seq_len).to("cuda")
         with torch.no_grad():
             fwd_reg = tm(z=z, mask=mask)
-            fwd_tpf = tm(z=z, mask=mask, use_turbopairformer_triangle_kernels=True)
+            with _expect_turbopairformer_kernels(trimul=True):
+                fwd_tpf = tm(z=z, mask=mask, use_turbopairformer_triangle_kernels=True)
         err = torch.max(torch.abs(fwd_reg.float() - fwd_tpf.float()))
-        eps = 2e-2
+        # Both outputs are BF16 (magnitudes up to ~5): each is ~0.03 from an FP32
+        # reference, so they can differ by about one BF16 ulp at that scale.
+        eps = 4e-2
         assert err < eps, f"Error: {err}"
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_turbopairformer_tri_mult_bwd(self):
         batch = consts.batch_size
         n_tmpl = 20
-        seq_len = 84
+        # TurboPairFormer's TriMul falls back to PyTorch for N <= 100
+        seq_len = 128
         c_z = 128
         eps = consts.eps
         tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z)
@@ -482,7 +545,8 @@ class TestKernels:
             torch.mean(out).backward()
             return z_run, dict(tm_run.named_parameters())
 
-        z_repro, params_repro = run(True)
+        with _expect_turbopairformer_kernels(trimul=True):
+            z_repro, params_repro = run(True)
         z_gt, params_gt = run(False)
 
         err = torch.max(torch.abs(z_repro.grad.float() - z_gt.grad.float()))
@@ -505,6 +569,7 @@ class TestKernels:
         use_triton_triangle_kernels=False,
         use_turbopairformer_triangle_kernels=False,
         dtype=torch.float32,
+        param_dtype=None,
         chunk_size=None,
         eps=2e-2,
     ):
@@ -514,7 +579,9 @@ class TestKernels:
         and inference (FP32), since the kernels can run with either BF16 or FP16
         precision. Notably, for cueq kernels when use_cueq_triangle_kernels is
         true, both the triangle_attention and triangle_multiplicative_update
-        kernels will be active
+        kernels will be active. param_dtype (default: dtype) sets the parameter
+        precision separately, e.g. FP32 parameters with BF16 autocast as in
+        mixed-precision training
 
         TODO: Change the test to use a loaded Pairformer block from the trained model
           instead of a newly initialized block.
@@ -559,7 +626,7 @@ class TestKernels:
                 tune_chunk_size=chunk_size is not None,
             )
             .eval()
-            .to(device="cuda", dtype=dtype)
+            .to(device="cuda", dtype=param_dtype or dtype)
         )
 
         self._initialize_model_weights(block)
@@ -673,10 +740,13 @@ class TestKernels:
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_compare_pairformer_turbopairformer_bf16(self):
-        self._compare_pairformer(
-            use_turbopairformer_triangle_kernels=True,
-            dtype=torch.bfloat16,
-        )
+        # TurboPairFormer's TriMul needs FP32 parameters (mixed-precision training)
+        with _expect_turbopairformer_kernels(attention=True, trimul=True):
+            self._compare_pairformer(
+                use_turbopairformer_triangle_kernels=True,
+                dtype=torch.bfloat16,
+                param_dtype=torch.float32,
+            )
 
     @compare_utils.skip_unless_triton_installed()
     def test_compare_pairformer_triton_bf16(self):
@@ -932,11 +1002,12 @@ class TestKernels:
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_compare_template_stack_turbopairformer_bf16(self):
-        self._compare_template_stack(
-            use_turbopairformer_triangle_kernels=True,
-            dtype=torch.bfloat16,
-            eps=4e-2,
-        )
+        with _expect_turbopairformer_kernels(attention=True, trimul=True):
+            self._compare_template_stack(
+                use_turbopairformer_triangle_kernels=True,
+                dtype=torch.bfloat16,
+                eps=4e-2,
+            )
 
     @compare_utils.skip_unless_triton_installed()
     def test_compare_template_stack_triton_fp32_chunk(self):
