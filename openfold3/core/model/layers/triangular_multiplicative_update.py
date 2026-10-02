@@ -20,7 +20,6 @@ Triangle multiplicative update layers. Includes TriangleMultiplicativeUpdate fro
 and FusedTriangleMultiplicativeUpdate from AF2-Multimer.
 """
 
-import importlib
 import warnings
 from abc import ABC, abstractmethod
 from functools import partialmethod
@@ -30,16 +29,14 @@ import torch.nn as nn
 
 import openfold3.core.config.default_linear_init_config as lin_init
 from openfold3.core.kernels.cueq_utils import is_cuequivariance_available
+from openfold3.core.kernels.turbopairformer_utils import is_turbopairformer_available
 from openfold3.core.model.primitives import LayerNorm, Linear
 from openfold3.core.utils.tensor_utils import permute_final_dims
 
 if is_cuequivariance_available():
     from cuequivariance_torch import triangle_multiplicative_update
 
-turbopairformer_is_installed = (
-    importlib.util.find_spec("turbopairformer") is not None
-    and torch.cuda.is_available()
-)
+turbopairformer_is_installed = is_turbopairformer_available()
 if turbopairformer_is_installed:
     from turbopairformer import check_trimul_support, turbo_trimul
 
@@ -1130,10 +1127,14 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         Returns:
             [*, N_res, N_res, C_z] output tensor
         """
-        if use_turbopairformer_triangle_kernels and _turbopairformer_supported(
-            self, z, mask
-        ):
-            return turbo_trimul(self, z, mask)
+        if use_turbopairformer_triangle_kernels:
+            if not turbopairformer_is_installed:
+                raise ValueError(
+                    "Running with `use_turbopairformer_triangle_kernels` but package "
+                    "is not installed. See documentation for installation instructions."
+                )
+            if check_trimul_support(self, z, mask):
+                return turbo_trimul(self, z, mask)
 
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
@@ -1555,12 +1556,3 @@ def _cueq_triangle_mult(
     if is_batched_input:
         x = x.view(batch, n_tmpl, *x.shape[1:])
     return x
-
-
-def _turbopairformer_supported(module, z, mask) -> bool:
-    if not turbopairformer_is_installed:
-        raise ValueError(
-            "Running with `use_turbopairformer_triangle_kernels` but package is not "
-            "installed. See documentation for installation instructions."
-        )
-    return bool(check_trimul_support(module, z, mask))

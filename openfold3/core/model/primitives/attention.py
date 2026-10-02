@@ -32,6 +32,7 @@ from ml_collections import ConfigDict
 
 import openfold3.core.config.default_linear_init_config as lin_init
 from openfold3.core.kernels.cueq_utils import is_cuequivariance_available
+from openfold3.core.kernels.turbopairformer_utils import is_turbopairformer_available
 from openfold3.core.model.primitives.linear import Linear
 from openfold3.core.utils.checkpointing import get_checkpoint_fn
 from openfold3.core.utils.device_utils import autocast_device_type
@@ -82,10 +83,7 @@ if cueq_is_installed:
         return False
 
 
-turbopairformer_is_installed = (
-    importlib.util.find_spec("turbopairformer") is not None
-    and torch.cuda.is_available()
-)
+turbopairformer_is_installed = is_turbopairformer_available()
 if turbopairformer_is_installed:
     from turbopairformer import is_triangle_attention_supported, turbo_attention
 

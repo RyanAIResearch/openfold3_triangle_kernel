@@ -22,6 +22,7 @@ from openfold3.core.kernels.cueq_utils import (
     is_cuequivariance_available,
     is_cuequivariance_installed,
 )
+from openfold3.core.kernels.turbopairformer_utils import is_turbopairformer_available
 
 
 def skip_if_rocm():
@@ -115,9 +116,7 @@ def skip_unless_cueq_installed():
 def skip_unless_turbopairformer_installed():
     """TurboPairFormer's kernels need the package and a Hopper (sm_90) GPU."""
     available = (
-        importlib.util.find_spec("turbopairformer") is not None
-        and torch.cuda.is_available()
-        and torch.cuda.get_device_capability() == (9, 0)
+        is_turbopairformer_available() and torch.cuda.get_device_capability() == (9, 0)
     )
     return pytest.mark.skipif(not available, reason="Requires TurboPairFormer, sm_90")
 
