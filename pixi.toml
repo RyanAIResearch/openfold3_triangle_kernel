@@ -467,12 +467,14 @@ cuequivariance-ops-torch-cu13 = ">=0.8"
   env.TORCH_CUDA_ARCH_LIST = "8.0;8.6;9.0"
 
   [feature.turbopairformer.tasks]
-  # Train the setup-pdb-subset mini set with the TurboPairFormer kernels enabled
-  train-pdb-subset = """python -c 'import yaml; \
-  c = yaml.safe_load(open("datasets/train_pdb_subset.yaml")); \
+  # Enable the TurboPairFormer kernels in the setup-pdb-subset runner YAML and train it
+  train-pdb-subset = """python -c 'import yaml; p = "datasets/train_pdb_subset.yaml"; \
+  c = yaml.safe_load(open(p)); \
   c["model_update"]["custom"]["settings"]["memory"]["train"]["use_turbopairformer_triangle_kernels"] = True; \
-  yaml.safe_dump(c, open("datasets/train_pdb_subset_turbopairformer.yaml", "w"), sort_keys=False)' \
-  && run_openfold train --runner-yaml datasets/train_pdb_subset_turbopairformer.yaml --seed 42"""
+  yaml.safe_dump(c, open(p, "w"), sort_keys=False)' \
+  && run_openfold train --runner-yaml datasets/train_pdb_subset.yaml --seed 42"""
+  # Train 20 mini-set steps with PyTorch, Triton, cuEquivariance and TurboPairFormer
+  compare-triangle-kernels = "python -u scripts/compare_triangle_kernels.py"
 
 
 # --- Openfold3 style MSA generation
