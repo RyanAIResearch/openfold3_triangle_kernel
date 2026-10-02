@@ -20,7 +20,8 @@ pixi run -e openfold3 setup-pdb-subset
 pixi run -e openfold3 train-pdb-subset
 ```
 
-The last command trains for two epochs and writes checkpoints to
+The last command writes `datasets/train_pdb_subset_turbopairformer.yaml`, the generated
+config with the kernels enabled, trains with it for two epochs and writes checkpoints to
 `test_train_output/checkpoints`. The sections below explain each step and how to train
 on the full PDB training set.
 
