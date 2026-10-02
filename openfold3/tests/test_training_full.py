@@ -24,7 +24,7 @@ test case -- 8 train / 4 val structures, gradient checkpointing, small MSA chunk
 diffusion loss chunking, etc, picked by ``generate_subset_cache.py``. ``full_subset``
 runs it as checked in (only ``output_dir`` is redirected). ``smoke`` additionally trims
 epoch length/count and disables dataloader workers, for a faster opt-in sanity check.
-``turbopairformer`` is ``smoke`` with the TurboPairFormer triangle kernels enabled.
+``turbopairformer`` is ``full_subset`` with the TurboPairFormer kernels enabled.
 
 To mimic a real user's workflow (not just the internal Python API), all cases invoke
 the actual ``run_openfold train --runner-yaml ...`` console script as a subprocess --
@@ -115,12 +115,6 @@ CASES = [
         TrainCase(
             "turbopairformer",
             overrides={
-                "data_module_args": {
-                    "num_workers": 0,
-                    "num_workers_validation": 0,
-                    "epoch_len": 1,
-                },
-                "pl_trainer_args": {"max_epochs": 1, "log_every_n_steps": 1},
                 "model_update": {
                     "custom": {
                         "settings": {
@@ -129,9 +123,9 @@ CASES = [
                             }
                         }
                     }
-                },
+                }
             },
-            timeout_s=600,
+            timeout_s=1800,
         ),
         marks=[pytest.mark.slow, skip_unless_turbopairformer_installed()],
         id="turbopairformer",

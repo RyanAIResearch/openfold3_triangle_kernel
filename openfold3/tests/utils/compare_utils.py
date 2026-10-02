@@ -119,9 +119,7 @@ def skip_unless_turbopairformer_installed():
         and torch.cuda.is_available()
         and torch.cuda.get_device_capability() == (9, 0)
     )
-    return pytest.mark.skipif(
-        not available, reason="Requires TurboPairFormer on Hopper"
-    )
+    return pytest.mark.skipif(not available, reason="Requires TurboPairFormer, sm_90")
 
 
 def skip_unless_triton_installed():

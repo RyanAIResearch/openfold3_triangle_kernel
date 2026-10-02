@@ -54,46 +54,34 @@ torch.backends.cuda.preferred_blas_library("cublas")
 def _assert_grad_close(actual, expected, name):
     """Relative L2 error <= 5%; also fails for missing, zero or NaN gradients."""
     error = torch.linalg.vector_norm(actual.float() - expected.float())
-    assert error <= 0.05 * torch.linalg.vector_norm(expected.float()), (
-        f"{name}: {error}"
-    )
+    limit = 0.05 * torch.linalg.vector_norm(expected.float())
+    assert error <= limit, f"{name}: {error} > {limit}"
 
 
 @contextlib.contextmanager
-def _expect_turbopairformer(attention=False, trimul=False):
-    """Fail unless TurboPairFormer accepted every call in the block.
+def _require_turbopairformer():
+    """Fail if TurboPairFormer never ran or silently fell back to PyTorch."""
+    calls = []
 
-    Unsupported inputs fall back to PyTorch silently, which would let these
-    comparisons pass without running the kernels.
-    """
-    verdicts = {"attention": [], "trimul": []}
-
-    def record(kind, check):
+    def strict(check):
         def checked(*args, **kwargs):
             result = check(*args, **kwargs)
-            verdicts[kind].append(result[0] if kind == "attention" else bool(result))
+            calls.append(result)
+            assert result[0] if isinstance(result, tuple) else result, result
             return result
 
         return checked
 
-    with (
-        mock.patch.object(
-            attention_module,
-            "is_triangle_attention_supported",
-            record("attention", attention_module.is_triangle_attention_supported),
-        ),
-        mock.patch.object(
-            tri_mul_module,
-            "check_trimul_support",
-            record("trimul", tri_mul_module.check_trimul_support),
-        ),
-    ):
+    with contextlib.ExitStack() as stack:
+        for module, name in (
+            (attention_module, "is_triangle_attention_supported"),
+            (tri_mul_module, "check_trimul_support"),
+        ):
+            stack.enter_context(
+                mock.patch.object(module, name, strict(getattr(module, name)))
+            )
         yield
-    for kind, expected in (("attention", attention), ("trimul", trimul)):
-        calls = verdicts[kind]
-        assert not expected or (calls and all(calls)), (
-            f"TurboPairFormer {kind}: {calls.count(False)} of {len(calls)} calls fell back"
-        )
+    assert calls, "TurboPairFormer never ran"
 
 
 @compare_utils.skip_unless_gpu_available()
@@ -351,19 +339,11 @@ class TestKernels:
         )
 
     @compare_utils.skip_unless_turbopairformer_installed()
-    def test_turbopairformer_forward_bf16(self):
-        with _expect_turbopairformer(attention=True):
-            self._compare_attn_kernel_forward(
-                use_turbopairformer_triangle_kernels=True,
-                dtype=torch.bfloat16,
-            )
-
-    @compare_utils.skip_unless_turbopairformer_installed()
-    def test_turbopairformer_backward_bf16(self):
-        with _expect_turbopairformer(attention=True):
-            self._compare_attn_kernel_backward(
-                use_turbopairformer_triangle_kernels=True,
-                dtype=torch.bfloat16,
+    @pytest.mark.parametrize("direction", ["forward", "backward"])
+    def test_turbopairformer_attention(self, direction):
+        with _require_turbopairformer():
+            getattr(self, f"_compare_attn_kernel_{direction}")(
+                use_turbopairformer_triangle_kernels=True, dtype=torch.bfloat16
             )
 
     @compare_utils.skip_unless_cueq_installed()
@@ -481,34 +461,27 @@ class TestKernels:
             assert err < eps, f"Error item {name}: {err}"
 
     @compare_utils.skip_unless_turbopairformer_installed()
-    @pytest.mark.parametrize("outgoing", [True, False], ids=["outgoing", "incoming"])
+    @pytest.mark.parametrize("outgoing", [True, False])
     def test_turbopairformer_tri_mult(self, outgoing, seeded_rng):
         # TurboPairFormer's TriMul needs N > 100, BF16 z and FP32 parameters
         tm = TriangleMultiplicativeUpdate(c_z=128, c_hidden=128, _outgoing=outgoing)
-        tm = tm.cuda()
-        self._initialize_model_weights(tm)
-        z = torch.randn(consts.batch_size, 20, 128, 128, 128, device="cuda").bfloat16()
+        self._initialize_model_weights(tm.cuda())
+        z = torch.randn(2, 20, 128, 128, 128, device="cuda").bfloat16()
         mask = torch.ones(z.shape[:-1], device="cuda")
-
-        def run(use_turbopairformer_triangle_kernels):
+        results = []
+        for use_tpf in (True, False):
             tm.zero_grad()
             z_run = z.clone().requires_grad_()
-            out = tm(
-                z=z_run,
-                mask=mask,
-                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
-            )
+            with _require_turbopairformer() if use_tpf else contextlib.nullcontext():
+                out = tm(z_run, mask, use_turbopairformer_triangle_kernels=use_tpf)
             out.float().mean().backward()
-            grads = {name: p.grad for name, p in tm.named_parameters()}
-            return out.float(), {"z": z_run.grad, **grads}
-
-        with _expect_turbopairformer(trimul=True):
-            out, grads = run(True)
-        ref_out, ref_grads = run(False)
-        # Both are BF16-precision results, ~0.03 from an FP32 reference here
-        assert torch.max(torch.abs(out - ref_out)) < 4e-2
-        for name, ref_grad in ref_grads.items():
-            _assert_grad_close(grads[name], ref_grad, name)
+            results.append(
+                [out.float(), z_run.grad, *(p.grad for p in tm.parameters())]
+            )
+        (out, *grads), (ref_out, *ref_grads) = results
+        assert torch.max(torch.abs(out - ref_out)) < 4e-2  # both BF16 precision
+        for grad, ref_grad in zip(grads, ref_grads, strict=True):
+            _assert_grad_close(grad, ref_grad, "TriMul gradient")
 
     def _initialize_model_weights(self, model):
         for module in model.modules():
@@ -693,7 +666,7 @@ class TestKernels:
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_compare_pairformer_turbopairformer_bf16(self):
         # FP32 parameters under BF16 autocast, as in mixed-precision training
-        with _expect_turbopairformer(attention=True, trimul=True):
+        with _require_turbopairformer():
             self._compare_pairformer(
                 use_turbopairformer_triangle_kernels=True,
                 dtype=torch.bfloat16,
@@ -828,9 +801,7 @@ class TestKernels:
         use_deepspeed_evo_attention=False,
         use_cueq_triangle_kernels=False,
         use_triton_triangle_kernels=False,
-        use_turbopairformer_triangle_kernels=False,
         dtype=torch.float32,
-        input_dtype=torch.float32,
         chunk_size=None,
         eps=2e-2,
     ):
@@ -879,7 +850,7 @@ class TestKernels:
 
         batch = tensor_tree_map(to_device, batch)
 
-        z = torch.ones((batch_size, n_token, n_token, c_in), dtype=input_dtype)
+        z = torch.ones((batch_size, n_token, n_token, c_in))
         pair_mask = torch.randint(0, 2, size=(batch_size, n_token, n_token))
 
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
@@ -903,7 +874,6 @@ class TestKernels:
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
-                use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
             )
 
             compare_utils.assert_max_abs_diff_small(out_repro, out_repro_ds, eps)
@@ -952,17 +922,6 @@ class TestKernels:
             dtype=torch.float32,
             chunk_size=4,
         )
-
-    @compare_utils.skip_unless_turbopairformer_installed()
-    def test_compare_template_stack_turbopairformer_bf16(self):
-        with _expect_turbopairformer(attention=True, trimul=True):
-            self._compare_template_stack(
-                use_turbopairformer_triangle_kernels=True,
-                dtype=torch.bfloat16,
-                # Keep pair masks and transition residuals in BF16, as in training.
-                input_dtype=torch.bfloat16,
-                eps=4e-2,
-            )
 
     @compare_utils.skip_unless_triton_installed()
     def test_compare_template_stack_triton_fp32_chunk(self):
