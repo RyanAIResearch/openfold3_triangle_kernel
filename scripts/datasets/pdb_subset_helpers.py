@@ -296,6 +296,7 @@ def extract_ids_from_cache(cache_path: Path) -> dict:
 
     pdb_ids = set()
     alignment_rep_ids = set()
+    template_cache_ids = set()
     template_ids = set()
     reference_mol_ids = set()
 
@@ -304,6 +305,9 @@ def extract_ids_from_cache(cache_path: Path) -> dict:
         for chain_data in entry["chains"].values():
             if rep_id := chain_data.get("alignment_representative_id"):
                 alignment_rep_ids.add(rep_id)
+                # Chains without templates (e.g. RNA) have no template cache on S3
+                if chain_data.get("template_ids"):
+                    template_cache_ids.add(rep_id)
             for tmpl_id in chain_data.get("template_ids") or []:
                 template_ids.add(tmpl_id)
             if ref_mol := chain_data.get("reference_mol_id"):
@@ -312,6 +316,7 @@ def extract_ids_from_cache(cache_path: Path) -> dict:
     return {
         "pdb_ids": pdb_ids,
         "alignment_rep_ids": alignment_rep_ids,
+        "template_cache_ids": template_cache_ids,
         "template_ids": template_ids,
         "reference_mol_ids": reference_mol_ids,
     }
@@ -357,7 +362,7 @@ def build_structure_manifest(
         manifest.append((s3_key, local))
 
     # Template cache: {rep_id}.npz
-    for rep_id in ids["alignment_rep_ids"]:
+    for rep_id in ids["template_cache_ids"]:
         s3_key = f"{S3_PREFIX}/templates/{template_cache_subdir}/{rep_id}.npz"
         local = local_root / "templates" / template_cache_subdir / f"{rep_id}.npz"
         manifest.append((s3_key, local))
