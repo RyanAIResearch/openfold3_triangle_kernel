@@ -1,35 +1,24 @@
 # TurboPairFormer training
 
 [TurboPairFormer](https://pypi.org/project/turbopairformer/0.1.2/) provides optional
-triangle attention and triangle multiplicative update (TriMul) kernels for NVIDIA
-Hopper GPUs. Follow {doc}`OpenFold3 Training <training>` for data preparation,
-runner YAMLs, distributed training and checkpointing; the additions below cover
-installation and kernel selection.
+triangle attention and triangle multiplicative update (TriMul) kernels for training on
+NVIDIA H100 and H200 GPUs. Everything else follows {doc}`OpenFold3 Training <training>`.
 
 ## Installation
 
-Version 0.1.2 requires Linux x86-64 (glibc ≥ 2.28), Python 3.14, an H100 or H200,
-and a driver that supports CUDA 12.8. Its prebuilt kernels require the PyPI
-PyTorch 2.10.0 CUDA 12.8 build. Use a fresh environment so this requirement does
-not conflict with an existing Conda or Pixi PyTorch installation. A host C
-compiler (such as `gcc`) is needed by the default Triton validation kernels.
-
-From an OpenFold3 checkout containing this integration, run:
+TurboPairFormer 0.1.2 needs Linux x86-64, Python 3.14, a driver for CUDA 12.8, the
+PyPI build of PyTorch 2.10.0 and a C compiler such as `gcc` (validation uses Triton
+kernels). Install it in a fresh environment from this checkout:
 
 ```bash
 python3.14 -m venv .venv-tpf
 source .venv-tpf/bin/activate
 python -m pip install -e . 'turbopairformer[lightning]==0.1.2' pytest
-python -m pip check
 ```
-
-The package pins PyTorch 2.10.0; its `lightning` extra pins PyTorch Lightning
-2.6.1. Run the commands below in this activated environment.
 
 ## Enable TurboPairFormer
 
-Merge these settings into the runner YAML from the training guide, preserving
-its other settings, including `model_update.presets: [train]`:
+Add this to the training runner YAML and launch training as usual:
 
 ```yaml
 pl_trainer_args:
@@ -43,94 +32,24 @@ model_update:
           use_turbopairformer_triangle_kernels: true
 ```
 
-Launch training with the usual command:
+The kernels run in the triangle operations of the template, MSA and Pairformer stacks
+during training; validation and prediction keep their configured backends. Inputs
+they do not support fall back to PyTorch (TriMul to the next enabled backend): FP32
+inputs such as the confidence head, which OpenFold3 runs in FP32, chunked attention,
+TriMul with 100 tokens or fewer or `c_z != c_hidden`, and `fuse_projection_weights: true`.
 
-```bash
-run_openfold train --runner-yaml training.yaml --seed 42
-```
+To compare with {doc}`cuEquivariance <kernels>`, install `cuequivariance==0.10.0`,
+`cuequivariance-torch==0.10.0` and `cuequivariance-ops-torch-cu12==0.10.0`, set
+`use_cueq_triangle_kernels: true` instead, and launch with `--use_tf32 true`, which
+its FP32 triangle attention backward requires.
 
-The flag is off by default. Set it to `false` or remove it to disable the kernels.
-Requesting TurboPairFormer without installing the package raises an error.
-Each operator checks its inputs and falls back when they are unsupported:
+## Verify
 
-- Eligible inputs are BF16; TriMul also requires FP32 parameters, as provided by
-  `bf16-mixed`. FP32 inputs fall back.
-- Leave triangle attention unchunked (the training default). Chunked attention
-  falls back; this does not by itself disable TriMul.
-- TriMul requires more than 100 tokens, equal input and hidden channel counts
-  in {32, 64, 96, 128}, and `fuse_projection_weights: false` (the default).
-  The training guide's 384-token crop budget allows this, but individual samples
-  with 100 tokens or fewer still fall back.
-
-The flag reaches triangle operations in the template, MSA, Pairformer and
-confidence-head stacks. OpenFold3 keeps the confidence-head Pairformer in FP32,
-so its operations fall back even with `bf16-mixed`. AttentionPairBias and the
-diffusion transformer retain their configured backends.
-
-At triangle sites TurboPairFormer takes precedence over cuEquivariance,
-DeepSpeed and Triton. Unsupported attention inputs fall back to PyTorch;
-unsupported TriMul inputs use the next enabled backend or PyTorch.
-The `memory.train` setting applies to training. Validation and prediction use
-`memory.eval`, where TurboPairFormer is also off by default.
-
-## cuEquivariance comparison
-
-To compare against {doc}`cuEquivariance <kernels>` in the same environment,
-install the version compatible with PyTorch 2.10.0:
-
-```bash
-python -m pip install cuequivariance==0.10.0 cuequivariance-torch==0.10.0 cuequivariance-ops-torch-cu12==0.10.0
-python -m pip check
-```
-
-Replace the training kernel settings with:
-
-```yaml
-model_update:
-  custom:
-    settings:
-      memory:
-        train:
-          use_cueq_triangle_kernels: true
-          use_turbopairformer_triangle_kernels: false
-```
-
-cuEquivariance 0.10 requires TF32 for backward through the confidence head's FP32
-triangle attention, so launch training with:
-
-```bash
-run_openfold train --runner-yaml training.yaml --seed 42 --use_tf32 true
-```
-
-Without TF32, those FP32 backward calls fail with
-`Full precision FP32 backward pass for triangle attention is not implemented yet`.
-BF16 triangle attention itself does not require TF32.
-
-| | TurboPairFormer | cuEquivariance 0.10 |
-|---|---|---|
-| Training flag | `use_turbopairformer_triangle_kernels` | `use_cueq_triangle_kernels` |
-| Triangle kernels | Attention and TriMul | Attention and TriMul |
-| Supported precision | BF16 inputs, FP32 TriMul parameters | BF16 and FP32; TF32 required for FP32 attention backward |
-| Validation/prediction | Separate `memory.eval` flag, off by default | Separate `memory.eval` flag; see {doc}`kernels` |
-| Targeted test selection | `-k turbopairformer` | `-k cueq` |
-
-## Verify the installation
-
-On a supported GPU, these comparisons check forward values and gradients and
-fail if a tested TurboPairFormer operation silently falls back:
+On a Hopper GPU, these tests fail if a kernel falls back or differs from PyTorch:
 
 ```bash
 python -m pytest openfold3/tests/test_kernels.py -k turbopairformer
 ```
 
-To exercise the training entry point, prepare the small PDB subset once and run
-the training smoke test:
-
-```bash
-python scripts/datasets/generate_subset_cache.py
-python scripts/datasets/download_subset.py
-python -m pytest openfold3/tests/test_training_full.py -k turbopairformer
-```
-
-The kernel tests skip when the package or a Hopper GPU is unavailable. The
-training test additionally skips when the local PDB subset is missing.
+`openfold3/tests/test_training_full.py -k turbopairformer` also trains the small PDB
+subset from the training guide with the kernels enabled.
