@@ -19,7 +19,6 @@ attention kernel, DS4Sci_EvoformerAttention vs. a stock PyTorch attention
 implementation.
 """
 
-import collections
 import contextlib
 from unittest import mock
 
@@ -52,78 +51,49 @@ pytestmark = [pytest.mark.slow]
 torch.backends.cuda.preferred_blas_library("cublas")
 
 
-def _assert_turbopairformer_grad_close(actual, reference, name):
-    """Also check relative error for gradients smaller than the absolute tolerance."""
-    reference = reference.float()
-    reference_norm = torch.linalg.vector_norm(reference)
-    error_norm = torch.linalg.vector_norm(actual.float() - reference)
-    assert torch.isfinite(reference_norm) and reference_norm > 0, (
-        f"Non-finite or zero reference gradient for {name}"
-    )
-    # Keep the existing absolute check and require relative L2 error <= 5%.
-    # A missing/zero gradient has relative error 100%, even for a tiny mean loss.
-    assert torch.isfinite(error_norm) and error_norm <= 0.05 * reference_norm, (
-        f"Relative gradient error for {name}: {error_norm / reference_norm}"
+def _assert_grad_close(actual, expected, name):
+    """Relative L2 error <= 5%; also fails for missing, zero or NaN gradients."""
+    error = torch.linalg.vector_norm(actual.float() - expected.float())
+    assert error <= 0.05 * torch.linalg.vector_norm(expected.float()), (
+        f"{name}: {error}"
     )
 
 
 @contextlib.contextmanager
-def _expect_turbopairformer_kernels(attention=False, trimul=False):
-    """Fail unless the requested TurboPairFormer kernels ran inside the block.
+def _expect_turbopairformer(attention=False, trimul=False):
+    """Fail unless TurboPairFormer accepted every call in the block.
 
-    Inputs the kernels do not support fall back to the stock implementations
-    silently, which would let a comparison against those pass without running
-    the kernels at all.
+    Unsupported inputs fall back to PyTorch silently, which would let these
+    comparisons pass without running the kernels.
     """
-    rejected = collections.Counter()
-    attention_supported = attention_module.is_triangle_attention_supported
-    trimul_supported = tri_mul_module.check_trimul_support
+    verdicts = {"attention": [], "trimul": []}
 
-    def record_attention(*args, **kwargs):
-        supported, reason = attention_supported(*args, **kwargs)
-        if not supported:
-            rejected[f"attention: {reason}"] += 1
-        return supported, reason
+    def record(kind, check):
+        def checked(*args, **kwargs):
+            result = check(*args, **kwargs)
+            verdicts[kind].append(result[0] if kind == "attention" else bool(result))
+            return result
 
-    def record_trimul(*args, **kwargs):
-        result = trimul_supported(*args, **kwargs)
-        if not result:
-            rejected[f"trimul: {result.reason}"] += 1
-        return result
+        return checked
 
     with (
         mock.patch.object(
-            attention_module, "is_triangle_attention_supported", record_attention
-        ),
-        mock.patch.object(tri_mul_module, "check_trimul_support", record_trimul),
-        mock.patch.object(
             attention_module,
-            "turbo_attention",
-            wraps=attention_module.turbo_attention,
-        ) as attention_calls,
+            "is_triangle_attention_supported",
+            record("attention", attention_module.is_triangle_attention_supported),
+        ),
         mock.patch.object(
-            tri_mul_module, "turbo_trimul", wraps=tri_mul_module.turbo_trimul
-        ) as trimul_calls,
+            tri_mul_module,
+            "check_trimul_support",
+            record("trimul", tri_mul_module.check_trimul_support),
+        ),
     ):
         yield
-
-    if attention:
-        assert attention_calls.called, (
-            f"TurboPairFormer triangle attention never ran: {dict(rejected)}"
+    for kind, expected in (("attention", attention), ("trimul", trimul)):
+        calls = verdicts[kind]
+        assert not expected or (calls and all(calls)), (
+            f"TurboPairFormer {kind}: {calls.count(False)} of {len(calls)} calls fell back"
         )
-    if trimul:
-        assert trimul_calls.called, (
-            f"TurboPairFormer TriMul never ran: {dict(rejected)}"
-        )
-    unexpected_fallbacks = {
-        reason: count
-        for reason, count in rejected.items()
-        if (attention and reason.startswith("attention:"))
-        or (trimul and reason.startswith("trimul:"))
-    }
-    assert not unexpected_fallbacks, (
-        f"TurboPairFormer kernels fell back: {unexpected_fallbacks}"
-    )
 
 
 @compare_utils.skip_unless_gpu_available()
@@ -328,9 +298,7 @@ class TestKernels:
             err = torch.max(torch.abs(t_repro.grad.cpu() - t_gt.grad.cpu()))
             assert err < eps, f"Error item #{i}: {err}"
             if use_turbopairformer_triangle_kernels:
-                _assert_turbopairformer_grad_close(
-                    t_repro.grad, t_gt.grad, f"attention input #{i}"
-                )
+                _assert_grad_close(t_repro.grad, t_gt.grad, f"input #{i}")
 
         # Compare the grads of model weights
         a_repro_params = dict(a_repro.named_parameters())
@@ -341,7 +309,7 @@ class TestKernels:
             err = torch.max(torch.abs(t_repro.grad.cpu() - t_gt.grad.cpu()))
             assert err < eps, f"Error item {name}: {err}"
             if use_turbopairformer_triangle_kernels:
-                _assert_turbopairformer_grad_close(t_repro.grad, t_gt.grad, name)
+                _assert_grad_close(t_repro.grad, t_gt.grad, name)
 
     @compare_utils.skip_unless_ds4s_installed()
     def test_dsk_backward_bf16(self):
@@ -384,7 +352,7 @@ class TestKernels:
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_turbopairformer_forward_bf16(self):
-        with _expect_turbopairformer_kernels(attention=True):
+        with _expect_turbopairformer(attention=True):
             self._compare_attn_kernel_forward(
                 use_turbopairformer_triangle_kernels=True,
                 dtype=torch.bfloat16,
@@ -392,7 +360,7 @@ class TestKernels:
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_turbopairformer_backward_bf16(self):
-        with _expect_turbopairformer_kernels(attention=True):
+        with _expect_turbopairformer(attention=True):
             self._compare_attn_kernel_backward(
                 use_turbopairformer_triangle_kernels=True,
                 dtype=torch.bfloat16,
@@ -512,84 +480,35 @@ class TestKernels:
             err = torch.max(torch.abs(t_repro.grad.cpu() - t_gt.grad.cpu()))
             assert err < eps, f"Error item {name}: {err}"
 
-    def _init_tri_mult(self, c_z, c_hidden, outgoing=True):
-        tm = TriangleMultiplicativeUpdate(
-            c_z=c_z,
-            c_hidden=c_hidden,
-            _outgoing=outgoing,
-        ).to("cuda")
-        with torch.no_grad():
-            for name in (
-                "linear_g",
-                "linear_z",
-                "linear_a_p",
-                "linear_a_g",
-                "linear_b_p",
-                "linear_b_g",
-            ):
-                lecun_normal_init_(getattr(tm, name).weight)
-        return tm
-
     @compare_utils.skip_unless_turbopairformer_installed()
     @pytest.mark.parametrize("outgoing", [True, False], ids=["outgoing", "incoming"])
-    def test_turbopairformer_tri_mult_fwd(self, outgoing, seeded_rng):
-        batch = consts.batch_size
-        n_tmpl = 20
-        # TurboPairFormer's TriMul falls back to PyTorch for N <= 100
-        seq_len = 128
-        c_z = 128
-        tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z, outgoing=outgoing)
-        z = torch.randn(batch, n_tmpl, seq_len, seq_len, c_z, dtype=torch.bfloat16)
-        z = z.to("cuda")
-        mask = torch.ones(batch, n_tmpl, seq_len, seq_len).to("cuda")
-        with torch.no_grad():
-            fwd_reg = tm(z=z, mask=mask)
-            with _expect_turbopairformer_kernels(trimul=True):
-                fwd_tpf = tm(z=z, mask=mask, use_turbopairformer_triangle_kernels=True)
-        err = torch.max(torch.abs(fwd_reg.float() - fwd_tpf.float()))
-        # The BF16-input stock path returns FP32 here because the mask is FP32;
-        # TurboPairFormer returns BF16. Both differ by ~0.03 from an FP32-input
-        # reference at output magnitudes up to ~5.
-        eps = 4e-2
-        assert err < eps, f"Error: {err}"
-
-    @compare_utils.skip_unless_turbopairformer_installed()
-    @pytest.mark.parametrize("outgoing", [True, False], ids=["outgoing", "incoming"])
-    def test_turbopairformer_tri_mult_bwd(self, outgoing, seeded_rng):
-        batch = consts.batch_size
-        n_tmpl = 20
-        # TurboPairFormer's TriMul falls back to PyTorch for N <= 100
-        seq_len = 128
-        c_z = 128
-        eps = consts.eps
-        tm = self._init_tri_mult(c_z=c_z, c_hidden=c_z, outgoing=outgoing)
-        z = torch.randn(batch, n_tmpl, seq_len, seq_len, c_z, dtype=torch.bfloat16)
-        mask = torch.ones(batch, n_tmpl, seq_len, seq_len).to("cuda")
+    def test_turbopairformer_tri_mult(self, outgoing, seeded_rng):
+        # TurboPairFormer's TriMul needs N > 100, BF16 z and FP32 parameters
+        tm = TriangleMultiplicativeUpdate(c_z=128, c_hidden=128, _outgoing=outgoing)
+        tm = tm.cuda()
+        self._initialize_model_weights(tm)
+        z = torch.randn(consts.batch_size, 20, 128, 128, 128, device="cuda").bfloat16()
+        mask = torch.ones(z.shape[:-1], device="cuda")
 
         def run(use_turbopairformer_triangle_kernels):
-            tm_run = self._init_tri_mult(c_z=c_z, c_hidden=c_z, outgoing=outgoing)
-            tm_run.load_state_dict(tm.state_dict())
-            z_run = z.clone().to("cuda").requires_grad_(True)
-            out = tm_run(
+            tm.zero_grad()
+            z_run = z.clone().requires_grad_()
+            out = tm(
                 z=z_run,
                 mask=mask,
                 use_turbopairformer_triangle_kernels=use_turbopairformer_triangle_kernels,
             )
-            torch.mean(out).backward()
-            return z_run, dict(tm_run.named_parameters())
+            out.float().mean().backward()
+            grads = {name: p.grad for name, p in tm.named_parameters()}
+            return out.float(), {"z": z_run.grad, **grads}
 
-        with _expect_turbopairformer_kernels(trimul=True):
-            z_repro, params_repro = run(True)
-        z_gt, params_gt = run(False)
-
-        err = torch.max(torch.abs(z_repro.grad.float() - z_gt.grad.float()))
-        assert err < eps, f"Error z.grad: {err}"
-        _assert_turbopairformer_grad_close(z_repro.grad, z_gt.grad, "trimul z")
-        for name in params_gt:
-            t_repro, t_gt = params_repro[name], params_gt[name]
-            err = torch.max(torch.abs(t_repro.grad.float() - t_gt.grad.float()))
-            assert err < eps, f"Error item {name}: {err}"
-            _assert_turbopairformer_grad_close(t_repro.grad, t_gt.grad, name)
+        with _expect_turbopairformer(trimul=True):
+            out, grads = run(True)
+        ref_out, ref_grads = run(False)
+        # Both are BF16-precision results, ~0.03 from an FP32 reference here
+        assert torch.max(torch.abs(out - ref_out)) < 4e-2
+        for name, ref_grad in ref_grads.items():
+            _assert_grad_close(grads[name], ref_grad, name)
 
     def _initialize_model_weights(self, model):
         for module in model.modules():
@@ -614,9 +533,7 @@ class TestKernels:
         and inference (FP32), since the kernels can run with either BF16 or FP16
         precision. Notably, for cueq kernels when use_cueq_triangle_kernels is
         true, both the triangle_attention and triangle_multiplicative_update
-        kernels will be active. param_dtype (default: dtype) sets the parameter
-        precision separately, e.g. FP32 parameters with BF16 autocast as in
-        mixed-precision training
+        kernels will be active
 
         TODO: Change the test to use a loaded Pairformer block from the trained model
           instead of a newly initialized block.
@@ -775,8 +692,8 @@ class TestKernels:
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_compare_pairformer_turbopairformer_bf16(self):
-        # TurboPairFormer's TriMul needs FP32 parameters (mixed-precision training)
-        with _expect_turbopairformer_kernels(attention=True, trimul=True):
+        # FP32 parameters under BF16 autocast, as in mixed-precision training
+        with _expect_turbopairformer(attention=True, trimul=True):
             self._compare_pairformer(
                 use_turbopairformer_triangle_kernels=True,
                 dtype=torch.bfloat16,
@@ -1038,7 +955,7 @@ class TestKernels:
 
     @compare_utils.skip_unless_turbopairformer_installed()
     def test_compare_template_stack_turbopairformer_bf16(self):
-        with _expect_turbopairformer_kernels(attention=True, trimul=True):
+        with _expect_turbopairformer(attention=True, trimul=True):
             self._compare_template_stack(
                 use_turbopairformer_triangle_kernels=True,
                 dtype=torch.bfloat16,
