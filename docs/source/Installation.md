@@ -96,8 +96,6 @@ To install GPU accelerated {doc}`cuEquivariance attention kernels <kernels>`, us
 pip install openfold3[cuequivariance]
 ```
 
-**TurboPairFormer** For the optional Hopper training kernels, see {doc}`turbopairformer`.
-
 **Triton** To use AMD ROCm-compatible Triton kernels, first install the ROCm PyTorch wheel (which bundles ROCm Triton), then install openfold3:
 
 ```bash
