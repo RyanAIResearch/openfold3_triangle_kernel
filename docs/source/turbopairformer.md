@@ -7,10 +7,10 @@ dataset from scratch or fine-tune from an existing checkpoint.
 
 ## Quick start
 
-On Linux x86-64 with an H100 or H200 GPU and a driver for CUDA 12.8, the first five
-commands install everything and train the mini PDB training set with the kernels
-enabled, and the last one compares the backends. Skip the first if you already have
-pixi; the repository is private, so your GitHub account needs access to it.
+On Linux x86-64 with an H100 or H200 GPU and a driver for CUDA 12.8, these five commands
+install everything and train the mini PDB training set with the kernels enabled. Skip the
+first if you already have pixi; the repository is private, so your GitHub account needs
+access to it.
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh && export PATH="$HOME/.pixi/bin:$PATH"
@@ -18,15 +18,12 @@ git clone -b feat/turbopairformer-aqlab-integration https://github.com/RyanAIRes
 pixi install -e openfold3
 pixi run -e openfold3 setup-pdb-subset
 pixi run -e openfold3 train-pdb-subset
-pixi run -e openfold3 compare-triangle-kernels
 ```
 
-`train-pdb-subset` enables the kernels in `datasets/train_pdb_subset.yaml`, the config
+The last command enables the kernels in `datasets/train_pdb_subset.yaml`, the config
 `setup-pdb-subset` generated, trains with it for two epochs and writes checkpoints to
-`test_train_output/checkpoints`. `compare-triangle-kernels` trains 20 steps on the same
-data with each of PyTorch, Triton, cuEquivariance and TurboPairFormer and prints their
-wall times. The sections below explain each step and how to train on the full PDB
-training set.
+`test_train_output/checkpoints`. The sections below explain each step and how to train
+on the full PDB training set.
 
 ## 1. Install the environment
 
@@ -327,5 +324,3 @@ pixi run -e openfold3 pytest openfold3/tests/test_kernels.py -k turbopairformer
 
 To compare with cuEquivariance, which the environment also includes, set
 `use_cueq_triangle_kernels: true` instead and add `--use_tf32 true`.
-`compare-triangle-kernels` does this for all four backends; its `--steps` and
-`--backends` options change the comparison.

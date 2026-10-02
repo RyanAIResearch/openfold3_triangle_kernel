@@ -473,8 +473,6 @@ cuequivariance-ops-torch-cu13 = ">=0.8"
   c["model_update"]["custom"]["settings"]["memory"]["train"]["use_turbopairformer_triangle_kernels"] = True; \
   yaml.safe_dump(c, open(p, "w"), sort_keys=False)' \
   && run_openfold train --runner-yaml datasets/train_pdb_subset.yaml --seed 42"""
-  # Train 20 mini-set steps with PyTorch, Triton, cuEquivariance and TurboPairFormer
-  compare-triangle-kernels = "python -u scripts/compare_triangle_kernels.py"
 
 
 # --- Openfold3 style MSA generation
