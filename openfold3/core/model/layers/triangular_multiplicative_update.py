@@ -1428,11 +1428,6 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         Returns:
             [*, N_res, N_res, C_z] output tensor
         """
-        if use_turbopairformer_triangle_kernels and _turbopairformer_supported(
-            self, z, mask
-        ):
-            return turbo_trimul(self, z, mask)
-
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
 

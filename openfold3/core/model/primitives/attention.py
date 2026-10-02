@@ -448,8 +448,7 @@ class Attention(nn.Module):
                     "Running with `use_turbopairformer_triangle_kernels` but package "
                     "is not installed. See documentation for installation instructions."
                 )
-            scale = 1.0 / math.sqrt(self.c_hidden)
-            o = _turbopairformer_triangle_attn(q, k, v, biases, scale=scale)
+            o = _turbopairformer_triangle_attn(q, k, v, biases)
         # cuequivariance kernel takes precedence over use_deepspeed_evo_attention
         elif use_cueq_triangle_kernels:
             if not cueq_is_installed:
@@ -843,17 +842,9 @@ def _cueq_triangle_attn(q, k, v, biases, scale):
 
 
 @torch.compiler.disable
-def _turbopairformer_triangle_attn(q, k, v, biases, scale):
-    assert len(biases) == 2, (
-        "TurboPairFormer triangle attention kernel requires two bias terms: "
-        "mask_bias and triangle_bias"
-    )
+def _turbopairformer_triangle_attn(q, k, v, biases):
     mask_bias, triangle_bias = biases
-
-    supported, _ = is_triangle_attention_supported(q, k, v, mask_bias, triangle_bias)
-    if not supported:
-        # Stock attention expects q scaled by _prep_qkv
-        return _attention(q * scale, k, v, biases).transpose(-2, -3)
-
-    # Output is already [*, Q, H, C_hidden]
-    return turbo_attention(q, k, v, mask_bias, triangle_bias)
+    if is_triangle_attention_supported(q, k, v, mask_bias, triangle_bias)[0]:
+        # The kernel scales q itself and returns [*, Q, H, C_hidden]
+        return turbo_attention(q, k, v, mask_bias, triangle_bias)
+    return _attention(q * q.shape[-1] ** -0.5, k, v, biases).transpose(-2, -3)
