@@ -466,6 +466,14 @@ cuequivariance-ops-torch-cu13 = ">=0.8"
   # fail to compile. Use the architectures of docker/Dockerfile.pixi.
   env.TORCH_CUDA_ARCH_LIST = "8.0;8.6;9.0"
 
+  [feature.turbopairformer.tasks]
+  # Train the setup-pdb-subset mini set with the TurboPairFormer kernels enabled
+  train-pdb-subset = """python -c 'import yaml; \
+  c = yaml.safe_load(open("datasets/train_pdb_subset.yaml")); \
+  c["model_update"]["custom"]["settings"]["memory"]["train"]["use_turbopairformer_triangle_kernels"] = True; \
+  yaml.safe_dump(c, open("datasets/train_pdb_subset_turbopairformer.yaml", "w"), sort_keys=False)' \
+  && run_openfold train --runner-yaml datasets/train_pdb_subset_turbopairformer.yaml --seed 42"""
+
 
 # --- Openfold3 style MSA generation
 

@@ -5,6 +5,25 @@ attention and triangle multiplicative update kernels that speed up OpenFold3 tra
 NVIDIA H100 and H200 GPUs. This guide covers how to train OpenFold3 with them on the PDB
 dataset from scratch or fine-tune from an existing checkpoint.
 
+## Quick start
+
+On Linux x86-64 with an H100 or H200 GPU and a driver for CUDA 12.8, these five commands
+install everything and train the mini PDB training set with the kernels enabled. Skip the
+first if you already have pixi; the repository is private, so your GitHub account needs
+access to it.
+
+```bash
+curl -fsSL https://pixi.sh/install.sh | sh && export PATH="$HOME/.pixi/bin:$PATH"
+git clone -b feat/turbopairformer-aqlab-integration https://github.com/RyanAIResearch/openfold3_triangle_kernel.git && cd openfold3_triangle_kernel
+pixi install -e openfold3
+pixi run -e openfold3 setup-pdb-subset
+pixi run -e openfold3 train-pdb-subset
+```
+
+The last command trains for two epochs and writes checkpoints to
+`test_train_output/checkpoints`. The sections below explain each step and how to train
+on the full PDB training set.
+
 ## 1. Install the environment
 
 You need Linux x86-64, an H100 or H200 GPU and a driver for CUDA 12.8. Install
@@ -47,8 +66,9 @@ logging, and checkpointing. Update the paths to match your file locations; the e
 below assumes a `/shared/openfold3` directory that's accessible from all your training
 nodes.
 
-Here's a minimal configuration for single-GPU training. `precision: bf16-mixed` and
-`use_turbopairformer_triangle_kernels: true` turn the kernels on:
+Here's a minimal configuration for single-GPU training; save it as `training.yaml`.
+`precision: bf16-mixed` and `use_turbopairformer_triangle_kernels: true` turn the kernels
+on:
 
 ```yaml
 experiment_settings:
@@ -158,9 +178,9 @@ dataset_paths:
 ```
 
 For the mini set, `setup-pdb-subset` already wrote a complete config,
-`datasets/train_pdb_subset.yaml`, with `bf16-mixed`: add
-`use_turbopairformer_triangle_kernels: true` to its
-`model_update.custom.settings.memory.train`.
+`datasets/train_pdb_subset.yaml`, with `bf16-mixed`. The `train-pdb-subset` task copies
+it to `datasets/train_pdb_subset_turbopairformer.yaml` with
+`use_turbopairformer_triangle_kernels: true` added and trains it.
 
 For example configurations for all stages of training, see
 [examples/training_yamls/](https://github.com/aqlaboratory/openfold-3/tree/main/examples/training_yamls)
@@ -176,7 +196,7 @@ and add the same `settings` block to them:
 
 ```bash
 # Mini set
-pixi run -e openfold3 run_openfold train --runner-yaml datasets/train_pdb_subset.yaml --seed 42
+pixi run -e openfold3 train-pdb-subset
 # Full PDB training set
 pixi run -e openfold3 run_openfold train --runner-yaml training.yaml --seed 42
 ```
