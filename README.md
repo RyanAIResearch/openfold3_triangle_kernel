@@ -274,8 +274,6 @@ fail-closed; only the model selector owns the stock fallback.
   fixed reduction tree and rounding residual also have execution costs
 - Do not infer convergence superiority or memory savings from the timing result
 
-The detailed kernel contract is in
-[`PRODUCTION_MANIFEST.md`](openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md).
 Current experiment tooling is under [`scripts/benchmarks/sr/`](scripts/benchmarks/sr/).
 The [methodology overview](paper/README.md) explains the evidence boundaries.
 Earlier manuscripts, raw receipts and result figures remain in the

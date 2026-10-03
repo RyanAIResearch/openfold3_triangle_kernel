@@ -248,7 +248,6 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
         for relative in (
             "MANIFEST.in",
             "README.md",
-            "PRODUCTION_MANIFEST.md",
             "_ext/__init__.py",
             "tools/build_sm90_wheel.sh",
             "tools/attest_sm90_wheel.py",
