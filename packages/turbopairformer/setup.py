@@ -116,7 +116,6 @@ PACKAGED_PYTHON = (
     "cli.py",
     "API_GUIDE.md",
     "_ext/__init__.py",
-    "PRODUCTION_MANIFEST.md",
 )
 PACKAGED_REPO_FILES = (
     "setup.py",

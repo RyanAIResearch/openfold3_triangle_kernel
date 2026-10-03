@@ -157,7 +157,6 @@ def _source_paths() -> list[Path]:
             "pyproject.toml",
             "MANIFEST.in",
             "README.md",
-            "openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md",
             "openfold3/core/kernels/cuda/_ext/__init__.py",
             "tools/build_sm90_wheel.sh",
             "tools/attest_sm90_wheel.py",

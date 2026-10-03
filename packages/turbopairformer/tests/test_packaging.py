@@ -371,7 +371,6 @@ def test_manifest_receipt_covers_build_and_runtime_files():
     for relative in (
         "MANIFEST.in",
         "README.md",
-        "PRODUCTION_MANIFEST.md",
         "_ext/__init__.py",
         "policy.py",
         "distributed.py",

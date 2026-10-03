@@ -5,8 +5,8 @@
 Each leaf plane has a single writer and the finalizer uses one global fixed
 order. Leaf planes are processed in deterministic waves so temporary storage
 is capped instead of growing with the number of outer leaves. The
-implementation uses no floating-point atomics. See the CUDA source and
-``PRODUCTION_MANIFEST.md`` for the numerical contract.
+implementation uses no floating-point atomics. See the CUDA source for the
+numerical contract.
 """
 
 from __future__ import annotations
