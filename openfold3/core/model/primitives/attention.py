@@ -439,6 +439,11 @@ class Attention(nn.Module):
         # deployment) is simply ignored here rather than treated as a
         # conflict. Genuinely incompatible modes still raise.
         if use_stable_triangle_attention:
+            from openfold3.core.utils.distributed_contract import (
+                validate_turbopairformer_attention_policy,
+            )
+
+            validate_turbopairformer_attention_policy()
             use_cueq_triangle_kernels = False
             use_triton_triangle_kernels = False
         if use_stable_triangle_attention and any(

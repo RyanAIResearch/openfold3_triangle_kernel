@@ -25,6 +25,7 @@ from openfold3.core.utils.distributed_contract import (
     turbopairformer_aot_modules_from_config,
     turbopairformer_distributed_execution_flag,
     turbopairformer_distributed_strict_enabled,
+    validate_turbopairformer_attention_policy,
     validate_turbopairformer_distributed_environment,
 )
 
@@ -88,6 +89,64 @@ def test_turbopairformer_aot_module_discovery_uses_train_eval_union(config, expe
 def test_turbopairformer_aot_module_discovery_handles_missing_settings():
     assert turbopairformer_aot_modules_from_config(None) == ()
     assert turbopairformer_aot_modules_from_config(SimpleNamespace()) == ()
+
+
+def test_unset_sr_flags_resolve_to_explicit_production_defaults(monkeypatch):
+    for name in distributed_contract._EXECUTION_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    defaults = distributed_contract._execution_environment()
+    assert defaults == {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1",
+        "OPENFOLD3_TRIANGLE_ALLOW_JIT": None,
+    }
+    validate_turbopairformer_attention_policy()
+    assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_SHADOW")
+    assert not turbopairformer_distributed_execution_flag("OPENFOLD3_TRIANGLE_ALLOW_JIT")
+
+    monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1")
+    monkeypatch.setenv("OPENFOLD3_SR_SHADOW", "1")
+    assert distributed_contract._execution_environment() == defaults
+    validate_turbopairformer_attention_policy()
+
+
+def test_attention_policy_rejects_disabled_single_reconstruction(monkeypatch):
+    monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "0")
+    with pytest.raises(RuntimeError, match="requires single-reconstruction backward"):
+        validate_turbopairformer_attention_policy()
+
+
+def test_default_sr_policy_is_frozen_and_audited_after_preflight(monkeypatch):
+    for name in distributed_contract._EXECUTION_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    expected = distributed_contract._execution_environment()
+    _set_turbopairformer_distributed_strict(True, expected)
+    try:
+        monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1")
+        monkeypatch.setenv("OPENFOLD3_SR_SHADOW", "1")
+        validate_turbopairformer_distributed_environment()
+        validate_turbopairformer_attention_policy()
+
+        monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "0")
+        # The frozen route remains SR; the boundary audit rejects the mutation.
+        validate_turbopairformer_attention_policy()
+        assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_BACKWARD")
+        with pytest.raises(DistributedContractError, match="environment changed"):
+            validate_turbopairformer_distributed_environment()
+    finally:
+        _set_turbopairformer_distributed_strict(False)
+
+
+def test_attention_policy_rejects_disabled_frozen_flag(monkeypatch):
+    monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "0")
+    expected = distributed_contract._execution_environment()
+    _set_turbopairformer_distributed_strict(True, expected)
+    try:
+        monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1")
+        with pytest.raises(RuntimeError, match="requires single-reconstruction backward"):
+            validate_turbopairformer_attention_policy()
+    finally:
+        _set_turbopairformer_distributed_strict(False)
 
 
 def test_strict_execution_flags_are_immutable(monkeypatch):
@@ -252,6 +311,17 @@ def test_local_kernel_record_accepts_full_h100_and_h200(
         "turbopairformer_dq_dbias",
         "turbopairformer_trimul",
     }
+
+
+def test_local_kernel_record_accepts_unset_sr_defaults(
+    collect_mocked_kernel_record, monkeypatch
+):
+    collect, _ = collect_mocked_kernel_record
+    monkeypatch.delenv("OPENFOLD3_SR_BACKWARD", raising=False)
+    monkeypatch.delenv("OPENFOLD3_SR_SHADOW", raising=False)
+    record = collect()
+    assert record["ok"], record.get("error")
+    assert record["execution_environment"] == _kernel_record(0)["execution_environment"]
 
 
 @pytest.mark.parametrize(

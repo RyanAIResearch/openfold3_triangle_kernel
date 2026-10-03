@@ -38,6 +38,10 @@ _EXECUTION_ENV_KEYS = (
     "OPENFOLD3_SR_SHADOW",
     "OPENFOLD3_TRIANGLE_ALLOW_JIT",
 )
+_DEFAULT_EXECUTION_FLAGS = {
+    "OPENFOLD3_SR_BACKWARD": "1",
+    "OPENFOLD3_SR_SHADOW": "1",
+}
 
 _STRICT_DISTRIBUTED_TURBOPAIRFORMER = False
 _STRICT_EXECUTION_ENVIRONMENT: dict[str, str | None] | None = None
@@ -47,8 +51,14 @@ class DistributedContractError(RuntimeError):
     """Raised when TurboPairFormer kernel identities differ across DDP ranks."""
 
 
+def _execution_flag_value(name: str) -> str | None:
+    return os.environ.get(name, _DEFAULT_EXECUTION_FLAGS.get(name))
+
+
 def _execution_environment() -> dict[str, str | None]:
-    return {name: os.environ.get(name) for name in _EXECUTION_ENV_KEYS}
+    """Snapshot effective flags so unset SR defaults match explicit ones."""
+
+    return {name: _execution_flag_value(name) for name in _EXECUTION_ENV_KEYS}
 
 
 def turbopairformer_distributed_strict_enabled() -> bool:
@@ -88,12 +98,24 @@ def turbopairformer_distributed_execution_flag(name: str) -> bool:
     if name not in _EXECUTION_ENV_KEYS:
         raise KeyError(f"unknown TurboPairFormer execution flag: {name}")
     if not _STRICT_DISTRIBUTED_TURBOPAIRFORMER:
-        return os.environ.get(name) == "1"
+        return _execution_flag_value(name) == "1"
     if _STRICT_EXECUTION_ENVIRONMENT is None:
         raise DistributedContractError(
             "strict TurboPairFormer execution policy was not initialized"
         )
     return _STRICT_EXECUTION_ENVIRONMENT[name] == "1"
+
+
+def validate_turbopairformer_attention_policy() -> None:
+    """Require single reconstruction whenever TurboPairFormer attention is selected."""
+
+    if not turbopairformer_distributed_execution_flag("OPENFOLD3_SR_BACKWARD"):
+        raise RuntimeError(
+            "TurboPairFormer attention requires single-reconstruction backward; "
+            "OPENFOLD3_SR_BACKWARD must be unset or 1. Setting it to 0 cannot "
+            "select the old algorithm. Use historical source or low-level "
+            "reference kernels for ablations."
+        )
 
 
 def _setting(settings: Any, name: str) -> bool:

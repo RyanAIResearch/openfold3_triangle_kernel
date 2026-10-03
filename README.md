@@ -23,8 +23,8 @@ backward. A flash-style two-pass implementation reconstructs the attention
 probabilities and score gradients once for `dK/dV` and again for `dQ/dBias`.
 TurboPairFormer reconstructs each tile once and immediately uses it for all four
 gradients. A fixed-order `dBias` reduction replaces floating-point atomics, and
-an optional forward rounding residual improves the row-scalar used by the
-backward without changing the public BF16 output.
+a forward rounding residual, enabled by default, improves the row scalar used
+by the backward without changing the public BF16 output.
 
 ## Parameters available in OpenFold3
 
@@ -151,7 +151,14 @@ not required.
 
 ## Enable TurboPairFormer manually
 
-Set the SR-R backward contract before starting Python:
+The current source's public facade always uses single-reconstruction backward.
+`OPENFOLD3_SR_BACKWARD` defaults to `1`; explicitly setting it to `0` raises an
+error. `OPENFOLD3_SR_SHADOW` also defaults to `1`. Setting shadow to `0` keeps
+single reconstruction and is available for local accuracy ablations; DDP
+requires shadow to remain enabled.
+
+Keep these compatibility exports when using the pinned September 18 wheel,
+which has not been rebuilt for this source change:
 
 ```bash
 export OPENFOLD3_SR_BACKWARD=1
@@ -159,9 +166,9 @@ export OPENFOLD3_SR_SHADOW=1
 export OPENFOLD3_TRIANGLE_ALLOW_JIT=0
 ```
 
-`OPENFOLD3_SR_SHADOW=1` stores a BF16 rounding residual in the forward and uses
-it only to improve the backward row scalar. It does not change the model-visible
-forward output.
+The shadow path stores a BF16 rounding residual in the forward and uses it only
+to improve the backward row scalar. It does not change the model-visible forward
+output.
 
 In a training YAML, select the backend under the train memory settings:
 
@@ -222,6 +229,19 @@ python scripts/benchmarks/turbopairformer_triangle_sanitizer_smoke.py \
   --sequence 65 --heads 4 --head-dim 32 --prefix 1
 ```
 
+For the current source checkout on Hopper, run the SR routing and FP64 checks
+in the source-development environment:
+
+```bash
+pixi run -e openfold3-cuda12-dev env OPENFOLD3_TRIANGLE_ALLOW_JIT=1 \
+  python -m pytest openfold3/tests/core/kernels/test_turbopairformer_sr_policy.py
+```
+
+`tools/aot_numeric_smoke.py` remains the frozen, hash-qualified validator for the
+pinned wheel. Its classic cases and the `OPENFOLD3_SR_BACKWARD=0` comparison arms
+in `scripts/benchmarks/sr/` require their recorded historical runtime. The
+current source's public facade rejects those legacy two-pass arms.
+
 Before trusting performance, run a short paired canary with the same checkpoint,
 data order, precision, crop, and logging configuration as the comparator. Check:
 
@@ -242,6 +262,8 @@ use_stable_triangle_attention: false
 use_stable_triangle_multiplicative: false
 use_cueq_triangle_kernels: true
 ```
+
+Clear the compatibility exports after switching backend:
 
 ```bash
 unset OPENFOLD3_SR_BACKWARD

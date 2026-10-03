@@ -205,20 +205,30 @@ semantics used by the single-node configuration.
 #### TurboPairFormer kernel preflight for DDP
 
 This describes the in-tree `main` runtime with Conda PyTorch 2.10.0 and CUDA
-12.9. Artifact identity and completed validation are recorded alongside the
-pinned wheel in `release_artifacts/turbopairformer-h100-20260918/`.
+12.9. Its public Attention facade always uses single-reconstruction backward.
+`OPENFOLD3_SR_BACKWARD` and `OPENFOLD3_SR_SHADOW` default to `1` when unset;
+explicit `OPENFOLD3_SR_BACKWARD=0` is rejected. Shadow may be disabled for local
+accuracy ablations while retaining SR, but DDP requires it to remain enabled.
+
+The separately pinned September 18 wheel has not been rebuilt for this source
+change. Its artifact identity and completed validation remain recorded in
+`release_artifacts/turbopairformer-h100-20260918/`.
 
 TurboPairFormer adds a kernel-only preflight to AQLab's ordinary DDP path; it does
 not replace the DDP strategy or alter gradients, EMA, losses, checkpoints, or
 logging. The production target is one process per full NVIDIA H100 GPU, with
-the same clean AOT wheel installed on every node and these execution flags set
-identically:
+the same clean AOT wheel installed on every node. Retain these explicit settings
+for compatibility with the pinned wheel:
 
 ```bash
 export OPENFOLD3_TRIANGLE_ALLOW_JIT=0
 export OPENFOLD3_SR_BACKWARD=1
 export OPENFOLD3_SR_SHADOW=1
 ```
+
+The frozen `tools/aot_numeric_smoke.py` validator and legacy SR-disabled
+comparison arms in `scripts/benchmarks/sr/` remain scoped to their recorded
+historical runtimes; their two-pass labels do not describe the current facade.
 
 Before the first model forward, every rank preloads the selected TurboPairFormer
 AOT modules and exchanges its package identity, binary hashes, ABI, GPU identity,
