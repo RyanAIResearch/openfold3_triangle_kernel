@@ -5,7 +5,7 @@
 // 64-key tiles; scores never touch HBM. Deterministic by construction in the
 // forward (a single CTA owns each row; the KV tile order is fixed), replay
 // bitwise vs itself. Accuracy contract is the error-ratio bound vs fp64, NOT
-// bitwise vs PyTorch (see PRODUCTION_MANIFEST.md).
+// bitwise vs PyTorch.
 //
 // Goals: correctness, replay stability, and arbitrary N. Perf work (cp.async double
 // buffering, register-layout P reuse, WGMMA) comes after the gate is green.
