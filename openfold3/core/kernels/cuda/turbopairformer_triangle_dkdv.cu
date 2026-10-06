@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // TurboPairFormer split-backward dK/dV with runtime shape dispatch.
 // These split kernels remain available to direct callers. The public facade
-// computes all four gradients with SR in turbopairformer_triangle_dq_dbias.cu.
+// instead computes all four gradients with the SR kernels in the dq_dbias
+// source file.
 //
 // One CTA owns one (64-key block, head, outer) and its dK/dV accumulators
 // outright: dK[k] and dV[k] use column k of dS and P, respectively, so key-block

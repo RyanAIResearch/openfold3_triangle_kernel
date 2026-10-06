@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // TurboPairFormer single-reconstruction backward and split dQ/dBias kernels.
 // The public facade uses SR to reconstruct each probability tile once for all
-// four gradients. The split kernels pair with turbopairformer_triangle_dkdv.cu
-// for direct calls. Both routes use bounded dBias workspace and fixed reductions.
+// four gradients. For direct calls, the split kernels pair with the dK/dV
+// kernels in the dkdv source file. Both routes use bounded dBias workspace and
+// fixed reductions.
 //
 // Split dQ/dBias leaf under the TurboPairFormer contract (one fixed reduction tree,
 // tolerance vs PyTorch, replay-bitwise vs self):
