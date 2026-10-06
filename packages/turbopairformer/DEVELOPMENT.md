@@ -116,7 +116,7 @@ for its commands. Do not install into a shared training or system Python prefix.
 To install a wheel produced by the build command:
 
 ```bash
-python -m pip install /absolute/path/to/turbopairformer-0.1.1-cp314-cp314-manylinux_2_28_x86_64.whl
+python -m pip install /absolute/path/to/turbopairformer-0.1.3-cp314-cp314-manylinux_2_28_x86_64.whl
 ```
 
 Public wheels contain all five precompiled CUDA extensions. No local CUDA toolkit
@@ -199,7 +199,7 @@ In a Linux CPython 3.14 environment with `torch==2.10.0` installed from PyPI:
 ```bash
 python -m pip install setuptools wheel patchelf
 CUDA_HOME=/absolute/path/to/cuda-12.9 bash tools/build_sm90_wheel.sh
-python -m pip install dist/turbopairformer-0.1.1-cp314-cp314-linux_x86_64.whl
+python -m pip install dist/turbopairformer-0.1.3-cp314-cp314-linux_x86_64.whl
 cd /tmp
 python /absolute/path/to/packages/turbopairformer/tools/smoke_installed.py
 ```
@@ -255,18 +255,19 @@ wheel as the Python package.
 
 The package CUDA sources are byte-identical to the mapped files in
 `openfold3/core/kernels/cuda/` at main commit
-`ba65b02c5b77e4eec061c215c9d3164ef411222a`. This includes the SR register-lifetime
+`98eff406e039c4c6975e659d55cc3e8d5c251085`. This includes the SR register-lifetime
 change from `c35e7d14` and the mandatory-SR public policy from `ba65b02c`.
 The Python facade retains the standalone optional-mask API, canonical environment
-names, legacy aliases and AOT loader. This source synchronization does not update
-published wheels, release versions or historical validation receipts.
+names, legacy aliases and AOT loader. Version 0.1.3 is being prepared from this
+source. Its wheel has not yet been built or validated; published wheels and
+historical validation receipts remain unchanged.
 
 | Package CUDA file | Main CUDA file | SHA256 |
 | --- | --- | --- |
-| `triangle_forward.cu` | `turbopairformer_triangle_forward.cu` | `8659b6b9814e852d7729419c1b050434af0b6369b6dabb73dbf84b9b31674119` |
-| `triangle_delta.cu` | `turbopairformer_triangle_delta.cu` | `69ef59706d33e7de5928abdabe0c9439db359fd81f0bd7f10baefc68a2bdd759` |
-| `triangle_dkdv.cu` | `turbopairformer_triangle_dkdv.cu` | `1f4cebb0fd3aa234b9f41318810dcffaadc6f314c706ae29b2a67a753f9aee59` |
-| `triangle_dq_dbias.cu` | `turbopairformer_triangle_dq_dbias.cu` | `111f2dc334600cb0118eaac87138241596d3bed10d18722164852e58d11722bc` |
+| `triangle_forward.cu` | `turbopairformer_triangle_forward.cu` | `d1411d5cbb265bb92b393fcfd42bc13a34c6195feabcdfab27085b27b8aff2c5` |
+| `triangle_delta.cu` | `turbopairformer_triangle_delta.cu` | `3f4efadfb03763bfae402005632a13774d086ee835a4c8f685e93d884b46906c` |
+| `triangle_dkdv.cu` | `turbopairformer_triangle_dkdv.cu` | `0856da58092f29e3336bd8c835794c9b68e43394edc4658346c1f99d6007fd2d` |
+| `triangle_dq_dbias.cu` | `turbopairformer_triangle_dq_dbias.cu` | `60b5545513bdd1408f1b5f8244f0aa99688753ef03d5a1790d29168bb3c8dde1` |
 | `trimul_cuda.cu` | `turbopairformer_trimul_cuda.cu` | `8962ca3513538070e5fb21259bd57a38a586641123aadfda40c62c44f9c9aa03` |
 
 The retained low-level split-backward functions support reference tests; the

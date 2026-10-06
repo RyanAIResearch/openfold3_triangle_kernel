@@ -1,14 +1,16 @@
 # TurboPairFormer
 
-TurboPairFormer provides high-performance, autograd-supported GPU kernels for **Triangle Attention** and **Triangle Multiplicative Update** (TriMul), engineered specifically for training large-scale protein folding models.
+TurboPairFormer provides GPU kernels with PyTorch autograd support for **Triangle Attention** and **Triangle Multiplicative Update** (TriMul) in protein folding models. It supports NVIDIA H100 and H200 GPUs.
 
 Developed collaboratively by researchers from **Stevens Institute of Technology**, **Lambda**, and **OpenFold**.
+
+**Paper:** [TurboPairFormer: Fast and Stable Protein Folding Model Training with an Optimized Triangle Attention Kernel](https://arxiv.org/abs/2610.05854) ([PDF](https://arxiv.org/pdf/2610.05854)).
 
 ---
 
 ## Requirements
 
-- **GPU**: NVIDIA Hopper architecture (`sm_90a`, H100 and H200 supported in v0.1.2)
+- **GPU**: NVIDIA Hopper architecture (`sm_90a`; H100 and H200)
 - **Environment**: Linux x86-64 (glibc ≥ 2.28), Python 3.14, PyTorch 2.10.0 with CUDA Runtime 12.8
 - **No CUDA Toolkit Required**: Pre-compiled AOT wheels include the kernel binaries.
 
@@ -28,6 +30,7 @@ pip install turbopairformer
 
 ### Versions
 
+- **0.1.3 (unreleased)**: includes the SR backward register-lifetime optimization, makes single reconstruction mandatory for public Triangle Attention backward, updates kernel comments, and adds the paper citation. A precompiled 0.1.3 wheel has not yet been built or validated.
 - [0.1.2](https://pypi.org/project/turbopairformer/0.1.2/): supports NVIDIA H100 and H200
 - [0.1.1](https://pypi.org/project/turbopairformer/0.1.1/): updated kernels, functional TriMul, and offline CLI documentation.
 - [0.1.0](https://pypi.org/project/turbopairformer/0.1.0/): initial release.
@@ -61,11 +64,12 @@ turbopairformer api --all
 
 `turbo_attention` accelerates the triangle attention mechanism with native autograd support for Q, K, V, and pair bias.
 
-The current source always uses single-reconstruction backward. No SR switch is
-needed. An effective `TURBOPAIRFORMER_SR_BACKWARD=0` (or legacy
+In 0.1.3, Triangle Attention backward always uses single reconstruction (SR).
+No SR switch is needed. An effective `TURBOPAIRFORMER_SR_BACKWARD=0` (or legacy
 `OPENFOLD3_SR_BACKWARD=0`) raises instead of selecting another backward method.
-See [DEVELOPMENT.md](DEVELOPMENT.md#current-source-synchronization) for the exact
-main-source revision; this source update does not change published wheels.
+The canonical `TURBOPAIRFORMER_*` setting takes precedence over its legacy alias.
+See the [development guide](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/DEVELOPMENT.md#current-source-synchronization)
+for the exact source revision. The 0.1.3 changes do not alter previously published wheels.
 
 ```python
 import torch
@@ -129,6 +133,22 @@ print(output.shape)  # torch.Size([1, 128, 128, 128])
 - ² Lambda
 - ³ OpenFold
 - ⁺ Equal advising
+
+## Citation
+
+If you use TurboPairFormer in your research, please cite our paper:
+
+```bibtex
+@misc{ran2026turbopairformerfaststableprotein,
+      title={TurboPairFormer: Fast and Stable Protein Folding Model Training with an Optimized Triangle Attention Kernel},
+      author={Yide Ran and Chelsea Lowman and Jan Domański and David Hartmann and Jenke Scheen and Jennifer Wei and Chuan Li and Jianwen Xie and Zhaozhuo Xu},
+      year={2026},
+      eprint={2610.05854},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2610.05854},
+}
+```
 
 ## License
 

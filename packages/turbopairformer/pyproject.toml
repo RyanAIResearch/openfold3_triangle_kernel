@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "turbopairformer"
-version = "0.1.2.post1"
+version = "0.1.3"
 authors = [
     { name = "Yide Ran" },
     { name = "Chelsea Lowman" },
@@ -19,7 +19,7 @@ authors = [
     { name = "Jianwen Xie" },
     { name = "Zhaozhuo Xu" },
 ]
-description = "Fast CUDA kernels for Triangle Attention and Triangle Multiplicative Update in protein folding models."
+description = "Fast kernels for Triangle Attention and Triangle Multiplicative Update in protein folding models."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = "==3.14.*"
@@ -32,6 +32,7 @@ classifiers = [
 ]
 
 [project.urls]
+Paper = "https://arxiv.org/abs/2610.05854"
 Repository = "https://github.com/RyanAIResearch/openfold3_triangle_kernel"
 Documentation = "https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/README.md"
 Issues = "https://github.com/RyanAIResearch/openfold3_triangle_kernel/issues"
