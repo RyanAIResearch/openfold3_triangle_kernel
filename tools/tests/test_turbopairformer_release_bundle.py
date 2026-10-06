@@ -92,7 +92,7 @@ def bundle(tmp_path, monkeypatch, request):
     doctor.write_text(json.dumps(report))
     junit = tmp_path / "tests.xml"
     suite = ET.Element("testsuite", failures="0", errors="0")
-    for name in release.REQUIRED_GPU_CASES.values():
+    for name in release.required_gpu_cases(version).values():
         ET.SubElement(suite, "testcase", name=name + "[case]")
     if version != "0.1.0":
         for name in release.REQUIRED_FUNCTIONAL_GPU_CASES.values():
@@ -282,10 +282,68 @@ def test_current_gpu_receipt_requires_every_functional_direction(
         release.validate_junit(path, "0.1.1")
 
 
-@pytest.mark.parametrize("version", ("0.1.1", "0.1.2", "0.2.0", "1.0.0"))
-def test_current_release_cannot_reuse_legacy_gpu_coverage(bundle, version):
+@pytest.mark.parametrize(
+    "bundle", ("0.1.1", "0.1.2.post1", "0.1.3", "0.2.0", "1.0.0"), indirect=True
+)
+def test_current_release_cannot_reuse_legacy_gpu_coverage(bundle):
+    path = bundle[0] / "standalone-gpu.xml"
+    tree = ET.parse(path)
+    for case in list(tree.getroot()):
+        if case.get("name") in release.REQUIRED_FUNCTIONAL_GPU_CASES.values():
+            tree.getroot().remove(case)
+    tree.write(path)
     with pytest.raises(ValueError, match="functional outgoing"):
-        release.validate_junit(bundle[0] / "standalone-gpu.xml", version)
+        release.validate_junit(path, bundle[1]["version"])
+
+
+@pytest.mark.parametrize(
+    "bundle,case_name,scope",
+    [
+        (
+            version,
+            "test_explicit_classic_attention_bypasses_shadow_and_sr",
+            "explicit classic execution",
+        )
+        for version in ("0.1.0", "0.1.1", "0.1.2", "0.1.2.post1")
+    ]
+    + [
+        (
+            version,
+            "test_explicit_shadow_ablation_retains_sr",
+            "explicit shadow ablation retaining SR",
+        )
+        for version in ("0.1.3", "0.1.3.post1", "0.2.0", "1.0.0")
+    ],
+    indirect=["bundle"],
+)
+@pytest.mark.parametrize("change", ("valid", "missing", "skipped", "other_route"))
+def test_gpu_backward_evidence_matches_release_policy(bundle, case_name, scope, change):
+    output, info, _ = bundle
+    path = output / "standalone-gpu.xml"
+    tree = ET.parse(path)
+    case = tree.getroot().find(f"testcase[@name='{case_name}[case]']")
+    assert case is not None
+    other_name = (
+        "test_explicit_shadow_ablation_retains_sr"
+        if case_name == "test_explicit_classic_attention_bypasses_shadow_and_sr"
+        else "test_explicit_classic_attention_bypasses_shadow_and_sr"
+    )
+    assert tree.getroot().find(f"testcase[@name='{other_name}[case]']") is None
+    if change == "valid":
+        result = release.validate_bundle(
+            output, COMMIT, f"turbopairformer-v{info['version']}", False
+        )
+        assert result["wheel"]["version"] == info["version"]
+        return
+    if change == "missing":
+        tree.getroot().remove(case)
+    elif change == "skipped":
+        ET.SubElement(case, "skipped")
+    else:
+        case.set("name", other_name + "[case]")
+    tree.write(path)
+    with pytest.raises(ValueError, match=f"no executed {scope}"):
+        release.validate_junit(path, info["version"])
 
 
 @pytest.mark.parametrize("bundle", ["0.1.1"], indirect=True)

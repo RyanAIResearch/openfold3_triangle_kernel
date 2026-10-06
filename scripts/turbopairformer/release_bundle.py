@@ -74,12 +74,28 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def release_version(version: str) -> tuple[int, int, int]:
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:$|[^0-9])", version)
+    require(match is not None, "unsupported release version")
+    return tuple(int(value) for value in match.groups())
+
+
 def requires_current_api_evidence(version: str) -> bool:
     """Require functional API and installed CLI checks from version 0.1.1."""
 
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:$|[^0-9])", version)
-    require(match is not None, "unsupported release version")
-    return tuple(int(value) for value in match.groups()) >= (0, 1, 1)
+    return release_version(version) >= (0, 1, 1)
+
+
+def required_gpu_cases(version: str) -> dict[str, str]:
+    """Preserve historical split-path evidence; version 0.1.3 fixes SR on."""
+
+    cases = REQUIRED_GPU_CASES.copy()
+    if release_version(version) >= (0, 1, 3):
+        del cases["explicit classic execution"]
+        cases["explicit shadow ablation retaining SR"] = (
+            "test_explicit_shadow_ablation_retains_sr"
+        )
+    return cases
 
 
 def validate_installed_cli(report: dict, version: str, package_root: Path) -> None:
@@ -223,7 +239,7 @@ def validate_junit(path: Path, version: str = "0.1.0") -> dict:
     cases = list(root.iter("testcase"))
     passed = [case for case in cases if case.find("skipped") is None]
     names = {case.get("name", "").split("[", 1)[0] for case in passed}
-    for scope, name in REQUIRED_GPU_CASES.items():
+    for scope, name in required_gpu_cases(version).items():
         require(name in names, f"no executed {scope} test in GPU receipt")
     if requires_current_api_evidence(version):
         exact_names = {case.get("name", "") for case in passed}
