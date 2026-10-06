@@ -25,12 +25,12 @@ conda activate turbopairformer
 export PATH="$CONDA_PREFIX/bin:$PATH"
 hash -r
 
-pip install turbopairformer
+pip install turbopairformer==0.1.3
 ```
 
 ### Versions
 
-- **0.1.3 (unreleased)**: includes the SR backward register-lifetime optimization, makes single reconstruction mandatory for public Triangle Attention backward, updates kernel comments, and adds the paper citation. A precompiled 0.1.3 wheel has not yet been built or validated.
+- **0.1.3**: Optimizes register usage to reduce spilling. Improves training speed. See our [paper](https://arxiv.org/abs/2610.05854).
 - [0.1.2](https://pypi.org/project/turbopairformer/0.1.2/): supports NVIDIA H100 and H200
 - [0.1.1](https://pypi.org/project/turbopairformer/0.1.1/): updated kernels, functional TriMul, and offline CLI documentation.
 - [0.1.0](https://pypi.org/project/turbopairformer/0.1.0/): initial release.
@@ -38,6 +38,7 @@ pip install turbopairformer
 Install a specific version:
 
 ```bash
+pip install turbopairformer==0.1.3
 pip install turbopairformer==0.1.2
 pip install turbopairformer==0.1.1
 pip install turbopairformer==0.1.0
