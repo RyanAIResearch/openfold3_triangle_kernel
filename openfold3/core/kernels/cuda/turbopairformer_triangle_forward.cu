@@ -7,15 +7,17 @@
 // bitwise vs itself. Accuracy contract is the error-ratio bound vs fp64, NOT
 // bitwise vs PyTorch.
 //
-// Goals: correctness, replay stability, and arbitrary N. Perf work (cp.async double
-// buffering, register-layout P reuse, WGMMA) comes after the gate is green.
+// TMA-eligible layouts (D exactly 16/32/64; plane count within int32) load
+// tiles with TMA and compute QK^T with WGMMA; PV uses mma.sync. Other
+// supported layouts use cp.async/mma.sync.
+// The facade also requests a rounding residual when SR shadow mode is enabled.
 //
-// Internal layout contract used by the public TurboPairFormer facade:
-//   q, k, v : [1, N, H=4, N, D=32] BF16, contiguous
-//   mask    : [1, N, 1, 1, N] FP32 additive (0 or -inf-like)
-//   bias    : [1, 1, H, N, N] BF16 additive
-//   out     : [1, N, H, N, D] BF16
-//   lse     : [1, N, H, N] FP32 (m + log l, natural log)
+// Internal CUDA ABI layouts (public facade limits are enforced separately):
+//   q, k, v : [B, O, H, N, D] BF16, contiguous
+//   mask    : [B, O, 1, 1, N] FP32 additive (0 or -inf-like)
+//   bias    : [B, 1, H, N, N] BF16 additive
+//   out     : [B, O, N, H, D] BF16; optional residual has the same layout
+//   lse     : [B, O, H, N] FP32 (m + log l, natural log)
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>

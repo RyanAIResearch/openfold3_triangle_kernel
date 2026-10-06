@@ -1,28 +1,39 @@
 # SPDX-License-Identifier: Apache-2.0
 """TurboPairFormer triangle multiplicative update: fused-kernel CUDA implementation.
 
-Forward (3 launches):
+``run_stable_trimul`` validates the module and inputs, then enters
+``_run_supported_stable_trimul`` and the ``_trimul_fwd_v1`` custom op.
+Autograd calls ``_trimul_bwd_v1`` through ``_trimul_fwd_v1_backward``.
+The implementation helpers below supply both custom ops.
+
+Dimensions: B is the flattened batch prefix, N the pair-axis length, C the
+input/output channel count, and H the hidden channel count (not attention heads).
+
+Forward has three computation stages:
   z --[trimul_in_fwd: LN(fp32 stats) + 5-way projection GEMM (mma.sync,
        persistent col-sliced CTAs, weights resident in smem) + sigmoid-gate
        split + channel-major write]--> a, b ([B*H,N,N]), raw gate
   a,b --[cuBLAS bmm (op-flag views, no copies)]--> x
   x --[trimul_out_fwd: transpose-LN + out-projection GEMM + sigmoid gate mul,
        cp.async double-buffered tile pipeline]--> out
-z_ln / proj / out_raw never round-trip HBM on the forward; training saves
-z_ln, gate, x_ln^T and LN stats only (activation ~630MB/call lighter at
-N=640 than materializing proj).
+The fused stages avoid materializing the full five-projection tensor and the
+ungated output. When backward state is requested, the forward also saves
+normalized inputs, gates, pair-product intermediates and layer-normalization
+statistics.
 
 Backward: trimul_gate_split_bwd recomputes proj tiles on tensor cores from
-the saved z_ln with the exact forward accumulation order; sig_mul_bwd_out
-reconstructs out_raw from the forward output (r*sig = out identity, so
-d_gate = dy*out*(1-sig)).  Remaining GEMMs are cuBLAS; LN backwards are the
-fixed-order kernels below.  dW5 uses K=16384 BF16 bmm partials under a fixed
-48 MiB partial cap, followed by one globally ascending FP32 fold.
+the saved z_ln with the forward accumulation order; sig_mul_bwd_out uses
+the saved gated output to evaluate d_gate = dy*out*(1-sig), without
+reconstructing the ungated output. Remaining GEMMs are cuBLAS; LN backwards are
+the fixed-order kernels below. dW5 uses K=16384 BF16-input bmm chunks with FP32
+partials under a fixed 48 MiB partial cap, followed by one globally ascending
+FP32 fold.
 
-All reductions fixed-order, zero atomics, bitwise replay-deterministic.
+Custom reduction kernels use fixed accumulation orders without floating-point
+atomics; repeatability assumes fixed inputs, execution settings and runtime.
 Contract (explicit reject, no silent specialization): c_hidden == c_z,
-C in {32, 64, 96, 128}, arbitrary N and batch within the validated CUDA grid
-and memory limits.
+C in {32, 64, 96, 128}. The module entry point requires N > 100 and checks CUDA
+grid, dtype and layout limits before dispatch.
 
 The private, versioned ``torch.library`` boundary below is first-order-only.
 Its backward remains an opaque custom op; higher-order differentiation is not
@@ -114,7 +125,7 @@ def _wgrad_full_chunk_views(
 
 
 def _trimul_wgrad_fixed(ext, d_proj5, z_ln):
-    """Compute dW5 with bounded BF16 split-K GEMMs and a fixed FP32 fold."""
+    """Compute dW5 from BF16 split-K inputs, FP32 partials and a fixed fold."""
     rows, five_hidden = d_proj5.shape
     z_rows, channels = z_ln.shape
     if rows != z_rows:
@@ -207,6 +218,9 @@ def _trimul_forward_impl(
     out, xlnT, mean_out, rstd_out = ext.trimul_out_fwd(
         x.view(B * H, NN), w_z, gate, g_out, b_out, B, NN, C, H, training)
 
+    # Shared backward-state order: input/mask; six intermediates; four LN
+    # statistics; six projection/gate weights; two LN scales; final output.
+    # The custom-op setup_context below stores the same order for autograd.
     saved_tensors = (
         z_bf, mask_f, z_ln, gate, a, b, x, xlnT,
         mean_in, rstd_in, mean_out, rstd_out,
@@ -228,7 +242,7 @@ def _trimul_backward_combined_impl(
     NN = N * N
     go = grad_out.to(torch.bfloat16).contiguous().view(rows, C)
 
-    # gate slot [4H:5H) of d_proj5 + d_raw, reconstructing out_raw from out
+    # Gate slot [4H:5H) of d_proj5 and d_raw, using the saved gated output.
     d_proj5 = torch.empty(rows, 5 * H, dtype=torch.bfloat16,
                           device=z_bf.device)
     d_raw = ext.sig_mul_bwd_out(
@@ -485,6 +499,7 @@ def _trimul_bwd_v1_fake(
 
 
 def _trimul_fwd_v1_setup_context(ctx, inputs, output):
+    """Save the shared backward-state layout from _trimul_forward_impl."""
     (
         z_bf, mask_f, w_ap, w_ag, w_bp, w_bg, w_g, w_z,
         g_in, _b_in, g_out, _b_out, outgoing, _save_state,
@@ -529,6 +544,8 @@ def _trimul_fwd_v1_backward(
         w_ap, w_ag, w_bp, w_bg, w_g, w_z,
         g_in, g_out, out,
     ) = ctx.saved_tensors
+    # This order matches setup_context and the shared implementation helper;
+    # the custom-op boundary passes tensors positionally rather than by name.
     d_z, d_w5, d_wz, d_gin, d_bin, d_gout, d_bout = _trimul_bwd_v1(
         grad_out, z_bf, mask_f, z_ln, gate, a, b, x, xlnT,
         mean_in, rstd_in, mean_out, rstd_out,
@@ -585,7 +602,13 @@ class _StableTrimulFn(torch.autograd.Function):
 
 
 def _run_supported_stable_trimul(module, z, mask):
-    """Run a call that the shared metadata contract already accepted."""
+    """Run a call that the shared metadata contract already accepted.
+
+    The implementation helpers name linear_a_p/linear_b_p weights w_ap/w_bp,
+    linear_a_g/linear_b_g weights w_ag/w_bg, the final gate weight w_g, and
+    the normalized pair-product projection weight w_z. g_in/b_in and
+    g_out/b_out are layer-normalization scales/biases, not gate matrices.
+    """
     if mask is None:
         mask = z.new_ones(z.shape[:-1])
     orig_shape = z.shape
