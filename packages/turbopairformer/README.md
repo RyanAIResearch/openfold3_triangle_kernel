@@ -30,7 +30,7 @@ pip install turbopairformer==0.1.3
 
 ### Versions
 
-- **0.1.3:** Optimizes register usage to reduce spilling. Improves training speed.
+- **0.1.3:** Reduces register spilling.
 - [0.1.2](https://pypi.org/project/turbopairformer/0.1.2/): supports NVIDIA H100 and H200
 - [0.1.1](https://pypi.org/project/turbopairformer/0.1.1/): updated kernels, functional TriMul, and offline CLI documentation.
 - [0.1.0](https://pypi.org/project/turbopairformer/0.1.0/): initial release.
