@@ -28,7 +28,7 @@ from openfold3.core.utils.distributed_contract import (
     validate_turbopairformer_attention_policy,
 )
 
-_PAD_HEAD_LANES = (16, 32, 64)               # Compiled storage lanes; public D <= 64.
+_PAD_HEAD_LANES = (16, 32, 64)               # Facade storage lanes; public D <= 64.
 _CAPABILITY_CACHE: dict = {}
 _MAX_GRID_X = 2_147_483_647
 _MAX_GRID_YZ = 65_535

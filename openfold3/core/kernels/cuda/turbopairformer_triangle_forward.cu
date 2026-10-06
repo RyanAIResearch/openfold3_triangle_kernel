@@ -7,7 +7,9 @@
 // bitwise vs itself. Accuracy contract is the error-ratio bound vs fp64, NOT
 // bitwise vs PyTorch.
 //
-// Eligible layouts use TMA/WGMMA; other supported layouts use cp.async/mma.sync.
+// TMA-eligible layouts (D exactly 16/32/64; plane count within int32) load
+// tiles with TMA and compute QK^T with WGMMA; PV uses mma.sync. Other
+// supported layouts use cp.async/mma.sync.
 // The facade also requests a rounding residual when SR shadow mode is enabled.
 //
 // Internal CUDA ABI layouts (public facade limits are enforced separately):

@@ -24,6 +24,8 @@
 // Fixed dBias tree: plane[leaf] = (w0 + w1) + (w2 + w3);
 // dbias = ((plane0 + plane1) + plane2) + ... in global leaf order. Wave
 // boundaries only spill/reload the FP32 root and do not change arithmetic.
+// Each leaf plane is rounded to BF16 when stored in the workspace; the
+// finalize fold accumulates those BF16 planes into the FP32 root.
 //
 // Internal CUDA ABI layouts:
 // q/k/v/out_dq: [B,O,H,N,D] BF16; dO: [B,O,N,H,D] BF16.
@@ -947,7 +949,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_dq_dbias_wg_ker
 //     bit-identical to the two-pass dkdv by construction.
 //   * dBias keeps the exact workspace contract: per q-tile the two
 //     warpgroups fold (o0+o1)/(o2+o3) into FP32 tree tiles, combine, and
-//     single-write the leaf plane cells [q, kb-keys]; leaf-wave residency
+//     single-write BF16 leaf plane cells [q, kb-keys]; leaf-wave residency
 //     and the finalize kernel are untouched.
 //   * dQ is the one scattered gradient: per (kb, q-tile, slot) the dS tile
 //     is transposed through shared memory, multiplied by K, and written to
