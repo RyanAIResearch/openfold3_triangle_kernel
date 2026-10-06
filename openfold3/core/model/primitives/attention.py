@@ -32,7 +32,10 @@ from ml_collections import ConfigDict
 
 import openfold3.core.config.default_linear_init_config as lin_init
 from openfold3.core.kernels.cueq_utils import is_cuequivariance_available
-from openfold3.core.kernels.turbopairformer_utils import is_turbopairformer_available
+from openfold3.core.kernels.turbopairformer_utils import (
+    is_turbopairformer_available,
+    validate_turbopairformer_attention_policy,
+)
 from openfold3.core.model.primitives.linear import Linear
 from openfold3.core.utils.checkpointing import get_checkpoint_fn
 from openfold3.core.utils.device_utils import autocast_device_type
@@ -841,6 +844,7 @@ def _cueq_triangle_attn(q, k, v, biases, scale):
 
 @torch.compiler.disable
 def _turbopairformer_triangle_attn(q, k, v, biases):
+    validate_turbopairformer_attention_policy()
     mask_bias, triangle_bias = biases
     if is_triangle_attention_supported(q, k, v, mask_bias, triangle_bias)[0]:
         # The kernel scales q itself and returns [*, Q, H, C_hidden]

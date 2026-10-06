@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/RyanAIResearch/openfold3_triangle_kernel.git",
+  "revision": "328dfe206e870510f90716aef1609d19a0fae5b8",
+  "subdirectory": "packages/turbopairformer",
+  "upstream_main": "ba65b02c5b77e4eec061c215c9d3164ef411222a"
+}

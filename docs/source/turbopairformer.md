@@ -1,9 +1,15 @@
 # TurboPairFormer training
 
-[TurboPairFormer](https://pypi.org/project/turbopairformer/0.1.2/) provides triangle
+[TurboPairFormer](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/feat/turbopairformer-pip-package/packages/turbopairformer) provides triangle
 attention and triangle multiplicative update kernels that speed up OpenFold3 training on
 NVIDIA H100 and H200 GPUs. This guide covers how to train OpenFold3 with them on the PDB
 dataset from scratch or fine-tune from an existing checkpoint.
+
+This integration uses the immutable source revision recorded in
+[`scripts/turbopairformer_source.json`](../../scripts/turbopairformer_source.json),
+including the register-lifetime optimization and mandatory single-reconstruction
+attention backward from main `ba65b02c`. The standalone package remains separate from
+OpenFold3; this branch keeps its existing model interface and unsupported-input fallback.
 
 ## Quick start
 
@@ -21,7 +27,8 @@ pixi run -e openfold3 train-pdb-subset
 ```
 
 The last command enables the kernels in `datasets/train_pdb_subset.yaml`, the config
-`setup-pdb-subset` generated, trains with it for two epochs and writes checkpoints to
+`setup-pdb-subset` generated, and launches training through the verified source package
+in an isolated cache. It trains for two epochs and writes checkpoints to
 `test_train_output/checkpoints`. The sections below explain each step and how to train
 on the full PDB training set.
 
@@ -39,8 +46,32 @@ cd openfold3_triangle_kernel
 pixi install -e openfold3
 ```
 
-`openfold3` is the `openfold3-cuda12-pypi` environment with TurboPairFormer 0.1.2 and the
-PyTorch build it needs (Python 3.14, `torch==2.10.0`, CUDA 12.8).
+`openfold3` retains its locked Python 3.14, `torch==2.10.0`, and CUDA 12.8 environment.
+Its PyPI TurboPairFormer 0.1.2 wheel is historical. Current training uses
+`run-current-turbopairformer`, which installs the pinned source with
+`TURBOPAIRFORMER_SOURCE_ONLY=1` and `--no-deps` in
+`build/turbopairformer-source/<commit>/site`. It leaves the locked environment intact.
+The launcher verifies every package file against the Git revision, checks the import
+path, and writes `source_receipt.json` beside the overlay. The repository must be
+accessible on the first run; later runs reuse the verified cache.
+
+Verify the source installation without compiling or calling a GPU kernel:
+
+```bash
+pixi run -e openfold3 run-current-turbopairformer --check
+```
+
+The launcher sets `TURBOPAIRFORMER_ALLOW_JIT=1` and `TORCH_CUDA_ARCH_LIST=9.0a`.
+The first supported GPU call compiles the CUDA sources and needs the environment's
+CUDA toolkit and a C++ compiler. No new wheel has been published. Direct use of the
+historical wheel with the TurboPairFormer flag raises an actionable compatibility error.
+
+Single reconstruction is the fixed attention backward method: unset
+`TURBOPAIRFORMER_SR_BACKWARD` defaults to `1`, and an explicit `0` is rejected,
+including before an unsupported-input fallback. The legacy `OPENFOLD3_SR_BACKWARD`
+alias remains supported; the canonical name takes precedence. Shadow correction
+defaults to `1`; disabling it for a local accuracy ablation does not select a different
+backward reconstruction method.
 
 ## 2. Download the dataset
 
@@ -49,7 +80,7 @@ cache files, and run the training test (it includes a TurboPairFormer case):
 
 ```bash
 pixi run -e openfold3 setup-pdb-subset
-pixi run -e openfold3 pytest openfold3/tests/test_training_full.py
+pixi run -e openfold3 run-current-turbopairformer pytest openfold3/tests/test_training_full.py
 ```
 
 For full training, download the pre-processed PDB training set from AWS S3:
@@ -199,7 +230,7 @@ and add the same `settings` block to them:
 # Mini set
 pixi run -e openfold3 train-pdb-subset
 # Full PDB training set
-pixi run -e openfold3 run_openfold train --runner-yaml training.yaml --seed 42
+pixi run -e openfold3 run-current-turbopairformer run_openfold train --runner-yaml training.yaml --seed 42
 ```
 
 ### 4.2 Multi-GPU training
@@ -223,7 +254,7 @@ pl_trainer_args:
 Then launch training with:
 
 ```bash
-pixi run -e openfold3 run_openfold train --runner-yaml training.yaml --seed 42
+pixi run -e openfold3 run-current-turbopairformer run_openfold train --runner-yaml training.yaml --seed 42
 ```
 
 ## 5. Monitoring training
@@ -308,7 +339,7 @@ pixi run -e openfold3 python scripts/dev/convert_ckpt_to_ema_only.py <wandb_id>/
 This format of the checkpoint can be directly used with `run_openfold predict`
 
 ```bash
-pixi run -e openfold3 run_openfold predict \
+pixi run -e openfold3 run-current-turbopairformer run_openfold predict \
     --inference-ckpt-path inference.ckpt \
     ... # other options
 ```
@@ -319,7 +350,7 @@ Inputs the kernels do not support, such as the FP32 confidence head, fall back t
 PyTorch. On a Hopper GPU, this test fails if the kernels fall back or differ from PyTorch:
 
 ```bash
-pixi run -e openfold3 pytest openfold3/tests/test_kernels.py -k turbopairformer
+pixi run -e openfold3 run-current-turbopairformer pytest openfold3/tests/test_kernels.py -k turbopairformer
 ```
 
 To compare with cuEquivariance, which the environment also includes, set

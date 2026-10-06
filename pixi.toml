@@ -443,7 +443,8 @@ cuequivariance-ops-torch-cu13 = ">=0.8"
 # gemmi) need a newer libstdc++ than the system one PyPI torch loads first, and fail to
 # import after `import torch` on older distributions (e.g. Ubuntu 22.04). The conda CUDA
 # toolkit used for DeepSpeed's JIT builds and Triton's ptxas is pinned to torch's CUDA 12.8.
-# Kernels only engage on Hopper (H100/H200).
+# The locked 0.1.2 wheel is historical. Current-source tasks below use an isolated,
+# immutable source overlay and enable JIT for Hopper (H100/H200).
 # Re-lock this environment from a Linux machine: on other hosts pixi cannot build the
 # editable openfold3 metadata for a linux-only environment.
 
@@ -467,12 +468,14 @@ cuequivariance-ops-torch-cu13 = ">=0.8"
   env.TORCH_CUDA_ARCH_LIST = "8.0;8.6;9.0"
 
   [feature.turbopairformer.tasks]
+  run-current-turbopairformer = "python scripts/run_current_turbopairformer.py"
   # Enable the TurboPairFormer kernels in the setup-pdb-subset runner YAML and train it
   train-pdb-subset = """python -c 'import yaml; p = "datasets/train_pdb_subset.yaml"; \
   c = yaml.safe_load(open(p)); \
   c["model_update"]["custom"]["settings"]["memory"]["train"]["use_turbopairformer_triangle_kernels"] = True; \
   yaml.safe_dump(c, open(p, "w"), sort_keys=False)' \
-  && run_openfold train --runner-yaml datasets/train_pdb_subset.yaml --seed 42"""
+  && python scripts/run_current_turbopairformer.py run_openfold train \
+  --runner-yaml datasets/train_pdb_subset.yaml --seed 42"""
 
 
 # --- Openfold3 style MSA generation
