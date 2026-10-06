@@ -5,13 +5,15 @@
 Online-softmax forward plus mandatory single-reconstruction backward: each
 probability tile supplies dQ, dK, dV and dBias through fixed reductions without
 floating-point atomics. Sequence length, head count and batch prefix are runtime
-dimensions; D is selected from the compiled Hopper
-specializations. It is bitwise reproducible against itself, but intentionally
-does not claim bitwise alignment with the stock PyTorch floating-point path.
+dimensions; D is selected from the compiled Hopper specializations. By default,
+the forward saves an output rounding residual that backward uses to correct
+delta. It is bitwise reproducible against itself, but intentionally does not
+claim bitwise alignment with the stock PyTorch floating-point path.
 
 Contract: q is RAW (unscaled); the kernels apply 1/sqrt(D) internally.
-Internal layout [*, O, H, N, D]; the public return is contiguous
-[*, O, N, H, D] via transpose(-2,-3).contiguous().
+The public wrapper validates inputs, pads supported dimensions, packs Q/K/V,
+calls autograd, then removes padding. Q/K/V use [*, O, H, N, D]; the forward
+kernel writes [*, O, N, H, D] directly, and the wrapper returns it contiguously.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from turbopairformer.policy import (
     validate_attention_policy,
 )
 
-_PAD_HEAD_LANES = (16, 32, 64)  # any D pads up to the next lane
+_PAD_HEAD_LANES = (16, 32, 64)  # Facade storage lanes; public D <= 64.
 _CAPABILITY_CACHE: dict = {}
 _MAX_GRID_X = 2_147_483_647
 _MAX_GRID_YZ = 65_535
@@ -293,9 +295,9 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, d_output):  # noqa: D102
-        # Module-level lazy siblings: importing them binds no CUDA state (the
-        # extensions load on first use), and hoisting keeps the per-call
-        # backward free of import-machinery overhead.
+        # Import backward helpers when backward is first needed. These local
+        # imports reuse Python's module cache; their CUDA extensions load on
+        # the first kernel call.
         from turbopairformer.triangle_dq_dbias import (
             turbopairformer_reduce_broadcast_dbias,
             turbopairformer_triangle_sr_backward,
@@ -411,18 +413,14 @@ def turbo_attention(
     sequence = int(q.shape[-2])
     head_dim = int(q.shape[-1])
 
-    # Pad-to-lane contract, three independent axes.
-    #  * head dim: zero-pad to the next kernel lane {16,32,64}. Exact math:
-    #    padded q.k dot terms are +0.0, padded V columns produce zero output
-    #    columns that are sliced away; F.pad/slice are autograd-native so all
-    #    real-region values and gradients match an unpadded run.
-    #  * outer / sequence: padded to the tile quantum so the single
-    #    exact-tiles lane (no tail guards) serves every length. Padded key
-    #    columns carry a -inf mask; padded query rows are sliced away.
-    # Multiples of 8 run natively: the kernels zero-extend io_dim to the
-    # storage lane at staging time (half the global traffic of tensor-level
-    # padding, no q pre-scale rounding). Other dims pad to the next
-    # multiple of 8.
+    # Head dimensions divisible by 8 run without tensor-level padding; the
+    # kernels zero-extend them to a compiled storage lane during staging.
+    # Other dimensions are zero-padded to the next multiple of 8, with Q
+    # rescaled to preserve the intended softmax scale in exact arithmetic.
+    # That BF16 rescaling can introduce rounding. Autograd tracks the
+    # rescaling, padding and output slicing.
+    # Only sequence is padded to a multiple of 64 below; outer is unchanged.
+    # Padded keys receive -inf mask values and padded output rows are removed.
     if head_dim % 8 == 0:
         lane = head_dim
     else:
@@ -430,7 +428,8 @@ def turbo_attention(
     d_padding = lane - head_dim
     if d_padding:
         # The kernel's internal softmax scale is 1/sqrt(lane); pre-scaling q
-        # by sqrt(lane/d) makes the effective scale the correct 1/sqrt(d).
+        # by sqrt(lane/d) gives 1/sqrt(d) in exact arithmetic, before BF16
+        # rounding of the rescaled queries.
         q = q * float(lane / head_dim) ** 0.5
         q = torch.nn.functional.pad(q, (0, d_padding))
         k = torch.nn.functional.pad(k, (0, d_padding))

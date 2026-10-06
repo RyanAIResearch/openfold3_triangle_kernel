@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// TurboPairFormer fused dQ + dBias with bounded deterministic waves.
+// TurboPairFormer single-reconstruction backward and split dQ/dBias kernels.
+// The public facade uses SR to reconstruct each probability tile once for all
+// four gradients. For direct calls, the split kernels pair with the dK/dV
+// kernels in the dkdv source file. Both routes use bounded dBias workspace and
+// fixed reductions.
 //
-// Production leaf under the TurboPairFormer contract (one fixed reduction tree,
+// Split dQ/dBias leaf under the TurboPairFormer contract (one fixed reduction tree,
 // tolerance vs PyTorch, replay-bitwise vs self):
 //   * raw mma.sync + ldmatrix fragments instead of WMMA with FP32 shared
 //     round-trips and CTA-wide barriers per tile;
@@ -21,10 +25,13 @@
 // Fixed dBias tree: plane[leaf] = (w0 + w1) + (w2 + w3);
 // dbias = ((plane0 + plane1) + plane2) + ... in global leaf order. Wave
 // boundaries only spill/reload the FP32 root and do not change arithmetic.
+// Each leaf plane is rounded to BF16 when stored in the workspace; the
+// finalize fold accumulates those BF16 planes into the FP32 root.
 //
-// Layouts match turbopairformer_triangle_forward: q/k/v/dO [B,N,H,N,D] BF16,
-// mask [B,N,1,1,N] FP32 additive, bias [B,1,H,N,N] BF16, lse/delta
-// [B,N,H,N] FP32, out_dq [B,N,H,N,D] BF16, out_dbias [B,1,H,N,N] FP32.
+// Internal CUDA ABI layouts:
+// q/k/v/out_dq: [B,O,H,N,D] BF16; dO: [B,O,N,H,D] BF16.
+// mask: [B,O,1,1,N] FP32 additive; bias: [B,1,H,N,N] BF16 additive.
+// lse/delta: [B,O,H,N] FP32; out_dbias: [B,1,H,N,N] FP32.
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -943,12 +950,13 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_dq_dbias_wg_ker
 //     bit-identical to the two-pass dkdv by construction.
 //   * dBias keeps the exact workspace contract: per q-tile the two
 //     warpgroups fold (o0+o1)/(o2+o3) into FP32 tree tiles, combine, and
-//     single-write the leaf plane cells [q, kb-keys]; leaf-wave residency
+//     single-write BF16 leaf plane cells [q, kb-keys]; leaf-wave residency
 //     and the finalize kernel are untouched.
 //   * dQ is the one scattered gradient: per (kb, q-tile, slot) the dS tile
 //     is transposed through shared memory, multiplied by K, and written to
-//     a flat FP32 partial [kb][plane][q][D]; a fixed ascending-kb reduce
-//     folds partials into BF16 dQ.  delta = classic dO.O (v1 contract).
+//     a flat BF16 partial [kb][plane][q][D]; a fixed ascending-kb reduce
+//     accumulates these partials in FP32 and stores BF16 dQ.
+//     dS uses the caller-supplied FP32 delta.
 constexpr int kSrKeyBlock = 64;
 constexpr int kSrQueryTile = 32;
 constexpr int kSrTreeStride = kSrKeyBlock + 1;
