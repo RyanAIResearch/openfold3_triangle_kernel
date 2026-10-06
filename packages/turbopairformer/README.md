@@ -2,7 +2,7 @@
 
 TurboPairFormer provides GPU kernels with PyTorch autograd support for **Triangle Attention** and **Triangle Multiplicative Update** (TriMul) in protein folding models. It supports NVIDIA H100 and H200 GPUs.
 
-Developed collaboratively by researchers from **Stevens Institute of Technology**, **Lambda**, and **OpenFold**.
+Developed collaboratively by researchers from **Stevens Institute of Technology**, **Lambda**, and **OpenFold Consortium, Open Molecular Software Foundation**.
 
 **Paper:** [TurboPairFormer: Fast and Stable Protein Folding Model Training with an Optimized Triangle Attention Kernel](https://arxiv.org/abs/2610.05854) ([PDF](https://arxiv.org/pdf/2610.05854)).
 
@@ -132,7 +132,7 @@ print(output.shape)  # torch.Size([1, 128, 128, 128])
 
 - ¹ Stevens Institute of Technology
 - ² Lambda
-- ³ OpenFold
+- ³ OpenFold Consortium, Open Molecular Software Foundation
 - ⁺ Equal advising
 
 ## Citation
