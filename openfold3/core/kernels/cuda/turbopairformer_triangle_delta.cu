@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// TurboPairFormer delta precompute: delta[o,h,q] = sum_d dO[o,h,q,d]*O[o,h,q,d].
+// TurboPairFormer classic and shadow-residual delta precompute.
+// The default SR shadow route uses sum_d dO * (O + residual); the classic
+// entry point uses sum_d dO * O.
 //
-// One warp owns one row; each lane holds one product (D=32 == warp size) and
-// the sum runs down a fixed XOR-shuffle tree. Single writer per output
-// element, zero atomics, replay-deterministic by construction.
+// One warp owns one row. Each lane accumulates its strided dimensions in
+// ascending order; a fixed XOR-shuffle tree combines the lane sums. Single
+// writer per output element, zero atomics, replay-deterministic by construction.
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>

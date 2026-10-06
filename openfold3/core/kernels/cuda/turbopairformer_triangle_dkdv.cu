@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-// TurboPairFormer dK/dV with key-block ownership and runtime shape dispatch.
+// TurboPairFormer split-backward dK/dV with runtime shape dispatch.
+// These split kernels remain available to direct callers. The public facade
+// computes all four gradients with SR in turbopairformer_triangle_dq_dbias.cu.
 //
 // One CTA owns one (64-key block, head, outer) and its dK/dV accumulators
-// outright: dK[k]/dV[k] depend only on column k of dS, so key-block
-// ownership is contention-free by construction (zero atomics, no
-// workspace). The kernel streams query tiles in fixed ascending order,
+// outright: dK[k] and dV[k] use column k of dS and P, respectively, so key-block
+// ownership requires no atomics or dK/dV accumulation workspace. The optional
+// delta_true output uses a separate FP32 partial workspace. The kernel
+// streams query tiles in fixed ascending order,
 // recomputes S^T = K@Q^T directly in the [key, query] accumulator layout
 // (P^T and dS^T then follow elementwise from LSE/delta), and accumulates
-//   dV += P^T  @ dO   and   dK += dS^T @ Q, scaled once at the epilogue.
+//   dV += P^T @ dO   and   dK += dS^T @ Q.
+// Only dK is scaled by 1/sqrt(D) at the epilogue.
 //
-// Generality by construction: HeadDim templated {16,32,64}; heads and
-// sequence runtime (tail rows clamped for loads, contributions zeroed).
+// Internal storage lanes are HeadDim {16,32,64,128}; public facade limits
+// are enforced separately. Heads and sequence are runtime dimensions
+// (tail rows clamped for loads, contributions zeroed).
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
