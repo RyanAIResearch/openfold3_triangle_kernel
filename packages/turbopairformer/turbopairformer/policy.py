@@ -54,9 +54,11 @@ def canonical_flag_name(name: str) -> str:
 def read_execution_flag(name: str) -> str | None:
     """Resolve overrides or the production default without changing the environment.
 
-    Single-reconstruction backward and its forward rounding residual are on by
-    default. JIT stays off. Explicit canonical or legacy values take precedence.
-    The same effective values are recorded and frozen by DDP preflight.
+    Single-reconstruction backward is mandatory for the public attention API;
+    its forward rounding residual is enabled by default. JIT stays off. Explicit
+    canonical or legacy values take precedence. The attention policy rejects an
+    effective SR backward value other than 1 before any shape fallback. DDP
+    preflight records and freezes the same effective values.
     """
 
     canonical = canonical_flag_name(name)
@@ -120,6 +122,19 @@ def distributed_execution_flag(name: str) -> bool:
     return _STRICT_EXECUTION_ENVIRONMENT[canonical] == "1"
 
 
+def validate_attention_policy() -> None:
+    """Require single reconstruction whenever public attention is selected."""
+
+    validate_distributed_environment()
+    if not distributed_execution_flag(SR_BACKWARD):
+        raise RuntimeError(
+            "TurboPairFormer attention requires single-reconstruction backward; "
+            "TURBOPAIRFORMER_SR_BACKWARD (or legacy OPENFOLD3_SR_BACKWARD) "
+            "must be unset or 1. Setting it to 0 cannot select the old algorithm. "
+            "Use historical source or low-level reference kernels for ablations."
+        )
+
+
 __all__ = [
     "ALLOW_JIT",
     "EXECUTION_ENV_KEYS",
@@ -133,4 +148,5 @@ __all__ = [
     "distributed_execution_flag",
     "distributed_strict_enabled",
     "validate_distributed_environment",
+    "validate_attention_policy",
 ]

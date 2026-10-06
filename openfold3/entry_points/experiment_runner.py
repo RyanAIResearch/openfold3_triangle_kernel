@@ -55,8 +55,8 @@ from openfold3.core.utils.checkpoint_loading_utils import (
     load_checkpoint,
 )
 from openfold3.core.utils.distributed_contract import (
-    StableFoldKernelDDPCallback,
-    stablefold_aot_modules_from_config,
+    TurboPairFormerKernelDDPCallback,
+    turbopairformer_aot_modules_from_config,
 )
 from openfold3.core.utils.precision_utils import OF3DeepSpeedPrecision
 from openfold3.core.utils.script_utils import set_ulimits
@@ -460,28 +460,29 @@ class TrainingExperimentRunner(ExperimentRunner):
         # Currently used to sync the number of recycles across ranks
         self.model_config.update({"architecture": {"shared": {"sync_seed": self.seed}}})
 
-        stablefold_modules = stablefold_aot_modules_from_config(self.model_config)
-        if stablefold_modules:
+        turbopairformer_modules = turbopairformer_aot_modules_from_config(
+            self.model_config
+        )
+        if turbopairformer_modules:
             from openfold3.core.kernels.cuda.provider import (
                 TURBOPAIRFORMER,
                 active_provider,
             )
 
-            selected_provider = active_provider()
-            if self.is_distributed and selected_provider == TURBOPAIRFORMER:
+            if self.is_distributed and active_provider() == TURBOPAIRFORMER:
                 raise ValueError(
                     "The standalone TurboPairFormer pip provider currently supports "
                     "single-GPU OpenFold3 training only. Its host DDP integration "
-                    "has not been validated; use the separately certified intree "
+                    "has not been validated; use the separately qualified intree "
                     "distributed workflow."
                 )
         if (
             self.is_distributed
-            and stablefold_modules
+            and turbopairformer_modules
             and self.deepspeed_config_path is not None
         ):
             raise ValueError(
-                "StableFold kernel multi-GPU preflight is qualified with "
+                "TurboPairFormer kernel multi-GPU preflight is qualified with "
                 "AQLab DDPStrategy, not Lightning DeepSpeedStrategy/ZeRO. "
                 "The use_deepspeed_evo_attention operator flag is independent "
                 "of this strategy setting."
@@ -623,15 +624,17 @@ class TrainingExperimentRunner(ExperimentRunner):
 
         _callbacks.append(RankSpecificSeedCallback(base_seed=self.seed))
 
-        stablefold_modules = stablefold_aot_modules_from_config(self.model_config)
-        if self.is_distributed and stablefold_modules:
+        turbopairformer_modules = turbopairformer_aot_modules_from_config(
+            self.model_config
+        )
+        if self.is_distributed and turbopairformer_modules:
             _callbacks.append(
-                StableFoldKernelDDPCallback(
+                TurboPairFormerKernelDDPCallback(
                     expected_world_size=self.world_size,
                     expected_num_nodes=self.num_nodes,
                     expected_devices_per_node=self.num_gpus,
-                    expected_aot_modules=stablefold_modules,
-                    receipt_path=self.log_dir / "stablefold_kernel_ddp.json",
+                    expected_aot_modules=turbopairformer_modules,
+                    receipt_path=self.log_dir / "turbopairformer_kernel_ddp.json",
                 )
             )
 

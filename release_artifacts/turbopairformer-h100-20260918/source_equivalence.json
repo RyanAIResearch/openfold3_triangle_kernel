@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "baseline_commit": "a522470b500d040e5649e1deed1a7a9581438c62",
+  "build_commit": "84f96a31e96f27324a93df7e0485a8326a15fd40",
+  "runtime_source_files": 233,
+  "unexpected_logic_changes": [],
+  "method": "Normalize the three previous brand case variants and their paths, then require exact byte equality of runtime Python and CUDA source."
+}

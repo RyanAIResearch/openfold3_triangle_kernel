@@ -1,7 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2021 DeepMind Technologies Limited
-# Modified by RyanAIResearch in 2026 to integrate StableFold Triangle Attention.
+# Modified by RyanAIResearch in 2026 to integrate TurboPairFormer Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -115,6 +115,7 @@ class TriangleAttention(nn.Module):
         use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
+        use_protenix_triangle_attention: bool = False,
     ) -> torch.Tensor:
         """
         Args:
@@ -147,6 +148,26 @@ class TriangleAttention(nn.Module):
         Returns:
             [*, I, J, C_in] output tensor
         """
+
+        if use_protenix_triangle_attention:
+            if chunk_size is not None or inplace_safe:
+                raise ValueError(
+                    "Protenix Triangle Attention requires chunk_size=None and "
+                    "inplace_safe=False"
+                )
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
+                raise ValueError(
+                    "Protenix Triangle Attention is mutually exclusive with "
+                    "other attention backends"
+                )
+            use_cueq_triangle_kernels = False
 
         if use_stable_triangle_attention:
             if self.c_hidden not in (16, 32) or self.no_heads < 1:
@@ -222,6 +243,7 @@ class TriangleAttention(nn.Module):
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_protenix_triangle_attention=use_protenix_triangle_attention,
             )
 
         if not self.starting:

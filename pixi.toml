@@ -20,7 +20,7 @@
 #                     On Apple Silicon the same conda-forge pytorch always ships Metal (MPS)
 #                     support, so this environment is not CPU-only there.
 #   - openfold3-cuda12: TurboPairFormer package + current non-editable OpenFold3 host
-#   - openfold3-cuda12-intree: historical pinned H100 in-tree runtime
+#   - openfold3-cuda12-intree: pinned H100 in-tree TurboPairFormer binary
 #   - openfold3-cuda12-dev and openfold3-cuda13: editable development environments with cuda,
 #                                              deepspeed and cuequivariance
 #   - openfold3-cuda12-pypi and openfold3-cuda13-pypi: environments with python and cuda from conda,
@@ -34,7 +34,7 @@
 # (aarch64 and osx-64 are untested at the moment).
 # The table below describes those development environments; the non-editable
 # openfold3-cuda12 package environment requires Hopper CC 9.0 (H100/H200);
-# openfold3-cuda12-intree retains the historical H100-only runtime.
+# openfold3-cuda12-intree uses the separately qualified in-tree binary.
 # The development GPU versions work at least from NVIDIA Ampere to Blackwell microarchitectures
 # +---------------+------------+------------+------------+------------+
 # | Linux         | x64        | x64        | aarch64    | aarch64    |
@@ -140,7 +140,7 @@ openfold3-cuda12 = { no-default-feature = true, features = [
     "cuequivariance-cuda12",
     "turbopairformer-hopper",
 ] }
-# Retained only for the historical in-tree H100 distributed-training receipts.
+# The in-tree binary uses the same pinned artifact as main, with a separate ABI.
 openfold3-cuda12-intree = { no-default-feature = true, features = [
     "python",
     "openfold3-base",
@@ -149,7 +149,7 @@ openfold3-cuda12-intree = { no-default-feature = true, features = [
     "deepspeed",
     "deepspeed-build",
     "cuequivariance-cuda12",
-    "stablefold-h100",
+    "turbopairformer-h100",
 ] }
 openfold3-cuda13 = { no-default-feature = true, features = [
     "python",
@@ -510,12 +510,12 @@ benchmark-single-node.cmd = ["bash", "tools/run_backend_benchmark.sh"]
 plot-backend-comparison.cmd = ["python", "tools/plot_backend_comparison.py"]
 
 
-# --- StableFold H100 production-candidate workflow
+# --- TurboPairFormer in-tree pinned binary workflow
 
-[feature.stablefold-h100]
+[feature.turbopairformer-h100]
 platforms = ["linux-64-cuda12"]
 
-[feature.stablefold-h100.dependencies]
+[feature.turbopairformer-h100.dependencies]
 python = "3.14.*"
 pytorch-gpu = "==2.10.0"
 pytorch-lightning = "==2.6.1"
@@ -524,10 +524,10 @@ setuptools = "*"
 setuptools-scm = ">=8"
 wheel = "*"
 
-[feature.stablefold-h100.pypi-dependencies]
-openfold3 = { path = "release_artifacts/stablefold-h100-87ebe22d/openfold3-0.5.1.dev5860+g87ebe22da-cp314-cp314-linux_x86_64.whl" }
+[feature.turbopairformer-h100.pypi-dependencies]
+openfold3 = { path = "release_artifacts/turbopairformer-h100-20260918/openfold3-0.5.1.dev5924+g84f96a31e-cp314-cp314-linux_x86_64.whl" }
 
-[feature.stablefold-h100.activation]
+[feature.turbopairformer-h100.activation]
 env.OPENFOLD3_TRIANGLE_PROVIDER = "intree"
 env.PYTHONNOUSERSITE = "1"
 env.PYTHONDONTWRITEBYTECODE = "1"
@@ -535,7 +535,8 @@ env.OPENFOLD3_TRIANGLE_ALLOW_JIT = "0"
 env.OPENFOLD3_SR_BACKWARD = "1"
 env.OPENFOLD3_SR_SHADOW = "1"
 
-[feature.stablefold-h100.tasks]
+[feature.turbopairformer-h100.tasks]
+doctor-hopper.cmd = ["python", "-m", "tools.production_training", "doctor-hopper"]
 doctor-h100.cmd = ["python", "-m", "tools.production_training", "doctor-h100"]
 prepare-training-data.cmd = [
     "python",
@@ -569,7 +570,7 @@ purify-pdb-subset.cmd = [
     "scripts/datasets/purify_subset.py",
 ]
 setup-pdb-subset.depends-on = ["generate-pdb-subset", "download-pdb-subset"]
-setup-stablefold-h100.cmd = [
+setup-turbopairformer-h100.cmd = [
     "python",
     "-m",
     "tools.manage_attested_sm90_wheel",

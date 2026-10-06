@@ -3,7 +3,7 @@
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2025 NVIDIA Corporation
 # Copyright 2021 DeepMind Technologies Limited
-# Modified by RyanAIResearch in 2026 to integrate StableFold Triangle Attention.
+# Modified by RyanAIResearch in 2026 to integrate TurboPairFormer Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -84,7 +84,7 @@ if cueq_is_installed:
         return False
 
 
-_STABLEFOLD_FALLBACK_LOGGED: set = set()
+_TURBOPAIRFORMER_FALLBACK_LOGGED: set = set()
 
 DEFAULT_LMA_Q_CHUNK_SIZE = 1024
 DEFAULT_LMA_KV_CHUNK_SIZE = 4096
@@ -95,12 +95,14 @@ DEFAULT_LMA_KV_CHUNK_SIZE = 4096
 _ZERO_PAIR_BIAS_CACHE: dict = {}
 
 
-def _raise_if_strict_stablefold_fallback(reason: str, shape: tuple[int, ...]) -> None:
+def _raise_if_strict_turbopairformer_fallback(
+    reason: str, shape: tuple[int, ...]
+) -> None:
     from openfold3.core.kernels.cuda.provider import strict_fallback_enabled
 
     if strict_fallback_enabled():
         raise RuntimeError(
-            "StableFold distributed strict route rejected an Attention fallback "
+            "TurboPairFormer distributed strict route rejected an Attention fallback "
             f"at shape {shape}: {reason}"
         )
 
@@ -365,6 +367,7 @@ class Attention(nn.Module):
         lma_q_chunk_size: int = DEFAULT_LMA_Q_CHUNK_SIZE,
         lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
         use_high_precision: bool = False,
+        use_protenix_triangle_attention: bool = False,
     ) -> torch.Tensor:
         """
         Args:
@@ -384,8 +387,11 @@ class Attention(nn.Module):
             use_triton_triangle_kernels:
                 Whether to use Triton-based memory-efficient attention kernel.
                 Mutually exclusive with other kernel options.
+            use_protenix_triangle_attention:
+                Use Protenix for BF16 triangle attention, with host Q scaling.
+                FP32 sites retain stock attention. cuEq may still own TriMul.
             use_stable_triangle_attention:
-                Whether to use the default-off, fixed-tree Hopper Triangle
+                Whether to use the default-off, fixed-tree H100 Triangle
                 Attention backend. Mutually exclusive with every other
                 attention implementation and high-precision attention.
             use_lma:
@@ -408,11 +414,32 @@ class Attention(nn.Module):
                 "lma_kv_chunk_size must be provided"
             )
 
-        # Product precedence: StableFold owns attention whenever its flag is
+        if use_protenix_triangle_attention:
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                    use_high_precision,
+                )
+            ):
+                raise ValueError(
+                    "use_protenix_triangle_attention is mutually exclusive with "
+                    "other attention backends and high-precision attention"
+                )
+            # cuEq still owns TriMul; the Protenix request owns this attention
+            # site, including its FP32 stock path, so cuEq cannot take over.
+            use_cueq_triangle_kernels = False
+
+        # Product precedence: TurboPairFormer owns attention whenever its flag is
         # on; a simultaneous cuEq/Triton request (the "cuEq keeps trimul"
         # deployment) is simply ignored here rather than treated as a
         # conflict. Genuinely incompatible modes still raise.
         if use_stable_triangle_attention:
+            from openfold3.core.kernels.cuda.provider import validate_attention_policy
+
+            validate_attention_policy()
             use_cueq_triangle_kernels = False
             use_triton_triangle_kernels = False
         if use_stable_triangle_attention and any(
@@ -460,7 +487,7 @@ class Attention(nn.Module):
 
         if use_stable_triangle_attention:
             # Blanket-coverage soft gate, mirroring the cuEq fallback
-            # contract: shapes outside the StableFold facade fall back to the
+            # contract: shapes outside the TurboPairFormer facade fall back to the
             # stock path (identical math, never a silent wrong result).
             # Mask-only sites (e.g. MSA column attention) get the cached zero
             # pair bias so the two-bias facade contract holds.
@@ -488,7 +515,7 @@ class Attention(nn.Module):
             if q_x.is_cuda and torch.cuda.get_device_capability(q_x.device) != (9, 0):
                 blanket_reasons.append("requires Hopper compute capability 9.0")
             if blanket_reasons:
-                _raise_if_strict_stablefold_fallback(
+                _raise_if_strict_turbopairformer_fallback(
                     "; ".join(blanket_reasons), tuple(q_x.shape)
                 )
                 use_stable_triangle_attention = False
@@ -513,24 +540,35 @@ class Attention(nn.Module):
             ),
         )
 
-        if use_stable_triangle_attention:
+        if (
+            use_protenix_triangle_attention
+            and q.dtype != torch.float32
+            and q.shape[-2] > 16
+        ):
+            if len(biases) != 2:
+                raise ValueError(
+                    "Protenix Triangle Attention requires mask and pair biases"
+                )
+            # This optional provider is loaded only by an explicit BF16 request.
+            # As in Protenix, sequences of at most 16 use stock attention.
+            # _prep_qkv has already applied the scale exactly once. Provider
+            # failures propagate instead of silently selecting another backend.
+            from openfold3.core.kernels.protenix import attention_scaled
+
+            o = attention_scaled(q, k, v, biases[0], biases[1])
+        elif use_stable_triangle_attention:
             # Keep CPU imports and every default/official backend independent of
             # the research extension. Explicit selection is fail-closed: import,
             # build, support, launch, and backward failures propagate unchanged.
             # The facade validates (memoized) and raises on unsupported cases,
             # so no separate pre-check runs on this hot path.
-            # The serving implementation is the `stablefold` pip package when it is
-            # installed and the in-tree kernel copy otherwise; both build the
-            # same .cu sources.  See core/kernels/cuda/provider.py.
-            from openfold3.core.kernels.cuda.provider import (
-                triangle_attention_facade,
-            )
+            from openfold3.core.kernels.cuda.provider import triangle_attention_facade
 
-            is_stablefold_supported, stablefold_triangle_attention = (
+            is_turbopairformer_supported, turbopairformer_triangle_attention = (
                 triangle_attention_facade()
             )
 
-            # Deterministic StableFold backend: raw q, internal scaling,
+            # Deterministic TurboPairFormer backend: raw q, internal scaling,
             # replay-bitwise vs itself, zero FP atomics. Triangle-site shapes
             # always validate; blanket-coverage sites with residual shape
             # mismatches fall back to stock math (correct, logged once).
@@ -540,35 +578,35 @@ class Attention(nn.Module):
             orig_dtype = q.dtype
             if orig_dtype != torch.bfloat16:
                 q_s, k_s, v_s = (
-                    q.to(torch.bfloat16), k.to(torch.bfloat16),
+                    q.to(torch.bfloat16),
+                    k.to(torch.bfloat16),
                     v.to(torch.bfloat16),
                 )
                 bias_s = [biases[0], biases[1].to(torch.bfloat16)]
             else:
                 q_s, k_s, v_s = q, k, v
                 bias_s = biases
-            supported, reason = is_stablefold_supported(
+            supported, reason = is_turbopairformer_supported(
                 q_s, k_s, v_s, bias_s[0], bias_s[1]
             )
             if supported:
-                o = stablefold_triangle_attention(
+                o = turbopairformer_triangle_attention(
                     q_s, k_s, v_s, bias_s[0], bias_s[1]
                 )
                 if orig_dtype != torch.bfloat16:
                     o = o.to(orig_dtype)
             else:
-                _raise_if_strict_stablefold_fallback(reason, tuple(q.shape))
-                global _STABLEFOLD_FALLBACK_LOGGED
+                _raise_if_strict_turbopairformer_fallback(reason, tuple(q.shape))
+                global _TURBOPAIRFORMER_FALLBACK_LOGGED
                 key = (reason, tuple(q.shape))
-                if key not in _STABLEFOLD_FALLBACK_LOGGED:
-                    _STABLEFOLD_FALLBACK_LOGGED.add(key)
+                if key not in _TURBOPAIRFORMER_FALLBACK_LOGGED:
+                    _TURBOPAIRFORMER_FALLBACK_LOGGED.add(key)
                     logging.getLogger(__name__).warning(
-                        "stablefold fallback to stock at shape %s: %s",
-                        tuple(q.shape), reason,
+                        "turbopairformer fallback to stock at shape %s: %s",
+                        tuple(q.shape),
+                        reason,
                     )
-                o = _attention(
-                    q * (1.0 / math.sqrt(self.c_hidden)), k, v, biases
-                )
+                o = _attention(q * (1.0 / math.sqrt(self.c_hidden)), k, v, biases)
                 o = o.transpose(-2, -3)
         # cuequivariance kernel takes precedence over use_deepspeed_evo_attention.
         # NOTE: this chain must stay exclusive with the stable branch above —

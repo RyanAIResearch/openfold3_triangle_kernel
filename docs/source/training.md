@@ -202,13 +202,23 @@ paths on all nodes. Apart from launching one process per GPU, OpenFold3 keeps
 the same AQLab training, optimizer, EMA, checkpoint, logging, and data-sampling
 semantics used by the single-node configuration.
 
-#### StableFold kernel preflight for DDP
+#### TurboPairFormer kernel preflight for DDP
 
-StableFold adds a kernel-only preflight to AQLab's ordinary DDP path; it does
+This describes the in-tree `main` runtime with Conda PyTorch 2.10.0 and CUDA
+12.9. Its public Attention facade always uses single-reconstruction backward.
+`OPENFOLD3_SR_BACKWARD` and `OPENFOLD3_SR_SHADOW` default to `1` when unset;
+explicit `OPENFOLD3_SR_BACKWARD=0` is rejected. Shadow may be disabled for local
+accuracy ablations while retaining SR, but DDP requires it to remain enabled.
+
+The separately pinned September 18 wheel has not been rebuilt for this source
+change. Its artifact identity and completed validation remain recorded in
+`release_artifacts/turbopairformer-h100-20260918/`.
+
+TurboPairFormer adds a kernel-only preflight to AQLab's ordinary DDP path; it does
 not replace the DDP strategy or alter gradients, EMA, losses, checkpoints, or
 logging. The production target is one process per full NVIDIA H100 GPU, with
-the same clean AOT wheel installed on every node and these execution flags set
-identically:
+the same clean AOT wheel installed on every node. Retain these explicit settings
+for compatibility with the pinned wheel:
 
 ```bash
 export OPENFOLD3_TRIANGLE_ALLOW_JIT=0
@@ -216,23 +226,26 @@ export OPENFOLD3_SR_BACKWARD=1
 export OPENFOLD3_SR_SHADOW=1
 ```
 
-Before the first model forward, every rank preloads the selected StableFold AOT
-modules and exchanges its package identity, binary hashes, ABI, GPU identity,
-and StableFold execution flags. A mismatch fails the kernel preflight on every
-rank, and rank zero writes ``<log_dir>/stablefold_kernel_ddp.json`` plus a
+The frozen `tools/aot_numeric_smoke.py` validator and legacy SR-disabled
+comparison arms in `scripts/benchmarks/sr/` remain scoped to their recorded
+historical runtimes; their two-pass labels do not describe the current facade.
+
+Before the first model forward, every rank preloads the selected TurboPairFormer
+AOT modules and exchanges its package identity, binary hashes, ABI, GPU identity,
+and TurboPairFormer execution flags. A mismatch fails the kernel preflight on
+every rank, and rank zero writes ``<log_dir>/turbopairformer_kernel_ddp.json`` plus a
 SHA-256 sidecar. Once armed, an unexpected Attention fallback is an error and
 TriMul permits only its documented stock route for sequence lengths at or below
 100.
 
 The operator flag ``use_deepspeed_evo_attention`` is not the same as
-Lightning's DeepSpeed/ZeRO strategy. StableFold's kernel preflight is currently
-qualified with AQLab's standard DDP strategy on a real single-node two-H100
-NCCL run through validation, checkpointing, and resume. Eight-GPU and real
-multi-node qualification remain pending hardware; all other backends retain
+Lightning's DeepSpeed/ZeRO strategy. Full training, checkpoint/resume and DDP
+qualification of the renamed binary remain pending. Launch examples alone do
+not establish two-GPU, eight-GPU or multi-node validation. Other backends retain
 the strategy behavior selected by the unmodified AQLab runner.
 
 For a concise source-to-launch example and an explicit selector for native
-AQLab/OpenFold3 stock PyTorch, cuEquivariance, StableFold, and DeepSpeed Evo
+AQLab/OpenFold3 stock PyTorch, cuEquivariance, TurboPairFormer, and DeepSpeed Evo
 attention, see
 {doc}`bare_metal_distributed_quickstart`.
 

@@ -144,11 +144,11 @@ def _providers(names: list[str]) -> dict[str, Callable[..., Any]]:
 
             resolved[name] = _kernel(triangle_attention)
         elif name == "intree":
-            from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
-                stablefold_triangle_attention,
+            from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+                turbopairformer_triangle_attention,
             )
 
-            resolved[name] = _kernel(stablefold_triangle_attention)
+            resolved[name] = _kernel(turbopairformer_triangle_attention)
         else:
             raise SystemExit(f"unknown provider: {name}")
     return resolved

@@ -32,6 +32,7 @@ def test_default_policy_stores_residual_without_mutating_environment():
     assert policy.distributed_execution_flag(policy.SR_BACKWARD)
     assert policy.distributed_execution_flag(policy.SR_SHADOW)
     assert not policy.distributed_execution_flag(policy.ALLOW_JIT)
+    policy.validate_attention_policy()
     assert not runtime._development_jit_enabled()
     assert dict(os.environ) == environment
 
@@ -68,6 +69,56 @@ def test_explicit_zero_overrides_default_for_every_flag_spelling(
         assert not runtime._development_jit_enabled()
 
 
+@pytest.mark.parametrize("name", (policy.SR_BACKWARD, "OPENFOLD3_SR_BACKWARD"))
+@pytest.mark.parametrize("value", ("0", "", "false", "2"))
+def test_attention_policy_rejects_every_non_one_sr_value(name, value, monkeypatch):
+    monkeypatch.setenv(name, value)
+
+    assert policy.read_execution_flag(policy.SR_BACKWARD) == value
+    with pytest.raises(RuntimeError, match="single-reconstruction"):
+        policy.validate_attention_policy()
+
+
+@pytest.mark.parametrize("name", (policy.SR_SHADOW, "OPENFOLD3_SR_SHADOW"))
+def test_attention_policy_allows_shadow_ablation_with_sr_enabled(name, monkeypatch):
+    monkeypatch.setenv(name, "0")
+
+    policy.validate_attention_policy()
+    assert policy.distributed_execution_flag(policy.SR_BACKWARD)
+    assert not policy.distributed_execution_flag(policy.SR_SHADOW)
+
+
+@pytest.mark.parametrize("canonical", ("0", "1"))
+def test_attention_policy_uses_canonical_sr_precedence(canonical, monkeypatch):
+    monkeypatch.setenv(policy.SR_BACKWARD, canonical)
+    monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1" if canonical == "0" else "0")
+
+    if canonical == "1":
+        policy.validate_attention_policy()
+    else:
+        with pytest.raises(RuntimeError, match="single-reconstruction"):
+            policy.validate_attention_policy()
+
+
+@pytest.mark.parametrize("canonical", policy.EXECUTION_ENV_KEYS)
+def test_attention_policy_rejects_frozen_environment_drift(canonical, monkeypatch):
+    policy._set_distributed_strict(True, policy.execution_environment())
+    monkeypatch.setenv(canonical, "1" if canonical == policy.ALLOW_JIT else "0")
+
+    with pytest.raises(policy.DistributedContractError, match="environment changed"):
+        policy.validate_attention_policy()
+
+
+def test_attention_policy_checks_environment_before_frozen_sr_rejection(monkeypatch):
+    monkeypatch.setenv(policy.SR_BACKWARD, "0")
+    policy._set_distributed_strict(True, policy.execution_environment())
+    monkeypatch.setenv(policy.SR_BACKWARD, "1")
+
+    # The frozen zero would fail the SR check, but drift must be reported first.
+    with pytest.raises(policy.DistributedContractError, match="environment changed"):
+        policy.validate_attention_policy()
+
+
 @pytest.mark.parametrize("spelling_index", (0, 1))
 def test_strict_default_snapshot_matches_explicit_residual_enablement(
     spelling_index, monkeypatch
@@ -84,6 +135,7 @@ def test_strict_default_snapshot_matches_explicit_residual_enablement(
         monkeypatch.setenv(name, "1")
     assert policy.execution_environment() == snapshot
     policy.validate_distributed_environment()
+    policy.validate_attention_policy()
     assert policy.distributed_execution_flag(policy.SR_BACKWARD)
     assert policy.distributed_execution_flag(policy.SR_SHADOW)
 
@@ -91,6 +143,7 @@ def test_strict_default_snapshot_matches_explicit_residual_enablement(
         monkeypatch.delenv(name)
     assert policy.execution_environment() == snapshot
     policy.validate_distributed_environment()
+    policy.validate_attention_policy()
 
 
 @pytest.mark.parametrize(

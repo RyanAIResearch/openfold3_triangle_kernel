@@ -26,8 +26,9 @@ print(attention_output.shape)  # torch.Size([1, 128, 128, 4, 32])
 ```
 
 All positions in this synthetic example are valid, so the mask is omitted.
-Single-reconstruction backward and the saved forward rounding residual are
-enabled by default; no environment switches are needed for this example.
+Single-reconstruction backward is the fixed public method. The saved forward
+rounding residual is enabled by default; no environment switches are needed
+for this example.
 For TriMul, a standalone example needs only a BF16 pair tensor:
 
 ```python
@@ -221,16 +222,56 @@ Source-only development requires the explicit `TURBOPAIRFORMER_SOURCE_ONLY=1` bu
 opt-in and `TURBOPAIRFORMER_ALLOW_JIT=1` runtime opt-in. Editable AOT builds write an
 ignored `_build_manifest.local.json`; wheels embed `_build_manifest.json`.
 
-The defaults are `TURBOPAIRFORMER_SR_BACKWARD=1` (single-reconstruction backward),
-`TURBOPAIRFORMER_SR_SHADOW=1` (save and use the forward rounding residual), and
-`TURBOPAIRFORMER_ALLOW_JIT=0`. Advanced users may explicitly override them.
-The corresponding `OPENFOLD3_*` aliases remain accepted; canonical
-`TURBOPAIRFORMER_*` values take precedence, including explicit `0` values.
+From the repository root, in the pinned Python/Torch environment with a CUDA
+toolkit available, install the current source and select the Hopper JIT target:
+
+```bash
+TURBOPAIRFORMER_SOURCE_ONLY=1 python -m pip install --no-build-isolation --no-deps -e packages/turbopairformer
+export TURBOPAIRFORMER_ALLOW_JIT=1
+export TORCH_CUDA_ARCH_LIST=9.0a
+```
+
+Use a fresh source checkout without an editable AOT manifest or old extension
+binaries. The package builds its CUDA extensions when the first GPU call needs
+them. This development install does not replace a published release artifact.
+
+Public Triangle Attention always uses single-reconstruction backward.
+`TURBOPAIRFORMER_SR_BACKWARD` must be unset or `1`; an effective value of `0`
+or any other value raises before shape validation or kernel execution.
+`TURBOPAIRFORMER_SR_SHADOW=1` saves and uses the forward rounding residual by
+default. Setting shadow to `0` changes delta computation while retaining the
+same single-reconstruction backward. `TURBOPAIRFORMER_ALLOW_JIT=0` remains the
+default. The corresponding `OPENFOLD3_*` aliases remain accepted; canonical
+`TURBOPAIRFORMER_*` values take precedence. Host integrations can call
+`turbopairformer.policy.validate_attention_policy()` before their support check
+to reject an invalid SR setting before falling back to another backend.
 
 Version 0.1.1 uses `turbopairformer_*` C++ exports, Python wrappers, AOT module
 keys and extension names. Public Torch custom operations use the
 `turbopairformer` namespace. Precompiled extensions must come from the same
 wheel as the Python package.
+
+## Current source synchronization
+
+The package CUDA sources are byte-identical to the mapped files in
+`openfold3/core/kernels/cuda/` at main commit
+`ba65b02c5b77e4eec061c215c9d3164ef411222a`. This includes the SR register-lifetime
+change from `c35e7d14` and the mandatory-SR public policy from `ba65b02c`.
+The Python facade retains the standalone optional-mask API, canonical environment
+names, legacy aliases and AOT loader. This source synchronization does not update
+published wheels, release versions or historical validation receipts.
+
+| Package CUDA file | Main CUDA file | SHA256 |
+| --- | --- | --- |
+| `triangle_forward.cu` | `turbopairformer_triangle_forward.cu` | `8659b6b9814e852d7729419c1b050434af0b6369b6dabb73dbf84b9b31674119` |
+| `triangle_delta.cu` | `turbopairformer_triangle_delta.cu` | `69ef59706d33e7de5928abdabe0c9439db359fd81f0bd7f10baefc68a2bdd759` |
+| `triangle_dkdv.cu` | `turbopairformer_triangle_dkdv.cu` | `1f4cebb0fd3aa234b9f41318810dcffaadc6f314c706ae29b2a67a753f9aee59` |
+| `triangle_dq_dbias.cu` | `turbopairformer_triangle_dq_dbias.cu` | `111f2dc334600cb0118eaac87138241596d3bed10d18722164852e58d11722bc` |
+| `trimul_cuda.cu` | `turbopairformer_trimul_cuda.cu` | `8962ca3513538070e5fb21259bd57a38a586641123aadfda40c62c44f9c9aa03` |
+
+The retained low-level split-backward functions support reference tests; the
+public attention facade cannot select them. New builds require their own CUDA
+and installed-wheel qualification.
 
 ## Host integration and scope
 

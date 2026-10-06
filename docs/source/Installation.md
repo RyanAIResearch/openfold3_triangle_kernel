@@ -28,10 +28,11 @@ curl -fsSL https://pixi.sh/install.sh | sh
 # Optionally, you can also install shell completions for pixi.
 ```
 
-Next, clone the OpenFold3 repository:
+Next, clone this fork's `main` branch for the TurboPairFormer environment:
 
 ```shell
-git clone git@github.com:aqlaboratory/openfold-3.git
+git clone --branch main --single-branch \
+  https://github.com/RyanAIResearch/openfold3_triangle_kernel.git openfold-3
 cd openfold-3
 ```
 
@@ -49,18 +50,28 @@ Available pixi environments:
 | Environment        | Supported platforms                                | Description                                                          |
 | ------------------ | -------------------------------------------------- | -------------------------------------------------------------------- |
 | `openfold3-base`   | `linux-64`, `linux-aarch64`, `osx-64`, `osx-arm64` | Environment without CUDA or ROCm. CPU-only on Linux; on Apple Silicon the same pytorch build also provides MPS acceleration. |
-| `openfold3-cuda12` | `linux-64` | TurboPairFormer wheel, PyPI Torch 2.10/CUDA 12.8, and non-editable current OpenFold3 host; Hopper, single-GPU. |
-| `openfold3-cuda12-intree` | `linux-64` | Historical pinned in-tree StableFold H100 runtime, including its qualified DDP workflow. |
+| `openfold3-cuda12` | `linux-64` | Standalone released package with PyPI Torch 2.10/CUDA 12.8; single-GPU Hopper. |
+| `openfold3-cuda12-intree` | `linux-64`                                         | Pinned, non-editable H100 CUDA 12 environment for the TurboPairFormer production workflow. |
 | `openfold3-cuda12-dev` | `linux-64`, `linux-aarch64`                    | Editable general NVIDIA CUDA 12 development and test environment.    |
 | `openfold3-cuda13` | `linux-64`, `linux-aarch64`                        | NVIDIA GPU environment using CUDA 13.                                |
 | `openfold3-rocm7`  | `linux-64`                                         | AMD GPU environment using ROCm 7.                                    |
 
-Choose the environment that matches your system. Use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12` for TurboPairFormer on Hopper or `openfold3-cuda12-intree` for the historical in-tree H100 runtime, `openfold3-cuda12-dev` or `openfold3-cuda13` for general NVIDIA GPU development, and `openfold3-rocm7` for AMD ROCm systems. See the {doc}`TurboPairFormer package guide <turbopairformer_pip_quickstart>` for the current single-GPU package workflow. The historical in-tree H100 workflow is documented in the {doc}`Pixi-first bare-metal training quickstart <bare_metal_distributed_quickstart>`.
+Choose the environment that matches your system. Use `openfold3-base` for non-CUDA/ROCm installations (including Apple Silicon), `openfold3-cuda12-intree` for the precompiled OpenFold3 wheel with TurboPairFormer H100 kernels and direct AQLab training-launch passthroughs, `openfold3-cuda12-dev` or `openfold3-cuda13` for general NVIDIA GPU development, and `openfold3-rocm7` for AMD ROCm systems. The complete build-free H100 workflow is documented in the {doc}`Pixi-first bare-metal training quickstart <bare_metal_distributed_quickstart>`.
+
+The `main` production environment pins an OpenFold3 binary, Conda PyTorch
+2.10.0, CUDA 12.9 and CPython 3.14. The binary's build identity and completed
+checks are recorded in `release_artifacts/turbopairformer-h100-20260918/`.
+Namespace migration requires new artifact validation; full training and
+multi-GPU qualification remain pending. The standalone TurboPairFormer pip
+package has a separate release and runtime ABI.
 
 For more information, including rationale, tips and tricks, see [Modern Conda Environments with Pixi](./modern-conda-environments-with-pixi.md).
 
 
 ### Installation via pip
+
+The following generic pip instructions describe upstream OpenFold3. Use the
+Pixi production workflow above for this fork's pinned H100 runtime.
 
 0. [Optional] Create a fresh environment with python. Python versions 3.10 - 3.13 are supported
 
@@ -266,3 +277,5 @@ Note: To build deepspeed, it may be necessary to include the environment `$LD_LI
 export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 ```
+
+For the standalone package source and release workflows, see the {doc}`TurboPairFormer package guide <turbopairformer_pip_quickstart>`. The pinned binaries precede the current source changes; source installation is described in `packages/turbopairformer/DEVELOPMENT.md`.

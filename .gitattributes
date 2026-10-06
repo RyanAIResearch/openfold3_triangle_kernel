@@ -1,2 +1,4 @@
 # SCM syntax highlighting & preventing 3-way merges
 pixi.lock merge=binary linguist-language=YAML linguist-generated=true
+# Preserve the exact upstream license bytes recorded in PROVENANCE.json.
+openfold3/core/kernels/protenix/LICENSE -whitespace

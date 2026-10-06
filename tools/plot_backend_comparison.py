@@ -34,7 +34,19 @@ SUMMARY_COLUMNS = (
     "speedup_vs_baseline",
 )
 
-BACKEND_ORDER = ("aqlab", "triton", "cueq", "stablefold", "deepspeed-evo")
+BACKEND_ORDER = (
+    "aqlab",
+    "triton",
+    "cueq",
+    "turbopairformer",
+    "protenix",
+    "deepspeed-evo",
+)
+# Keep machine-readable backend keys distinct from their display labels.
+BACKEND_LABELS = {
+    "turbopairformer": "TurboPairFormer",
+    "protenix": "Protenix Attention + cuEq TriMul",
+}
 MATCHED_PROTOCOL_FIELDS = (
     "seed",
     "num_workers_per_rank",
@@ -149,7 +161,8 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
     step_seconds = [float(summary["steady_step_wall_seconds"]) for summary in summaries]
     speedups = [float(summary["speedup_vs_baseline"]) for summary in summaries]
     figure, axis = plt.subplots(figsize=(8, 4.8))
-    bars = axis.bar(names, step_seconds, color="#4472C4")
+    labels = [BACKEND_LABELS.get(name, name) for name in names]
+    bars = axis.bar(labels, step_seconds, color="#4472C4")
     axis.set_ylabel("Steady-state wall seconds / training step")
     axis.set_title(f"OpenFold3 backend training time ({topology_label})")
     axis.grid(axis="y", alpha=0.25)
@@ -173,7 +186,7 @@ def build_report(results_root: Path, output_dir: Path, baseline: str) -> dict[st
             marker="o",
             markersize=2.5,
             linewidth=1.3,
-            label=backend,
+            label=BACKEND_LABELS.get(backend, backend),
         )
     axis.set_xlabel("Optimizer training step")
     axis.set_ylabel("Training loss")

@@ -2,9 +2,10 @@
 
 """TurboPairFormer Triangle Attention facade — deterministic production path.
 
-Online-softmax forward plus a zero-atomics recompute backward
-(delta -> dK/dV -> dQ/dBias). Sequence length, head count, and batch
-prefix are runtime dimensions; D is selected from the compiled Hopper
+Online-softmax forward plus mandatory single-reconstruction backward: each
+probability tile supplies dQ, dK, dV and dBias through fixed reductions without
+floating-point atomics. Sequence length, head count and batch prefix are runtime
+dimensions; D is selected from the compiled Hopper
 specializations. It is bitwise reproducible against itself, but intentionally
 does not claim bitwise alignment with the stock PyTorch floating-point path.
 
@@ -21,6 +22,7 @@ import torch
 
 from turbopairformer.policy import (
     distributed_execution_flag,
+    validate_attention_policy,
 )
 
 _PAD_HEAD_LANES = (16, 32, 64)  # any D pads up to the next lane
@@ -242,7 +244,7 @@ class _PackQKV(torch.autograd.Function):
 
 class _TurboPairFormerTriangleAttention(torch.autograd.Function):
     @staticmethod
-    def forward(
+    def forward(  # noqa: D102
         ctx,
         q,
         k,
@@ -264,12 +266,7 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
             )
             lse = torch.empty(q.shape[:-1], device=q.device, dtype=torch.float32)
             shadow = None
-            use_sr = (
-                distributed_execution_flag("TURBOPAIRFORMER_SR_BACKWARD")
-                and q.shape[-2] % 64 == 0
-                and q.shape[-1] <= 64
-            )
-            if use_sr and distributed_execution_flag("TURBOPAIRFORMER_SR_SHADOW"):
+            if distributed_execution_flag("TURBOPAIRFORMER_SR_SHADOW"):
                 # SR shadow lane: the forward also emits the BF16 rounding
                 # residual of the output, the compressed state that lets
                 # the backward evaluate a probability-consistent delta.
@@ -286,10 +283,8 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
         else:
             ctx.save_for_backward(q, k, v, mask, expanded_bias, out, lse, shadow)
         ctx.has_shadow = shadow is not None
-        # Freeze the forward execution mode for this autograd context.  Reading
-        # the environment again in backward can otherwise select a different
-        # numerical path on one distributed rank.
-        ctx.use_sr = use_sr
+        # The saved shadow fixes the delta path for this autograd context;
+        # backward never rereads the environment to choose numerical behavior.
         ctx.sequence = int(sequence)
         ctx.target_prefix = tuple(int(value) for value in target_prefix)
         ctx.bias_prefix = tuple(int(value) for value in bias_prefix)
@@ -297,26 +292,22 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
         return out
 
     @staticmethod
-    def backward(ctx, d_output):
+    def backward(ctx, d_output):  # noqa: D102
         # Module-level lazy siblings: importing them binds no CUDA state (the
         # extensions load on first use), and hoisting keeps the per-call
         # backward free of import-machinery overhead.
-        from turbopairformer.triangle_dkdv import (
-            turbopairformer_triangle_dkdv as dkdv,
-        )
         from turbopairformer.triangle_dq_dbias import (
             turbopairformer_reduce_broadcast_dbias,
-            turbopairformer_triangle_dq_dbias,
+            turbopairformer_triangle_sr_backward,
         )
 
         saved = ctx.saved_tensors
         q, k, v, mask, expanded_bias, out, lse = saved[:7]
         shadow = saved[7] if getattr(ctx, "has_shadow", False) else None
-        use_sr = bool(ctx.use_sr)
         with torch.cuda.device(q.device):
             d_output = d_output.contiguous()
             delta = torch.empty_like(lse)
-            if use_sr and shadow is not None:
+            if shadow is not None:
                 _delta_extension().turbopairformer_triangle_delta_shadow_out(
                     d_output, out, shadow, delta
                 )
@@ -324,56 +315,10 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
                 _delta_extension().turbopairformer_triangle_delta_out(
                     d_output, out, delta
                 )
-            if use_sr:
-                # Experimental single-reconstruction lane: one kernel
-                # reconstructs P/dS and produces all four gradients with
-                # the classic delta everywhere (v1 perf-experiment
-                # contract; dQ/dBias forgo the delta_true accuracy fix).
-                from turbopairformer.triangle_dq_dbias import (
-                    turbopairformer_triangle_sr_backward,
-                )
-
-                d_q, d_k, d_v, per_batch_dbias = turbopairformer_triangle_sr_backward(
-                    q, k, v, d_output, lse, delta, mask, expanded_bias
-                )
-                if ctx.bias_prefix == ctx.target_prefix:
-                    d_bias = per_batch_dbias.reshape(ctx.bias_shape).to(
-                        dtype=torch.bfloat16
-                    )
-                else:
-                    d_bias = turbopairformer_reduce_broadcast_dbias(
-                        per_batch_dbias,
-                        target_prefix=ctx.target_prefix,
-                        bias_prefix=ctx.bias_prefix,
-                    )
-                if tuple(d_bias.shape) != ctx.bias_shape:
-                    raise RuntimeError("fixed dBias reduction returned the wrong shape")
-                return d_q, d_k, d_v, None, None, d_bias, None, None
-            # Keep probability reconstruction on the same raw-Q/post-scale
-            # arithmetic contract as the TurboPairFormer forward. The older resident
-            # fast lane reconstructs scores using an AQLab-style pre-scaled BF16 K
-            # path, so it is intentionally not part of the production facade.
-            # Every head lane recomputes the probability-weighted row scalar
-            # delta_true = sum_k P_k dP_k in the dK/dV pass and feeds it to
-            # dQ/dBias. The implementation omits division by the recomputed
-            # probability sum under the measured Z ~= 1 contract; this removes
-            # the coherent row-constant
-            # dQ bias of delta = dO . O_bf16 (dQ rel-L2 drops to the
-            # perfect-delta oracle bound) and improves dBias as well, while
-            # dK/dV bits stay identical to the classical path.
-            d_k, d_v, delta_true = dkdv(
-                q,
-                k,
-                v,
-                d_output,
-                lse,
-                delta,
-                mask,
-                expanded_bias,
-                emit_delta_true=True,
-            )
-            d_q, per_batch_dbias = turbopairformer_triangle_dq_dbias(
-                q, k, v, d_output, lse, delta_true, mask, expanded_bias
+            # One reconstruction of each P/dS tile supplies all four
+            # gradients. Shadow changes delta accuracy, not reconstruction count.
+            d_q, d_k, d_v, per_batch_dbias = turbopairformer_triangle_sr_backward(
+                q, k, v, d_output, lse, delta, mask, expanded_bias
             )
             if ctx.bias_prefix == ctx.target_prefix:
                 # The reduction is the identity when the bias already has the
@@ -402,7 +347,7 @@ def turbo_attention(
     res_mask: torch.Tensor | None = None,
     pair_bias: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Run Triangle Attention with autograd for Q, K, V and pair bias.
+    """Run Triangle Attention with mandatory single-reconstruction backward.
 
     Args:
         q: Raw, unscaled BF16 CUDA queries with shape ``[*B, O, H, N, D]``.
@@ -425,6 +370,7 @@ def turbo_attention(
         applies the ``1/sqrt(D)`` scale and saves its own backward state.
 
     Raises:
+        RuntimeError: The effective SR backward flag is not ``1``.
         ValueError: Unsupported tensor metadata. Hopper CC 9.0 and the
             package's dtype, shape, broadcast and CUDA grid limits apply.
             Validation happens before kernel allocation; the host owns any
@@ -441,6 +387,7 @@ def turbo_attention(
     ``triangle_attention`` are aliases of this function.
     """
 
+    validate_attention_policy()
     supported, reason = is_triangle_attention_supported(q, k, v, res_mask, pair_bias)
     if not supported:
         raise ValueError(f"unsupported TurboPairFormer case: {reason}")

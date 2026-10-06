@@ -7,8 +7,8 @@ os.environ["OPENFOLD3_TRIANGLE_ALLOW_JIT"] = "1"
 os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.getcwd() + "/torch_ext_sr")
 import torch
 from sr_ladder import load_capture, kernel_forward, fp64_pieces, delta_from_out
-from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
-    stablefold_triangle_sr_backward,
+from openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias import (
+    turbopairformer_triangle_sr_backward,
 )
 
 CASES = {
@@ -42,7 +42,7 @@ for name, path in CASES.items():
                   "dq_ref_maxabs": ref["dq"].abs().max().item(),
                   "numel": ref["dq"].numel()}
     for arm, delta in arms.items():
-        dq, dk, dv, dbias = stablefold_triangle_sr_backward(
+        dq, dk, dv, dbias = turbopairformer_triangle_sr_backward(
             q, k, v, grad_out, lse, delta, mask, bias)
         rows[name][arm] = stats(dq, ref["dq"])
     del ref

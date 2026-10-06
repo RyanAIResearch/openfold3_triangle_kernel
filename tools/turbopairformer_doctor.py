@@ -29,13 +29,21 @@ EXTENSION_FACADES = {
         "turbopairformer_trimul": "turbopairformer.trimul_cuda",
     },
     "intree": {
-        "stablefold_forward": "openfold3.core.kernels.cuda.stablefold_triangle_forward",
-        "stablefold_delta": "openfold3.core.kernels.cuda.stablefold_triangle_delta",
-        "stablefold_dkdv": "openfold3.core.kernels.cuda.stablefold_triangle_dkdv",
-        "stablefold_dq_dbias": (
-            "openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias"
+        "turbopairformer_forward": (
+            "openfold3.core.kernels.cuda.turbopairformer_triangle_forward"
         ),
-        "stablefold_trimul": "openfold3.core.kernels.cuda.stablefold_trimul_cuda",
+        "turbopairformer_delta": (
+            "openfold3.core.kernels.cuda.turbopairformer_triangle_delta"
+        ),
+        "turbopairformer_dkdv": (
+            "openfold3.core.kernels.cuda.turbopairformer_triangle_dkdv"
+        ),
+        "turbopairformer_dq_dbias": (
+            "openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias"
+        ),
+        "turbopairformer_trimul": (
+            "openfold3.core.kernels.cuda.turbopairformer_trimul_cuda"
+        ),
     },
 }
 

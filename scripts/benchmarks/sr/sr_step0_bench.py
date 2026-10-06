@@ -1,4 +1,4 @@
-"""SR Step-0: per-kernel decomposition of the StableFold triangle backward.
+"""SR Step-0: per-kernel decomposition of the TurboPairFormer triangle backward.
 
 Runs the production facade (wheel_env_a94b AOT binaries) at trunk shape
 B=1, O=N, H=4, D=32 and reports per-CUDA-kernel time from torch.profiler,
@@ -12,8 +12,8 @@ sys.path.insert(0, WHEEL)
 
 import torch  # noqa: E402
 
-from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E402
-    stablefold_triangle_attention,
+from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (  # noqa: E402
+    turbopairformer_triangle_attention,
 )
 
 REPS_PROFILE = 30
@@ -36,7 +36,7 @@ def make_inputs(n: int, heads: int = 4, dim: int = 32):
 
 
 def one_iter(q, k, v, mask, bias, grad_out):
-    out = stablefold_triangle_attention(q, k, v, mask, bias)
+    out = turbopairformer_triangle_attention(q, k, v, mask, bias)
     torch.autograd.grad(out, (q, k, v, bias), grad_outputs=grad_out)
 
 
@@ -47,7 +47,7 @@ def event_walls(q, k, v, mask, bias, grad_out):
     fwd_ms, bwd_ms = [], []
     for _ in range(REPS_EVENTS):
         start.record()
-        out = stablefold_triangle_attention(q, k, v, mask, bias)
+        out = turbopairformer_triangle_attention(q, k, v, mask, bias)
         mid.record()
         torch.autograd.grad(out, (q, k, v, bias), grad_outputs=grad_out)
         end.record()
@@ -85,7 +85,7 @@ def main() -> None:
     for n in (640, 384, 768):
         q, k, v, mask, bias = make_inputs(n)
         grad_out = None
-        out = stablefold_triangle_attention(q, k, v, mask, bias)
+        out = turbopairformer_triangle_attention(q, k, v, mask, bias)
         grad_out = torch.randn_like(out)
         for _ in range(WARMUP):
             one_iter(q, k, v, mask, bias, grad_out)

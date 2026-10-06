@@ -1,7 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # Copyright 2026 Advanced Micro Devices, Inc.
 # Copyright 2021 DeepMind Technologies Limited
-# Modified by RyanAIResearch in 2026 to integrate StableFold Triangle Attention.
+# Modified by RyanAIResearch in 2026 to integrate TurboPairFormer Triangle Attention.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -216,6 +216,7 @@ class MSABlock(nn.Module, ABC):
         _attn_chunk_size: int | None = None,
         _offload_inference: bool = False,
         _offloadable_inputs: Sequence[torch.Tensor] | None = None,
+        use_protenix_triangle_attention: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         pass
 
@@ -319,7 +320,7 @@ class PairBlock(nn.Module):
         use_stable_triangle_multiplicative: bool = False,
     ) -> torch.Tensor:
         """Perform the outgoing and incoming triangular multiplicative updates."""
-        # StableFold owns the trimul site when enabled; cuEq keeps other sites.
+        # TurboPairFormer owns the trimul site when enabled; cuEq keeps other sites.
         use_cueq_triangle_kernels = (
             use_cueq_triangle_kernels and not use_stable_triangle_multiplicative
         )
@@ -380,6 +381,7 @@ class PairBlock(nn.Module):
         use_stable_triangle_attention: bool = False,
         use_lma: bool = False,
         inplace_safe: bool = False,
+        use_protenix_triangle_attention: bool = False,
     ) -> torch.Tensor:
         """Perform the starting and ending triangular attention layers."""
         z = add(
@@ -393,6 +395,7 @@ class PairBlock(nn.Module):
                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                     use_triton_triangle_kernels=use_triton_triangle_kernels,
                     use_stable_triangle_attention=use_stable_triangle_attention,
+                    use_protenix_triangle_attention=use_protenix_triangle_attention,
                     use_lma=use_lma,
                     inplace_safe=inplace_safe,
                 )
@@ -416,6 +419,7 @@ class PairBlock(nn.Module):
                     use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                     use_triton_triangle_kernels=use_triton_triangle_kernels,
                     use_stable_triangle_attention=use_stable_triangle_attention,
+                    use_protenix_triangle_attention=use_protenix_triangle_attention,
                     use_lma=use_lma,
                     inplace_safe=inplace_safe,
                 )
@@ -441,6 +445,7 @@ class PairBlock(nn.Module):
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         _attn_chunk_size: int | None = None,
+        use_protenix_triangle_attention: bool = False,
     ) -> torch.Tensor:
         """
         Args:
@@ -470,6 +475,27 @@ class PairBlock(nn.Module):
         # DeepMind doesn't mask these transitions in the source, so _mask_trans
         # should be disabled to better approximate the exact activations of
         # the original.
+        if use_protenix_triangle_attention:
+            if any(
+                (
+                    use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
+                    use_deepspeed_evo_attention,
+                    use_triton_triangle_kernels,
+                    use_lma,
+                )
+            ):
+                raise ValueError("Protenix cannot be combined with other backends")
+            if chunk_size is not None or _attn_chunk_size is not None or inplace_safe:
+                raise ValueError(
+                    "Protenix requires unchunked, non-inplace execution "
+                    "without inference offload"
+                )
+            # Protenix uses cuEq TriMul only when its input and hidden channels
+            # match; otherwise it preserves the stock multiplication path.
+            if self.tri_mul_out.c_z != self.tri_mul_out.c_hidden:
+                use_cueq_triangle_kernels = False
+
         pair_trans_mask = pair_mask if _mask_trans else None
 
         if _attn_chunk_size is None:
@@ -492,6 +518,7 @@ class PairBlock(nn.Module):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_protenix_triangle_attention=use_protenix_triangle_attention,
             use_lma=use_lma,
             inplace_safe=inplace_safe,
         )

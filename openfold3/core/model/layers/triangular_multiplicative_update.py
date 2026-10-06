@@ -50,40 +50,34 @@ _TRITON_UNAVAILABLE_ERROR = (
     "installed with Triton support."
 )
 
-_STABLEFOLD_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
+_TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
 
 
 def _route_stable_trimul(module, z, mask):
     """Return ``(selected, output)`` without swallowing fast-path failures."""
-    # The serving implementation is the `stablefold` pip package when it is
-    # installed and the in-tree kernel copy otherwise; both build the same .cu
-    # sources.  See core/kernels/cuda/provider.py.
     from openfold3.core.kernels.cuda.provider import (
         strict_fallback_enabled,
         trimul_runner,
         trimul_support_check,
     )
 
-    # The callback freezes this policy before the first forward and audits the
-    # source environment at epoch boundaries; this hot-path getter is read-only.
     strict = strict_fallback_enabled()
-
     support = trimul_support_check()(module, z, mask)
     if support:
         return True, trimul_runner()(module, z, mask)
 
     if strict and support.code != "sequence_stock_fallback":
         raise RuntimeError(
-            "StableFold distributed strict route rejected a TriMul fallback "
+            "TurboPairFormer distributed strict route rejected a TriMul fallback "
             f"for {type(module).__qualname__} at shape {tuple(z.shape)} "
             f"[{support.code}]: {support.reason}"
         )
 
     key = (type(module).__qualname__, support.code)
-    if key not in _STABLEFOLD_TRIMUL_FALLBACK_LOGGED:
-        _STABLEFOLD_TRIMUL_FALLBACK_LOGGED.add(key)
+    if key not in _TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED:
+        _TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED.add(key)
         logging.getLogger(__name__).warning(
-            "StableFold TriMul fallback to stock for %s at shape %s [%s]: %s",
+            "TurboPairFormer TriMul fallback to stock for %s at shape %s [%s]: %s",
             type(module).__qualname__,
             tuple(z.shape),
             support.code,
@@ -1169,7 +1163,7 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
             stable_selected, stable_output = _route_stable_trimul(self, z, mask)
             if stable_selected:
                 return stable_output
-            # A StableFold request owns this TriMul site. Unsupported metadata
+            # A TurboPairFormer request owns this TriMul site. Unsupported metadata
             # falls back specifically to stock PyTorch, never another backend.
             use_cueq_triangle_kernels = False
             use_triton_triangle_kernels = False
@@ -1471,7 +1465,7 @@ class FusedTriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
             stable_selected, stable_output = _route_stable_trimul(self, z, mask)
             if stable_selected:
                 return stable_output
-            # A StableFold request owns this TriMul site. Unsupported metadata
+            # A TurboPairFormer request owns this TriMul site. Unsupported metadata
             # falls back specifically to stock PyTorch, never another backend.
             use_cueq_triangle_kernels = False
             use_triton_triangle_kernels = False

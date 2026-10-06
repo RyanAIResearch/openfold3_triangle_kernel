@@ -1,16 +1,30 @@
-# OpenFold3 + StableFold Training Quick Start
+# OpenFold3 + TurboPairFormer Training Quick Start
 
-This is the historical in-tree workflow, available on this branch as
-`openfold3-cuda12-intree`. For the TurboPairFormer package and its single-GPU
-workflow, use the [TurboPairFormer guide](turbopairformer_pip_quickstart.md).
-The `main` branch retains its original `openfold3-cuda12` environment name.
+On the pip branch, this pinned in-tree binary uses `openfold3-cuda12-intree`.
+The standalone package uses `openfold3-cuda12`; see its [guide](turbopairformer_pip_quickstart.md).
+Current source changes require a source build; these pinned binaries are unchanged.
 
 This guide follows the Lambda OpenFold3 quick-start flow: set up the
 environment, prepare a small PDB dataset, remove samples affected by unavailable
 files, and launch training on one or more GPUs.
 
-The current prebuilt StableFold package supports full NVIDIA H100 80 GB GPUs on
-Linux x86-64. It does not require a system CUDA Toolkit or local kernel build.
+The prebuilt OpenFold3 runtime with TurboPairFormer kernels supports full
+NVIDIA H100 80 GB GPUs on Linux x86-64. It does not require a system CUDA Toolkit
+or local kernel build.
+
+The current source runtime also accepts H200 for Triangle Attention and TriMul.
+H200 execution validation is pending. This source update does not replace the
+pinned H100 wheel used by the installation steps below.
+
+This `main` workflow installs a pinned OpenFold3 binary with Conda PyTorch
+2.10.0, CUDA 12.9 and CPython 3.14. The installed package remains `openfold3`;
+its kernel modules, extension identities and receipt names use TurboPairFormer.
+The standalone pip package has a separate release and validation process.
+
+The renamed binary requires its own H100 validation. Check the accompanying
+report in `release_artifacts/turbopairformer-h100-20260918/` for completed checks.
+Full training and multi-GPU DDP qualification of this artifact remain pending;
+the launch examples below describe the workflow, not completed certification.
 
 ## Setup
 
@@ -26,29 +40,33 @@ Restart the shell if the `pixi` command is not immediately available.
 ### Clone the Repository
 
 ```bash
-git clone --branch feat/turbopairformer-pip-package --single-branch \
+git clone --branch main --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git
 cd openfold3_triangle_kernel
 ```
 
-### Set Up OpenFold3 and StableFold
+### Set Up OpenFold3 and TurboPairFormer
 
 ```bash
 pixi install -e openfold3-cuda12-intree
 ```
 
 This one command creates the environment and installs the repository-pinned
-OpenFold3 wheel with the prebuilt StableFold kernels. No separate setup command
-or local kernel build is required.
+OpenFold3 wheel with the prebuilt TurboPairFormer kernels. No separate setup
+command or local kernel build is required.
 
 To optionally check the GPU, environment, and all five AOT kernel modules, run:
 
 ```bash
-pixi run -e openfold3-cuda12-intree doctor-h100
+pixi run -e openfold3-cuda12-intree doctor-hopper
 pixi run -e openfold3-cuda12-intree verify-aot
 ```
 
-If verification reports `StableFold AOT artifacts require a clean Git checkout`, first
+`doctor-hopper` accepts full H100/H200 GPUs with compute capability 9.0 and
+checks the locked runtime prerequisites. The existing `doctor-h100` command
+remains an alias. These checks do not constitute H200 execution validation.
+
+If verification reports `TurboPairFormer AOT artifacts require a clean Git checkout`, first
 inspect the checkout:
 
 ```bash
@@ -60,7 +78,7 @@ lockfile. Update it without reinstalling the repository:
 
 ```bash
 git restore --source=HEAD -- pixi.lock
-git pull --ff-only origin feat/turbopairformer-pip-package
+git pull --ff-only origin main
 pixi install -e openfold3-cuda12-intree
 pixi run -e openfold3-cuda12-intree verify-aot
 ```
@@ -164,16 +182,16 @@ independent processes selected identical token, MSA, and template features.
 
 ### Choose a Training Backend
 
-Use StableFold by default:
+Use TurboPairFormer by default:
 
 ```bash
 pixi run -e openfold3-cuda12-intree select-training-backend \
   datasets/train_pdb_subset.yaml \
-  --backend stablefold \
-  --output datasets/train_pdb_subset.stablefold.yaml
+  --backend turbopairformer \
+  --output datasets/train_pdb_subset.turbopairformer.yaml
 ```
 
-The command can be pasted directly into Bash.
+The command selects the in-tree TurboPairFormer kernel route.
 
 To select another implementation, change `BACKEND` and use the generic form:
 
@@ -191,7 +209,8 @@ pixi run -e openfold3-cuda12-intree select-training-backend \
 | `aqlab` | Stock OpenFold3 PyTorch operators |
 | `triton` | OpenFold3 Triton triangle attention with the stock PyTorch training TMU path |
 | `cueq` | NVIDIA cuEquivariance triangle kernels |
-| `stablefold` | StableFold triangle attention and triangle multiplicative kernels |
+| `turbopairformer` | TurboPairFormer triangle attention and triangle multiplicative kernels |
+| `protenix` | ByteDance Protenix triangle attention + cuEq TriMul; [single-H100 scope and installation](protenix_backend.md) |
 | `deepspeed-evo` | DeepSpeed Evo attention operator; this does not enable ZeRO |
 
 The selector first disables every mutually exclusive route and then enables the
@@ -201,8 +220,7 @@ pipeline, loss, optimizer, EMA, checkpointing, and distributed training.
 
 The standard full-crop comparison below uses the first four keys exactly as
 written:
-`aqlab`, `triton`, `cueq`, and `stablefold`. These are configuration keys, not
-display-name aliases. In particular, selecting `triton` enables OpenFold3's
+`aqlab`, `triton`, `cueq`, and `turbopairformer`. Selecting `triton` enables OpenFold3's
 Triton triangle-attention route; training TMU remains on its stock PyTorch path
 because OpenFold3 training does not use the in-place inference path.
 
@@ -215,7 +233,7 @@ creates a separate runner YAML for one BF16 training step with validation, W&B,
 and checkpoint output disabled:
 
 ```bash
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 
 pixi run -e openfold3-cuda12-intree select-training-backend \
   datasets/train_pdb_subset.yaml \
@@ -271,20 +289,20 @@ optimizer step through the selected backend. To smoke-test another backend,
 change only `BACKEND`, regenerate its runner YAML, and rerun the same launch
 command.
 
-This exact `stablefold` smoke path has been verified to reach `max_steps=1` on
-a Lambda H100 80 GB GPU. The first launch can spend about a minute in CPU-heavy
-model and data setup before the training progress bar appears. Warnings that no
-logger is configured are expected because the smoke preset deliberately
-disables W&B; they are not training failures.
+Record the result of this full-model smoke separately from installed-kernel
+checks. The first launch may spend time in CPU model and data setup before the
+training progress bar appears. Warnings that no logger is configured are
+expected because the smoke preset deliberately disables W&B; they are not
+training failures.
 
 ### Compare Backend Training Time and Loss
 
-For every new published comparison, first update this feature-branch checkout
+For every new published comparison, first update to the current `main`
 and record the exact revision. `git status --short` must print nothing before
 the benchmark starts:
 
 ```bash
-git pull --ff-only origin feat/turbopairformer-pip-package
+git pull --ff-only origin main
 git status --short
 git rev-parse HEAD
 ```
@@ -307,7 +325,7 @@ mkdir -p ../openfold3-run/backend-comparison-1gpu
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CROP_DATA_ROOT="$OF3_RUN_CWD/pdb-full-crop-384-640-768"
 export CUDA_VISIBLE_DEVICES=0
-BACKENDS=(aqlab triton cueq stablefold)
+BACKENDS=(aqlab triton cueq turbopairformer)
 MATRIX_FAILED=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
@@ -380,7 +398,7 @@ export DEVICES=2
 export CUDA_VISIBLE_DEVICES=0,1
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CROP_DATA_ROOT="$OF3_RUN_CWD/pdb-full-crop-384-640-768"
-BACKENDS=(aqlab triton cueq stablefold)
+BACKENDS=(aqlab triton cueq turbopairformer)
 MATRIX_FAILED=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
@@ -437,7 +455,7 @@ export DEVICES=8
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CROP_DATA_ROOT="$OF3_RUN_CWD/pdb-full-crop-384-640-768"
-BACKENDS=(aqlab triton cueq stablefold)
+BACKENDS=(aqlab triton cueq turbopairformer)
 MATRIX_FAILED=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
@@ -580,219 +598,13 @@ backends within one matched block, not to promise an absolute production step
 time. A separate single-H100 adaptation below retains more of one supplied
 fine-tuning configuration and is reported as a distinct experiment.
 
-### Reproduced Two-H100 Standard-Benchmark Results
+### Historical experiments
 
-These results were recorded on September 4, 2026. The table below is a
-descriptive full-crop backend screen, not an exact production-job,
-convergence, or statistical-significance claim. Every requested arm was
-launched on the same otherwise-idle two-H100 host. The benchmark harness and
-configuration tools came from clean checkout
-`5d4c79748fa5c76ce6a69478c6f4d38395d81b2c`; that checkout hash does **not**
-identify the imported model implementation. The installed OpenFold3 runtime
-wheel is
-`0.5.1.dev5860+g87ebe22da` (CUDA 12.9, PyTorch 2.10.0, Triton 3.6.0, and
-cuEquivariance 0.10.0). Each arm used batch size one per GPU, BF16 mixed
-precision, TF32 enabled for the common FP32 matmuls, seed/data seed 42, 10 data
-workers per rank, five excluded warmup steps, and 20 measured optimizer steps.
-The historical standalone `stablefold-0.1.0` artifact was not installed by
-this Pixi environment and is not the binary measured in this table. The
-current TurboPairFormer package is documented in `packages/turbopairformer/README.md`;
-its pip wheel does not inherit this table's certification.
-
-The source purified cache SHA256 is
-`f7772e0b2d41bc1b1b521409eead4b056a9be660fbbff2971ef48a8b81ffd35f`.
-The filtered-cache SHA256 is
-`6416bbadcf034bbe2974f7eb378df1dd25abe5c24380880b27c2c42a5bc2dac8`.
-It contains 19 structures; the smallest has 835 tokens and 826 resolved token
-centers, and the largest chain count is 16. Every successful run reports
-`full_crop_validation: passed`; any failed arm is retained and identified in
-the table rather than silently removed or replaced.
-
-`Speedup vs Triton` is Triton wall seconds per step divided by the row's wall
-seconds per step within the same crop. DDP GPU time is reduced by the maximum
-rank at every step before the 20-step mean is taken. Global samples/s uses the
-two-sample global batch. Results from other GPU counts must be reported as
-separate blocks because their global batches and loss trajectories differ.
-
-| Crop | Backend route | Wall s/step | Global samples/s | Critical-path GPU ms/step | Speedup vs Triton | Status |
-| ---: | --- | ---: | ---: | ---: | ---: | --- |
-| 384 | AQLab PyTorch (`aqlab`) | 6.900 | 0.2899 | 6658 | 0.785x | passed |
-| 384 | AQLab Triton (`triton`) | 5.413 | 0.3695 | 5173 | 1.000x | passed |
-| 384 | cuEquivariance (`cueq`) | 4.550 | 0.4396 | 4309 | 1.190x | passed |
-| 384 | StableFold (`stablefold`) | **4.286** | **0.4666** | **4047** | **1.263x** | passed |
-| 640 | AQLab PyTorch (`aqlab`) | 20.845 | 0.09594 | 20489 | 0.680x | passed |
-| 640 | AQLab Triton (`triton`) | 14.176 | 0.1411 | 13840 | 1.000x | passed |
-| 640 | cuEquivariance (`cueq`) | 9.706 | 0.2061 | 9373 | 1.460x | passed |
-| 640 | StableFold (`stablefold`) | **9.153** | **0.2185** | **8822** | **1.549x** | passed |
-| 768 | AQLab PyTorch (`aqlab`) | -- | -- | -- | -- | OOM in first backward pass |
-| 768 | AQLab Triton (`triton`) | 21.695 | 0.09219 | 21301 | 1.000x | passed |
-| 768 | cuEquivariance (`cueq`) | 13.707 | 0.1459 | 13310 | 1.583x | passed |
-| 768 | StableFold (`stablefold`) | **12.730** | **0.1571** | **12335** | **1.704x** | passed |
-
-The PyTorch crop-768 failure is a measured result, not a missing cell: both DDP
-ranks requested another 6.75 GiB during the first backward pass while each
-process was using 73.4--73.7 GiB of its 79.18-GiB GPU. PyTorch reported
-60.39--61.30 GiB allocated and 10.49--11.13 GiB reserved but unallocated. No
-timing or speedup is imputed for the failed arm. The sanitized machine-readable
-receipt is kept under
-`release_artifacts/backend-matrix-h100-2gpu-20260904/`; it intentionally omits
-hostnames, user names, absolute paths, raw logs, and training data.
-
-```{figure} ../imgs/backend_loss_2gpu_crops_384_640_768.png
-:alt: Two-H100 OpenFold3 loss curves for four backends at crop sizes 384, 640, and 768, with differences from the Triton route.
-:width: 100%
-
-Two-H100 training loss for the same measured runs. The shaded region contains
-the five timing-warmup steps; lower panels show each route minus Triton at the
-same optimizer step. AQLab PyTorch has no crop-768 curve because that arm ran
-out of memory.
-```
-
-StableFold and Triton remain closely aligned over this short screen. The maximum
-absolute loss differences were 0.00171 at crop 384 and 0.00402 at crop 640. At
-crop 768, StableFold has three isolated deviations at one-based plotted steps
-15, 21, and 24 (zero-based CSV indices 14, 20, and 23): -0.0320, +0.0713, and
--0.0559, before finishing 0.00323 below Triton. They do
-not form a sustained divergence in these 25 steps, but this run did not record
-per-batch feature or permutation fingerprints, so it cannot prove that the
-routes consumed bit-identical stochastic features or identify the cause of
-those points. These curves support short-run numerical stability only; they do
-not establish long-horizon convergence or unchanged model accuracy.
-
-The published receipt does not retain launch order, so this block cannot be used
-to quantify warm-machine or position bias. There is also only one seed/process
-block per cell, so the 20 temporally adjacent steps are not 20 independent
-replicates. For paper claims, repeat complete matched blocks with independent
-seeds, rotate or randomize backend launch order, record that order, and report
-confidence intervals. The eight-H100 commands above intentionally contain no
-estimated numbers; add that table only from a completed eight-GPU run.
-
-### Single-H100 Adaptation of a Supplied Fine-Tuning Recipe
-
-Do not combine this block with the public from-scratch benchmark above. On
-September 4, 2026, we separately checked the supplied kinase fine-tuning recipe
-through the AQLab-native end-to-end training path under a thin measurement
-harness. The harness bypasses the Click command wrapper, but it instantiates the
-same `TrainingExperimentRunner`, DataModule, model, loss, per-sample gradient
-clipping, Adam optimizer, scheduler, and EMA code. It disables validation,
-checkpoint writes, and W&B during timing and changes only one mutually exclusive
-triangle-backend route per arm.
-
-This is a single-H100 adaptation, not an exact replay of the private production
-job. The supplied recipe targets two nodes with eight GPUs per node and refers to
-private kinase data and a legacy P2 checkpoint. For this check, the effective
-global batch remains 16 (`batch_size=1`, one GPU, and 16-way gradient
-accumulation), the private data is replaced by a statically filtered PDB
-fixture, and the incompatible P2 checkpoint is replaced by a compatible
-OpenBind checkpoint. A runtime collator gate requires every consumed batch to
-contain the full requested token crop; this does not claim that every cache
-entry was exercised. The legacy `freeze_modules: [confidence]` behavior is
-reproduced by disabling gradients for the same confidence-head parameter
-prefixes before `fit`.
-
-The external one-off measurement harness executed against clean source checkout
-`8fa9a83cd7ac7b2c9b22b2d513d406e2400a31ec`. The private source recipe and that
-harness are not distributed in this repository; this block is a result receipt,
-not a copy-paste reproduction procedure. New measurements must use the
-repository-tracked public benchmark commands above from the then-current
-`origin/main`. The imported OpenFold3 runtime in this recorded run is
-repository-pinned wheel `0.5.1.dev5860+g87ebe22da`, built from
-`87ebe22da13c657d36997dedb4ec398fbd62c6b7`, with SHA256
-`ad9042dcf1f301ac42edcc30566537b5b971bc9933f62a50cda8f5f45a090738`.
-A separate audit found no changed runtime paths between those commits and
-verified all 230 non-test runtime Python files in the wheel byte-for-byte
-against the checkout. Every arm uses BF16 mixed precision, TF32 disabled,
-seed/data seed 42, and 10 DataLoader workers.
-
-The supplied YAML SHA256 is
-`a3e61243c18f9375d7f55209306c3759bb80c5857dd1fec99d7a358d348cd916`;
-the compatible checkpoint SHA256 is
-`bd43301c011d5f87580d3e8b548658869433e4488399feb03035ba248f8e29e4`;
-and the filtered full-crop cache SHA256 is
-`9098567c4cc06e28c70d6b4d0c06a6c0072cc0fca5fa1620fe5e49421c3364e8`.
-The confidence freeze covers 243 parameter tensors (12,881,024 parameters),
-with parameter-name-list SHA256
-`54c867c523ee3d8c3bb3b923ee6f0c709e2fbc2bd66f0311671ec0ce4cdc8fc4`.
-
-Each cell excludes 16 warmup microbatches and measures the next 50. Wall timing
-spans the start callback of measured microbatch 16 through the synchronized end
-of microbatch 65. It includes model execution and inter-batch input waits after
-the first boundary, and contains three completed optimizer updates plus two
-subsequent microbatches. Results are reported per measured microbatch and are
-not estimates of distributed production step time. CUDA-event values are not
-used in this table or its conclusions.
-
-The supplied YAML omits `num_workers`; the tested AQLab validator defaults that
-field to 10, and this benchmark pins 10 explicitly. This value is per rank.
-Worker count does not alter the objective definition, but it can change the
-realized assignment of stochastic crop, MSA, and template feature streams. No
-bitwise-trajectory or accuracy-invariance claim is made.
-
-`Speedup vs Triton` is the AQLab Triton wall seconds divided by the row's wall
-seconds within the same crop.
-
-| Crop | Backend route | Wall s/measured microbatch | Samples/s | Speedup vs Triton | Status |
-| ---: | --- | ---: | ---: | ---: | --- |
-| 384 | AQLab PyTorch (`aqlab`) | 6.405 | 0.15614 | 0.792x | passed |
-| 384 | AQLab Triton (`triton`) | 5.075 | 0.19704 | 1.000x | passed |
-| 384 | cuEquivariance (`cueq`) | 4.309 | 0.23206 | 1.178x | passed |
-| 384 | StableFold (`stablefold`) | **4.055** | **0.24661** | **1.252x** | passed |
-| 640 | AQLab PyTorch (`aqlab`) | 19.360 | 0.05165 | 0.684x | passed |
-| 640 | AQLab Triton (`triton`) | 13.251 | 0.07547 | 1.000x | passed |
-| 640 | cuEquivariance (`cueq`) | 9.086 | 0.11006 | 1.458x | passed |
-| 640 | StableFold (`stablefold`) | **8.343** | **0.11986** | **1.588x** | passed |
-| 768 | AQLab PyTorch (`aqlab`) | -- | -- | -- | OOM after 58/66 microbatches |
-| 768 | AQLab Triton (`triton`) | 20.343 | 0.04916 | 1.000x | passed |
-| 768 | cuEquivariance (`cueq`) | 12.895 | 0.07755 | 1.578x | passed |
-| 768 | StableFold (`stablefold`) | **11.681** | **0.08561** | **1.741x** | passed |
-
-The AQLab PyTorch crop-768 arm completed 58 of 66 planned microbatches before
-requesting another 3.38 GiB with 2.03 GiB free on the 79.19-GiB H100. Because
-the measurement callback did not finalize, it produced neither `summary.json`
-nor `steps.csv`; no time, throughput, loss curve, or speedup is imputed from the
-truncated interval.
-
-```{figure} ../imgs/backend_wall_1gpu_supplied_recipe_crops_384_640_768.png
-:alt: Single-H100 wall-clock OpenFold3 comparison for AQLab PyTorch, AQLab Triton, cuEquivariance, and StableFold at crop sizes 384, 640, and 768.
-:width: 100%
-
-Continuous wall seconds per measured microbatch for the supplied-recipe
-adaptation. Labels also show speedup against AQLab Triton within each crop. The
-PyTorch crop-768 cell is an observed OOM and has no imputed bar.
-```
-
-The short loss traces are shown only as a finite-value and gross-divergence
-screen. Because DataLoader workers own seeded stochastic streams for crop, MSA,
-and template features, separate processes are not guaranteed to consume
-bit-identical feature tensors even with matched seeds and worker counts.
-Per-microbatch input-feature identity was not recorded, so pointwise loss
-differences are not evidence of backend numerical equivalence. One short run
-per cell is not an accuracy, convergence, or statistical-significance result.
-
-```{figure} ../imgs/backend_loss_1gpu_supplied_recipe_crops_384_640_768.png
-:alt: Descriptive single-H100 OpenFold3 loss curves for available backend runs at crop sizes 384, 640, and 768.
-:width: 100%
-
-Training loss recorded by each complete run. The shaded region contains the 16
-timing-warmup microbatches. PyTorch crop 768 has no curve because that process
-did not finalize its measurement artifact after OOM.
-```
-
-The public full-crop benchmark is the copy-paste reproducibility test for new
-users: it starts from scratch, uses accumulation one, and explicitly enables
-TF32 for all arms. This supplied-recipe adaptation retains more of the provided
-fine-tuning configuration and a compatible checkpoint, so it answers a
-different question. The two protocols can support a backend-ranking sanity
-check when their trends agree, but their absolute times and loss trajectories
-must not be merged.
-
-Gradient accumulation preserves a nominal effective batch of 16, but this
-single-GPU adaptation removes DDP/all-reduce costs and amortizes optimizer and
-EMA work over 16 single-GPU microbatches. Backends were launched sequentially
-and launch order was recorded, but not randomized. With one run per cell, these
-numbers are a descriptive screen rather than uncertainty-qualified paper
-measurements. The sanitized machine-readable receipt is kept under
-`release_artifacts/backend-matrix-h100-1gpu-supplied-recipe-20260904/`.
+Earlier benchmark tables, figures and machine-readable receipts remain in the
+[historical source snapshot](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/a522470b500d040e5649e1deed1a7a9581438c62). Their original binary identities and
+experimental scope remain intact there. They are not validation results for
+the renamed current artifact. Run the documented matched protocol and retain
+new receipts before reporting its performance or training behavior.
 
 ### Scheme 1: Single-GPU Training
 
@@ -840,7 +652,7 @@ Launch training on one H100:
 
 ```bash
 mkdir -p ../openfold3-run
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
@@ -872,7 +684,7 @@ Then launch OpenFold3 once:
 
 ```bash
 mkdir -p ../openfold3-run
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export OF3_RUN_CWD="$(cd ../openfold3-run && pwd)"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
@@ -911,8 +723,8 @@ pl_trainer_args:
 
 The repository, Pixi environment, prepared runner YAML, dataset, and output
 directory must use the same paths on every node. The run directory must be a
-real shared, read-write filesystem: StableFold rank 0 writes the kernel receipt
-there and every other rank reads it back. A path that merely has the same name
+real shared, read-write filesystem: TurboPairFormer rank 0 writes the kernel
+receipt there and every other rank reads it back. A path that merely has the same name
 on each node is not sufficient.
 
 Install the pinned environment on every node from the shared repository. Then
@@ -924,14 +736,14 @@ pixi install -e openfold3-cuda12-intree
 
 mkdir -p /shared/openfold3-run
 test -r /shared/openfold3-run && test -w /shared/openfold3-run
-test -r "$PWD/datasets/train_pdb_subset.stablefold.yaml"
+test -r "$PWD/datasets/train_pdb_subset.turbopairformer.yaml"
 ```
 
 Run the following command on both allocated nodes from
 `/shared/openfold3_triangle_kernel`, changing `NODE_RANK` to `0` or `1`:
 
 ```bash
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export OF3_RUN_CWD=/shared/openfold3-run
 export RUNNER_YAML="$PWD/datasets/train_pdb_subset.${BACKEND}.yaml"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -1025,7 +837,7 @@ unset PYTHONPATH PYTHONHOME LD_PRELOAD
 
 cd /shared/openfold3_triangle_kernel
 
-for BACKEND in aqlab triton cueq stablefold; do
+for BACKEND in aqlab triton cueq turbopairformer; do
   srun --kill-on-bad-exit=1 --cpus-per-task="$SLURM_CPUS_PER_TASK" \
     pixi run -e openfold3-cuda12-intree benchmark-multinode \
     --runner-yaml "$CROP_DATA_ROOT/runner_crop_${CROP}.yaml" \
@@ -1077,7 +889,7 @@ Save this as `/shared/openfold3-run/train_2x8.sbatch` and run
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=of3-stablefold-2x8
+#SBATCH --job-name=of3-turbopairformer-2x8
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=8
 #SBATCH --gres=gpu:8
@@ -1087,7 +899,7 @@ Save this as `/shared/openfold3-run/train_2x8.sbatch` and run
 
 set -euo pipefail
 
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export PATH="$HOME/.pixi/bin:$PATH"
 export OF3_RUN_CWD=/shared/openfold3-run
 unset PYTHONPATH PYTHONHOME LD_PRELOAD
@@ -1109,12 +921,12 @@ starts once per task, and Lightning joins the sixteen tasks into one DDP group.
 
 ##### Smoke Test Before the Full Run
 
-First check that the StableFold receipt round-trips across nodes with one GPU
-per node. Create a one-step YAML:
+First check that the TurboPairFormer receipt round-trips across nodes with one
+GPU per node. Create a one-step YAML:
 
 ```bash
 cd /shared/openfold3_triangle_kernel
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 
 pixi run -e openfold3-cuda12-intree select-training-backend \
   datasets/train_pdb_subset.yaml \
@@ -1133,12 +945,12 @@ A run passes when the job exits zero and the receipt written by rank 0 reports
 `PASS` with one hostname per rank:
 
 ```bash
-grep '"status"' /shared/openfold3-run/<output_dir>/logs/stablefold_kernel_ddp.json
-grep -c '"hostname"' /shared/openfold3-run/<output_dir>/logs/stablefold_kernel_ddp.json
+grep '"status"' /shared/openfold3-run/<output_dir>/logs/turbopairformer_kernel_ddp.json
+grep -c '"hostname"' /shared/openfold3-run/<output_dir>/logs/turbopairformer_kernel_ddp.json
 ```
 
 The hostname count equals the world size: `16` for the full run and `2` for
-the smoke test, whose `output_dir` is `openfold3_smoke_stablefold`. For a
+the smoke test, whose `output_dir` is `openfold3_smoke_turbopairformer`. For a
 benchmark, the receipt sits under `$RESULTS_ROOT/<backend>/logs/`.
 
 ##### Alternative: One `torchrun` per Node
@@ -1148,7 +960,7 @@ the node rank and master address:
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=of3-stablefold-2x8-torchrun
+#SBATCH --job-name=of3-turbopairformer-2x8-torchrun
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:8
@@ -1158,7 +970,7 @@ the node rank and master address:
 
 set -euo pipefail
 
-export BACKEND=stablefold
+export BACKEND=turbopairformer
 export PATH="$HOME/.pixi/bin:$PATH"
 export OF3_RUN_CWD=/shared/openfold3-run
 export MASTER_ADDR="$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)"
@@ -1194,7 +1006,7 @@ from the `RANK` that `torchrun` exports.
 | `multiple DDP ranks are bound to the same physical CUDA device` | Remove `--gpus-per-task` and `--gpu-bind`. |
 | Every task prints its own progress bar and no receipt appears | The runner YAML still has `devices: 1` and `num_nodes: 1`, so each task trains alone. Set both values. |
 | `benchmark output already exists` | Rename or delete `$RESULTS_ROOT/<backend>` before rerunning. |
-| `StableFold kernel receipt readback hash mismatch` | The run directory is not consistent across nodes. Mount NFS with `actimeo=0` or use Lustre or GPFS. |
+| `TurboPairFormer kernel receipt readback hash mismatch` | The run directory is not consistent across nodes. Mount NFS with `actimeo=0` or use Lustre or GPFS. |
 | NCCL hangs at startup | Set `NCCL_SOCKET_IFNAME` to the interface that reaches the other node. |
 
 ## Fine-tuning

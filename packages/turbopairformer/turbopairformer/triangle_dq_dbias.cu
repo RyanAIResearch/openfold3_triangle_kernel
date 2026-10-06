@@ -1059,11 +1059,14 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
     const int outer_load = outer < oc ? outer : oc - 1;
     return static_cast<int64_t>(batch_index) * oc + outer_load;
   };
-  float outer_mult[kOuterLeaf];
-#pragma unroll
-  for (int slot = 0; slot < kOuterLeaf; ++slot) {
-    outer_mult[slot] = leaf * kOuterLeaf + slot < oc ? 1.0F : 0.0F;
-  }
+  const auto slot_is_active = [&](int slot) {
+    if constexpr (OuterEqSeq) {
+      // The SR launch requires N % 64 == 0, so O == N has full leaves.
+      return true;
+    } else {
+      return leaf * kOuterLeaf + slot < oc;
+    }
+  };
 
   // K/V and the additive mask are key-invariant: staged once.
 #pragma unroll 1
@@ -1107,7 +1110,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
 #pragma unroll
     for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
       const int slot = warpgroup * kSlotsPerWarpgroup + local;
-      if (outer_mult[slot] == 0.0F) {
+      if (!slot_is_active(slot)) {
         continue;
       }
       const int64_t out_base = (slot_plane(slot) * heads + head) *
@@ -1266,10 +1269,13 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
       float* tree = sbias_acc +
           warpgroup * (kSrQueryTile * kSrTreeStride);
       __nv_bfloat16* ds_tile = sds + slot * kSrQueryTile * kSrDsStride;
-      const float slot_mult = outer_mult[slot];
+      const float slot_mult = slot_is_active(slot) ? 1.0F : 0.0F;
       const float* slot_mask = smask + slot * kSrKeyBlock;
       const int64_t stats_base = (slot_plane(slot) * heads + head) *
           static_cast<int64_t>(sequence);
+      // Once FP32 dS is formed, retain only the BF16 operands used by MMA.
+      uint32_t p_packed[kSrQueryTile / 8][2];
+      uint32_t ds_packed[kSrQueryTile / 8][2];
 #pragma unroll
       for (int column = 0; column < kSrQueryTile / 8; ++column) {
 #pragma unroll
@@ -1312,31 +1318,27 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
             ds_tile[query_in_tile * kSrDsStride + key_row] =
                 __float2bfloat16_rn(d_score);
           }
+          p_packed[column][half] = pack_bf16_pair(
+              dp[column].v[half * 2], dp[column].v[half * 2 + 1]);
+          ds_packed[column][half] = pack_bf16_pair(
+              score[column].v[half * 2], score[column].v[half * 2 + 1]);
         }
       }
 
       // dV += P^T @ dO; dK += dS^T @ Q -- contraction over the 32 queries,
-      // the exact dkdv chain (A = packed accumulators, B = rowtrans).
+      // the exact dkdv chain (A = packed BF16 operands, B = rowtrans).
 #pragma unroll
       for (int chunk = 0; chunk < kSrQueryTile / 16; ++chunk) {
         uint32_t p_frag[4];
         uint32_t ds_frag[4];
-        p_frag[0] = pack_bf16_pair(
-            dp[chunk * 2].v[0], dp[chunk * 2].v[1]);
-        p_frag[1] = pack_bf16_pair(
-            dp[chunk * 2].v[2], dp[chunk * 2].v[3]);
-        p_frag[2] = pack_bf16_pair(
-            dp[chunk * 2 + 1].v[0], dp[chunk * 2 + 1].v[1]);
-        p_frag[3] = pack_bf16_pair(
-            dp[chunk * 2 + 1].v[2], dp[chunk * 2 + 1].v[3]);
-        ds_frag[0] = pack_bf16_pair(
-            score[chunk * 2].v[0], score[chunk * 2].v[1]);
-        ds_frag[1] = pack_bf16_pair(
-            score[chunk * 2].v[2], score[chunk * 2].v[3]);
-        ds_frag[2] = pack_bf16_pair(
-            score[chunk * 2 + 1].v[0], score[chunk * 2 + 1].v[1]);
-        ds_frag[3] = pack_bf16_pair(
-            score[chunk * 2 + 1].v[2], score[chunk * 2 + 1].v[3]);
+        p_frag[0] = p_packed[chunk * 2][0];
+        p_frag[1] = p_packed[chunk * 2][1];
+        p_frag[2] = p_packed[chunk * 2 + 1][0];
+        p_frag[3] = p_packed[chunk * 2 + 1][1];
+        ds_frag[0] = ds_packed[chunk * 2][0];
+        ds_frag[1] = ds_packed[chunk * 2][1];
+        ds_frag[2] = ds_packed[chunk * 2 + 1][0];
+        ds_frag[3] = ds_packed[chunk * 2 + 1][1];
 #pragma unroll
         for (int tile = 0; tile < HeadDim / 8; ++tile) {
           uint32_t b_frag[2];
@@ -1380,7 +1382,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
       const int local = warp_in_group >> 1;
       const int slot = warpgroup * kSlotsPerWarpgroup + local;
       const int row_half = warp_in_group & 1;
-      if (outer_mult[slot] != 0.0F) {
+      if (slot_is_active(slot)) {
         const __nv_bfloat16* ds_tile =
             sds + slot * kSrQueryTile * kSrDsStride +
             row_half * kQueryTile * kSrDsStride;
@@ -1442,7 +1444,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
 #pragma unroll
   for (int local = 0; local < kSlotsPerWarpgroup; ++local) {
     const int slot = warpgroup * kSlotsPerWarpgroup + local;
-    if (outer_mult[slot] == 0.0F) {
+    if (!slot_is_active(slot)) {
       continue;
     }
     const int64_t out_base = (slot_plane(slot) * heads + head) *

@@ -82,7 +82,7 @@ mkdir -p "$RUNTIME_ROOT" "$EMPTY_PATH"
 chmod -R a-w "$RUNTIME_ROOT"
 # DeepSpeed is an optional dependency inherited from the build interpreter.
 # Its import probes nvcc even though this smoke exercises only the prebuilt
-# StableFold extensions. Select DeepSpeed's documented CPU
+# TurboPairFormer extensions. Select DeepSpeed's documented CPU
 # accelerator for this child process so CUDA_HOME=/nonexistent continues to
 # prove that the kernel wheel itself has no compiler dependency. This setting
 # is deliberately scoped to the smoke and is never exported to training.

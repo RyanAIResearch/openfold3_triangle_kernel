@@ -34,8 +34,8 @@ print(attention_output.shape)  # torch.Size([1, 128, 128, 4, 32])
 ```
 
 All positions in this synthetic example are valid, so the mask is omitted.
-Single-reconstruction backward and the saved forward rounding residual are
-enabled by default; no environment switches are needed for this example.
+The synchronized source always uses single-reconstruction backward. The saved
+forward rounding residual is enabled by default; no environment switches are needed for this example.
 For TriMul, pass your existing triangle-multiplication module and pair tensor:
 
 ```python
@@ -56,7 +56,8 @@ pixi run -e openfold3-cuda12 doctor-turbopairformer
 The virtual environment and the new checkout's `.pixi/envs/openfold3-cuda12`
 keep these dependencies separate from existing training environments.
 
-Both installation paths use the same **TurboPairFormer 0.1.0** wheel and
+The Pixi environment retains its pinned **TurboPairFormer 0.1.0** wheel; pip
+selects the published package. Both use
 **PyPI Torch 2.10.0 / CUDA runtime 12.8**. The target is Linux x86-64 with
 glibc 2.28 or newer, CPython 3.14, and Hopper compute capability 9.0
 (H100/H200). Installing the prebuilt kernels requires no nvcc.
@@ -71,31 +72,54 @@ and [standalone API examples](packages/turbopairformer/README.md).
 
 Development continues on `feat/turbopairformer-pip-package`.
 [`main`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/main)
-remains the production code line. CUDA source and internal `stablefold_*`
-symbols retain their identity. Historical results below belong to their
+is merged through `ba65b02c`. CUDA sources and internal symbols use the
+`turbopairformer_*` namespace. Historical results below belong to their
 recorded in-tree artifacts and hardware; they are not performance measurements
 of the new package or H200 measurements.
 
-## Existing main production workflow (StableFold)
+## Current synchronized source
 
-The following production instructions and measurements describe the existing
-`main` implementation and its historical artifacts. Their StableFold names,
-configuration flags, and binary identities are preserved. On this branch, that historical runtime is available as
-`openfold3-cuda12-intree`. It has its own Conda Torch / CUDA 12.9 ABI.
-The TurboPairFormer environment above uses a separate package and runtime.
+The in-tree kernels and the standalone package source include main `ba65b02c`:
+the backward pass constructs each probability tile once (SR), and the SR kernel
+shortens FP32 register lifetimes before BF16 matrix multiplications. SR is fixed;
+setting its backward flag to `0` is rejected. The five CUDA sources are identical
+between the in-tree and standalone copies.
 
-StableFold is a Hopper-optimized Triangle Attention and Triangle
+Published wheels and the pinned Pixi release environments remain unchanged.
+To use these source changes, follow the explicit source-build/JIT instructions in
+[package development](packages/turbopairformer/DEVELOPMENT.md). A new release wheel
+must be rebuilt and validated before it can carry these changes.
+
+## In-tree pinned binary workflow
+
+On this branch the main binary workflow below uses `openfold3-cuda12-intree`;
+the standalone release environment uses `openfold3-cuda12`.
+
+TurboPairFormer is a Hopper-optimized Triangle Attention and Triangle
 Multiplicative Update backend integrated directly into OpenFold3. It keeps the
 OpenFold3 training entry points, datasets, checkpoints, and configuration
 structure unchanged; users select the backend through the model configuration.
 
+The two operators are **TurboTriangleAttention** (Triangle Attention) and
+**TurboTriangleMultiplicative** (Triangle Multiplicative Update).
+
+The integrated backend is selected with `--backend turbopairformer`. Current
+module names, extension identities, artifact paths and kernel receipts use the
+TurboPairFormer name.
+
+This `main` branch provides the integrated OpenFold3 production workflow. The
+standalone **TurboPairFormer 0.1.0** Python package is available on
+[PyPI](https://pypi.org/project/turbopairformer/0.1.0/). Package development and
+its OpenFold3 integration live on
+[`feat/turbopairformer-pip-package`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/feat/turbopairformer-pip-package).
+
 The central optimization is a single-reconstruction Triangle Attention
 backward. A flash-style two-pass implementation reconstructs the attention
 probabilities and score gradients once for `dK/dV` and again for `dQ/dBias`.
-StableFold reconstructs each tile once and immediately uses it for all four
+TurboPairFormer reconstructs each tile once and immediately uses it for all four
 gradients. A fixed-order `dBias` reduction replaces floating-point atomics, and
-an optional forward rounding residual improves the row-scalar used by the
-backward without changing the public BF16 output.
+a forward rounding residual, enabled by default, improves the row scalar used
+by the backward without changing the public BF16 output.
 
 ## Parameters available in OpenFold3
 
@@ -114,7 +138,8 @@ A technical description of the OpenFold3-preview2 model version is available [he
 ## Requirements
 
 - Linux x86-64
-- NVIDIA H100 80 GB, compute capability 9.0 (`sm_90a`)
+- NVIDIA H100 or H200, compute capability 9.0 (`sm_90a`); H100 validated,
+  H200 enabled in the source runtime with device validation pending
 - CPython 3.14
 - PyTorch 2.10.0 built for CUDA 12.9
 - NVIDIA driver compatible with the locked CUDA 12.9 runtime; users do not need NVCC
@@ -124,23 +149,28 @@ The prebuilt Triangle Attention extensions contain Hopper-specific SASS and no
 PTX fallback. An ABI or device mismatch is an error, not a reason to load the
 binary anyway.
 
+The source runtime accepts H100 and H200 for both Triangle Attention and TriMul.
+The pinned Pixi wheel below remains the separately validated H100 artifact; this
+source change does not rebuild or replace that installed runtime. H200 timing
+and numerical results have not yet been measured.
+
 ## Upstream synchronization
 
 The source tree includes AQLab `main` through
 [`7de748b7`](https://github.com/aqlaboratory/openfold-3/commit/7de748b7bc93adb5af0a4032d5e9f208b6e1325f)
 (2026-09-18), including template-server reliability, inference intermediate
 management, and memory-efficient metrics updates. See [`UPSTREAM.md`](UPSTREAM.md).
-The production environment below still installs the separately qualified
-`87ebe22da` wheel. Updating this checkout does not rebuild that wheel or claim
-GPU qualification of the newly merged host code.
+The production environment uses a separately built, pinned binary. Source
+updates and namespace changes require their own artifact verification; the
+qualification of an earlier binary does not transfer to a renamed build.
 
 ## Pixi production workflow
 
-To reproduce the historical in-tree workflow from this branch, use a clean checkout:
+Clone the current `main` branch into a clean checkout:
 
 ```bash
 mkdir -p /mnt/shared/openfold3
-git clone --branch feat/turbopairformer-pip-package --single-branch \
+git clone --branch main --single-branch \
   https://github.com/RyanAIResearch/openfold3_triangle_kernel.git \
   /mnt/shared/openfold3/src
 cd /mnt/shared/openfold3/src
@@ -148,8 +178,8 @@ git rev-parse HEAD
 test -z "$(git status --porcelain=v1)"
 ```
 
-Create the locked, non-editable H100 environment and install the qualified
-wheel already stored in the repository; no kernel build command is required:
+Create the locked, non-editable H100 environment and install its pinned wheel;
+users do not need a local kernel build command:
 
 Run the two installation commands once for either one GPU or multiple GPUs on
 one host. For multiple hosts, run them once on node 0 only when the checkout
@@ -160,39 +190,70 @@ run them independently on every host because Pixi does not synchronize nodes.
 curl -fsSL https://pixi.sh/install.sh | sh
 export PATH="$HOME/.pixi/bin:$PATH"
 pixi install -e openfold3-cuda12-intree
-pixi run -e openfold3-cuda12-intree doctor-h100
+pixi run -e openfold3-cuda12-intree doctor-hopper
 pixi run -e openfold3-cuda12-intree verify-aot
 ```
 
+`doctor-hopper` checks H100/H200 hardware and the locked runtime prerequisites;
+`doctor-h100` remains an alias. Passing this preflight does not qualify an
+installed wheel on H200.
+
 The production Pixi environment deliberately contains no editable OpenFold3
 dependency. `pixi install` installs the repository-pinned wheel directly from
-the committed lockfile without compiling any StableFold source, while every
+the committed lockfile without compiling any TurboPairFormer source, while every
 training task checks
 that the installed package, artifact commit, ABI, embedded manifest, wheel
 RECORD, and five extension hashes still match before launching outside the
 source checkout. Dependencies may probe the Pixi-provided compiler ABI and
-CUDA version, but the task does not invoke a StableFold kernel build, CMake,
+CUDA version, but the task does not invoke a TurboPairFormer kernel build, CMake,
 Ninja, or JIT. It then directly executes AQLab `run_openfold` or standard
 `torchrun` without replacing training, strategy, checkpoint, logging, or loss
 behavior, and the selector changes only the training kernel-route flags.
 
-The integration checkout and the binary artifact intentionally have separate
-identities: the checkout contains the installer and guide, while the
-wheel records the qualified source commit `87ebe22da13c657d36997dedb4ec398fbd62c6b7`.
-That wheel keeps Diffusion on AQLab's original attention path and runs
-StableFold only for non-Diffusion triangle Attention and TMU outside the source
-checkout. Its single-node DDP path has been exercised on two real H100s through
-scratch training, validation, checkpointing, and resume. Eight-H100 and real
-multi-node qualification remain pending hardware.
+The integration checkout and binary artifact have separate identities. The
+installed wheel records its build source and extension hashes; the installer
+verifies them before launch. Current release artifacts are stored under
+`release_artifacts/turbopairformer-h100-20260918/`.
+
+The renamed binary requires its own H100 execution validation. Consult the
+artifact's accompanying validation report for completed checks. Full training,
+checkpoint/resume and multi-GPU DDP qualification of this renamed artifact are
+pending; historical results are not certification of the current binary.
 
 For a copy-and-run bare-metal path covering clone, data, prebuilt installation,
 backend selection, single-GPU training, single-node DDP, and multi-node launch,
 see the
 [Bare-metal training quickstart](docs/source/bare_metal_distributed_quickstart.md).
 
-## Enable StableFold manually
+## Protenix Attention + cuEq TriMul
 
-Set the SR-R backward contract before starting Python:
+The optional `protenix` training backend uses ByteDance's native Protenix
+Triangle Attention with NVIDIA cuEquivariance 0.10.0 Triangle Multiplicative
+Update. It is disabled by default and uses the Protenix revision from our
+384/640/768 experiments. See [installation, scope and constraints](docs/source/protenix_backend.md).
+
+```bash
+python tools/select_training_backend.py your_training.yml \
+  --backend protenix --output training_protenix.yml
+```
+
+The generated YAML keeps your data, model weights, optimizer and training
+schedule. It selects Protenix for BF16 triangle attention in the template,
+MSA and main Pairformer stacks, and cuEq TriMul in the MSA and main Pairformer
+stacks. Confidence, template TriMul and other attention retain their stock
+routes. Protenix kernels are loaded lazily; the full Protenix model package is
+not required.
+
+## Enable TurboPairFormer manually
+
+The current source's public facade always uses single-reconstruction backward.
+`OPENFOLD3_SR_BACKWARD` defaults to `1`; explicitly setting it to `0` raises an
+error. `OPENFOLD3_SR_SHADOW` also defaults to `1`. Setting shadow to `0` keeps
+single reconstruction and is available for local accuracy ablations; DDP
+requires shadow to remain enabled.
+
+Keep these compatibility exports when using the pinned September 18 wheel,
+which has not been rebuilt for this source change:
 
 ```bash
 export OPENFOLD3_SR_BACKWARD=1
@@ -200,9 +261,9 @@ export OPENFOLD3_SR_SHADOW=1
 export OPENFOLD3_TRIANGLE_ALLOW_JIT=0
 ```
 
-`OPENFOLD3_SR_SHADOW=1` stores a BF16 rounding residual in the forward and uses
-it only to improve the backward row scalar. It does not change the model-visible
-forward output.
+The shadow path stores a BF16 rounding residual in the forward and uses it only
+to improve the backward row scalar. It does not change the model-visible forward
+output.
 
 In a training YAML, select the backend under the train memory settings:
 
@@ -221,7 +282,7 @@ model_update:
           chunk_size: null
 ```
 
-Keep the existing OpenFold3 architecture defaults when using StableFold
+Keep the existing OpenFold3 architecture defaults when using TurboPairFormer
 Triangle Multiplicative Update: every relevant MSA, Pairformer, and template
 stack must retain `fuse_projection_weights: false`. Everything else in the
 existing OpenFold3 training command can remain unchanged.
@@ -250,24 +311,37 @@ Run the packaging and routing tests:
 
 ```bash
 python -m unittest \
-  openfold3.tests.core.kernels.test_stablefold_triangle_aot_packaging \
-  openfold3.tests.core.kernels.test_stablefold_triangle_packaging \
-  openfold3.tests.core.kernels.test_stablefold_triangle_workspace \
+  openfold3.tests.core.kernels.test_turbopairformer_triangle_aot_packaging \
+  openfold3.tests.core.kernels.test_turbopairformer_triangle_packaging \
+  openfold3.tests.core.kernels.test_turbopairformer_triangle_workspace \
   openfold3.tests.core.model.test_attention_stable_routing
 ```
 
 Run one public-facade forward/backward smoke:
 
 ```bash
-python scripts/benchmarks/stablefold_triangle_sanitizer_smoke.py \
+python scripts/benchmarks/turbopairformer_triangle_sanitizer_smoke.py \
   --sequence 65 --heads 4 --head-dim 32 --prefix 1
 ```
+
+For the current source checkout on Hopper, run the SR routing and FP64 checks
+in the source-development environment:
+
+```bash
+pixi run -e openfold3-cuda12-dev env OPENFOLD3_TRIANGLE_ALLOW_JIT=1 \
+  python -m pytest openfold3/tests/core/kernels/test_turbopairformer_sr_policy.py
+```
+
+`tools/aot_numeric_smoke.py` remains the frozen, hash-qualified validator for the
+pinned wheel. Its classic cases and the `OPENFOLD3_SR_BACKWARD=0` comparison arms
+in `scripts/benchmarks/sr/` require their recorded historical runtime. The
+current source's public facade rejects those legacy two-pass arms.
 
 Before trusting performance, run a short paired canary with the same checkpoint,
 data order, precision, crop, and logging configuration as the comparator. Check:
 
 - finite loss and gradients;
-- expected StableFold route counts and no silent fallback;
+- expected TurboPairFormer route counts and no silent fallback;
 - no JIT/rebuild of the four Triangle Attention extensions or the fifth TriMul
   extension;
 - peak memory and OOM headroom on the largest real sample;
@@ -284,28 +358,28 @@ use_stable_triangle_multiplicative: false
 use_cueq_triangle_kernels: true
 ```
 
+Clear the compatibility exports after switching backend:
+
 ```bash
 unset OPENFOLD3_SR_BACKWARD
 unset OPENFOLD3_SR_SHADOW
 ```
 
-Unsupported StableFold Attention shapes are explicitly routed to the stock
-OpenFold3 implementation; the public StableFold facade itself fails closed.
+Unsupported TurboPairFormer Attention shapes are explicitly routed to the stock
+OpenFold3 implementation; the public TurboPairFormer facade itself fails closed.
 Monitor fallback counts rather than assuming every call used the custom kernel.
 
-StableFold TriMul uses a fixed, non-configurable short-sequence boundary:
+TurboPairFormer TriMul uses a fixed, non-configurable short-sequence boundary:
 valid TriMul calls with `N <= 100` are metadata-unsupported by the AOT path and
 the model selector routes them directly to stock PyTorch. The H100 BF16 AOT
 path starts at `N = 101` for `C_z = C_hidden` in `{32, 64, 96, 128}`. The
 boundary value matches cuEquivariance 0.10's
-`CUEQ_TRIMUL_FALLBACK_THRESHOLD=100`, but StableFold does not read that or any
+`CUEQ_TRIMUL_FALLBACK_THRESHOLD=100`, but TurboPairFormer does not read that or any
 other environment variable. Unsupported direct-facade calls remain
 fail-closed; only the model selector owns the stock fallback.
 
 ## Supported scope and claim boundaries
 
-- Main measured crops: 384, 640, and 768
-- Main measured head dimensions: 16, 24, 32, and 48 across real OpenFold3 sites
 - Runtime Triangle Attention contract: positive prefixes, runtime sequence
   length/head count, and `1 <= D <= 64`, subject to CUDA grid and memory limits
 - Determinism means bitwise self-replay with the same backend, inputs, software
@@ -313,30 +387,71 @@ fail-closed; only the model selector owns the stock fallback.
   cross-hardware bit equality
 - The rounding residual corrects the backward row-scalar channel only; it does
   not eliminate every BF16 error
-- The speedup comes from single reconstruction; the fixed reduction tree and
-  rounding residual each have a cost
+- Single reconstruction reduces repeated attention reconstruction work; the
+  fixed reduction tree and rounding residual also have execution costs
 - Do not infer convergence superiority or memory savings from the timing result
 
-Experimental protocols and receipts are documented under
-[`scripts/benchmarks/sr/`](scripts/benchmarks/sr/) and [`paper/`](paper/).
+Current experiment tooling is under [`scripts/benchmarks/sr/`](scripts/benchmarks/sr/).
+The [methodology overview](paper/README.md) explains the evidence boundaries.
+Earlier manuscripts, raw receipts and result figures remain in the
+[historical source snapshot](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/a522470b500d040e5649e1deed1a7a9581438c62); their version-specific results have not
+been relabeled as measurements of this renamed release.
 
 ## Direct operator entry point
 
 The standalone `turbopairformer` package exposes both operators directly:
 
 ```python
+import torch
 from turbopairformer import turbo_attention, turbo_trimul
 
+B, N, H, D = 1, 128, 4, 32
+# q/k/v: [batch, outer, heads, sequence, head_dim]; here outer = N.
+q, k, v = [
+    torch.randn(B, N, H, N, D, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    for _ in range(3)
+]
+# Pair bias is shared across the outer dimension.
+pair_bias = torch.randn(
+    B, 1, H, N, N, device="cuda", dtype=torch.bfloat16, requires_grad=True
+)
+
 attention_output = turbo_attention(q, k, v, pair_bias=pair_bias)
+attention_output.float().square().mean().backward()
+print(attention_output.shape)  # torch.Size([1, 128, 128, 4, 32])
+```
+
+For TriMul, use your model's existing weights as `module` and its BF16 pair
+representation as `z`:
+
+```python
 trimul_output = turbo_trimul(module, z)
 ```
+
+The standalone package enables single-reconstruction backward and saves the
+forward rounding residual by default; no environment switches are needed.
 
 Masks default to `None` (all positions valid, noncausal); supply explicit masks
 for padded inputs. `pair_bias` remains required. Both calls validate supported
 inputs and provide PyTorch autograd integration.
 `module` supplies the TriMul weights from your model. See the
-[operator examples](packages/turbopairformer/README.md) for input shapes and the
-weight interface. Direct calls require only the standalone package.
+[standalone package examples](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/README.md)
+for input shapes and the weight interface.
+
+Install the package into a fresh CPython 3.14 environment on Linux x86-64
+(glibc 2.28 or newer) with an NVIDIA H100:
+
+```bash
+python3.14 -m venv .venv-turbopairformer
+source .venv-turbopairformer/bin/activate
+python -m pip install turbopairformer
+```
+
+The dedicated environment keeps the package's dependencies separate from your
+existing training environments. See the
+[package installation guide](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/docs/source/turbopairformer_pip_quickstart.md).
+This package uses PyPI Torch / CUDA 12.8; the integrated production environment
+on `main` uses Conda Torch / CUDA 12.9.
 
 ## License and attribution
 
@@ -344,4 +459,6 @@ This repository is derived from
 [AQLab OpenFold3](https://github.com/aqlaboratory/openfold-3) and is distributed
 under Apache-2.0. Retain [`LICENSE`](LICENSE), [`NOTICE`](NOTICE),
 [`UPSTREAM.md`](UPSTREAM.md), and [`CITATION.cff`](CITATION.cff) when sharing an
-internal source or binary bundle.
+internal source or binary bundle. `CITATION.cff` records the upstream OpenFold3
+reference; TurboPairFormer developer credits and its own citation are pending
+confirmation.

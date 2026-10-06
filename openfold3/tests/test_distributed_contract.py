@@ -1,7 +1,7 @@
 # Copyright 2026 AlQuraishi Laboratory
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the StableFold-only distributed kernel contract."""
+"""Unit tests for the TurboPairFormer-only distributed kernel contract."""
 
 from __future__ import annotations
 
@@ -15,17 +15,19 @@ from unittest.mock import Mock
 
 import pytest
 
+from openfold3.core.utils import distributed_contract
 from openfold3.core.utils.distributed_contract import (
     DistributedContractError,
-    StableFoldKernelDDPCallback,
-    _set_stablefold_distributed_strict,
+    TurboPairFormerKernelDDPCallback,
+    _set_turbopairformer_distributed_strict,
     _validate_kernel_records,
     _write_receipt,
-    required_stablefold_aot_modules,
-    stablefold_aot_modules_from_config,
-    stablefold_distributed_execution_flag,
-    stablefold_distributed_strict_enabled,
-    validate_stablefold_distributed_environment,
+    required_turbopairformer_aot_modules,
+    turbopairformer_aot_modules_from_config,
+    turbopairformer_distributed_execution_flag,
+    turbopairformer_distributed_strict_enabled,
+    validate_turbopairformer_attention_policy,
+    validate_turbopairformer_distributed_environment,
 )
 
 
@@ -48,7 +50,7 @@ def _config(
                     "use_stable_triangle_attention": eval_attention,
                     "use_stable_triangle_multiplicative": eval_trimul,
                 },
-            )
+            ),
         )
     )
 
@@ -60,34 +62,96 @@ def _config(
         (
             _config(train_attention=True),
             (
-                "stablefold_forward",
-                "stablefold_delta",
-                "stablefold_dkdv",
-                "stablefold_dq_dbias",
+                "turbopairformer_forward",
+                "turbopairformer_delta",
+                "turbopairformer_dkdv",
+                "turbopairformer_dq_dbias",
             ),
         ),
-        (_config(train_trimul=True), ("stablefold_trimul",)),
+        (_config(train_trimul=True), ("turbopairformer_trimul",)),
         (
             _config(train_trimul=True, eval_attention=True),
             (
-                "stablefold_forward",
-                "stablefold_delta",
-                "stablefold_dkdv",
-                "stablefold_dq_dbias",
-                "stablefold_trimul",
+                "turbopairformer_forward",
+                "turbopairformer_delta",
+                "turbopairformer_dkdv",
+                "turbopairformer_dq_dbias",
+                "turbopairformer_trimul",
             ),
         ),
     ],
 )
-def test_stablefold_aot_module_discovery_uses_train_eval_union(config, expected):
-    assert stablefold_aot_modules_from_config(config) == expected
+def test_turbopairformer_aot_module_discovery_uses_train_eval_union(config, expected):
+    assert turbopairformer_aot_modules_from_config(config) == expected
     module = SimpleNamespace(config=config)
-    assert required_stablefold_aot_modules(module) == expected
+    assert required_turbopairformer_aot_modules(module) == expected
 
 
-def test_stablefold_aot_module_discovery_handles_missing_settings():
-    assert stablefold_aot_modules_from_config(None) == ()
-    assert stablefold_aot_modules_from_config(SimpleNamespace()) == ()
+def test_turbopairformer_aot_module_discovery_handles_missing_settings():
+    assert turbopairformer_aot_modules_from_config(None) == ()
+    assert turbopairformer_aot_modules_from_config(SimpleNamespace()) == ()
+
+
+def test_unset_sr_flags_resolve_to_explicit_production_defaults(monkeypatch):
+    for name in distributed_contract._EXECUTION_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    defaults = distributed_contract._execution_environment()
+    assert defaults == {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1",
+        "OPENFOLD3_TRIANGLE_ALLOW_JIT": None,
+    }
+    validate_turbopairformer_attention_policy()
+    assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_SHADOW")
+    assert not turbopairformer_distributed_execution_flag(
+        "OPENFOLD3_TRIANGLE_ALLOW_JIT"
+    )
+
+    monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1")
+    monkeypatch.setenv("OPENFOLD3_SR_SHADOW", "1")
+    assert distributed_contract._execution_environment() == defaults
+    validate_turbopairformer_attention_policy()
+
+
+def test_attention_policy_rejects_disabled_single_reconstruction(monkeypatch):
+    monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "0")
+    with pytest.raises(RuntimeError, match="requires single-reconstruction backward"):
+        validate_turbopairformer_attention_policy()
+
+
+def test_default_sr_policy_is_frozen_and_audited_after_preflight(monkeypatch):
+    for name in distributed_contract._EXECUTION_ENV_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    expected = distributed_contract._execution_environment()
+    _set_turbopairformer_distributed_strict(True, expected)
+    try:
+        monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1")
+        monkeypatch.setenv("OPENFOLD3_SR_SHADOW", "1")
+        validate_turbopairformer_distributed_environment()
+        validate_turbopairformer_attention_policy()
+
+        monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "0")
+        # The frozen route remains SR; the boundary audit rejects the mutation.
+        validate_turbopairformer_attention_policy()
+        assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_BACKWARD")
+        with pytest.raises(DistributedContractError, match="environment changed"):
+            validate_turbopairformer_distributed_environment()
+    finally:
+        _set_turbopairformer_distributed_strict(False)
+
+
+def test_attention_policy_rejects_disabled_frozen_flag(monkeypatch):
+    monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "0")
+    expected = distributed_contract._execution_environment()
+    _set_turbopairformer_distributed_strict(True, expected)
+    try:
+        monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1")
+        with pytest.raises(
+            RuntimeError, match="requires single-reconstruction backward"
+        ):
+            validate_turbopairformer_attention_policy()
+    finally:
+        _set_turbopairformer_distributed_strict(False)
 
 
 def test_strict_execution_flags_are_immutable(monkeypatch):
@@ -98,24 +162,26 @@ def test_strict_execution_flags_are_immutable(monkeypatch):
     }
     for name, value in expected.items():
         monkeypatch.setenv(name, value)
-    _set_stablefold_distributed_strict(True, expected)
+    _set_turbopairformer_distributed_strict(True, expected)
     try:
-        assert stablefold_distributed_strict_enabled()
-        assert stablefold_distributed_execution_flag("OPENFOLD3_SR_BACKWARD")
-        assert not stablefold_distributed_execution_flag("OPENFOLD3_TRIANGLE_ALLOW_JIT")
+        assert turbopairformer_distributed_strict_enabled()
+        assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_BACKWARD")
+        assert not turbopairformer_distributed_execution_flag(
+            "OPENFOLD3_TRIANGLE_ALLOW_JIT"
+        )
 
         monkeypatch.setenv("OPENFOLD3_SR_SHADOW", "0")
         with pytest.raises(DistributedContractError, match="environment changed"):
-            validate_stablefold_distributed_environment()
+            validate_turbopairformer_distributed_environment()
 
         # Route decisions stay pinned to the preflight snapshot.  The boundary
         # audit above is what terminates a job after an environment mutation.
-        assert stablefold_distributed_execution_flag("OPENFOLD3_SR_SHADOW")
-        with pytest.raises(KeyError, match="unknown StableFold execution flag"):
-            stablefold_distributed_execution_flag("UNRELATED_FLAG")
+        assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_SHADOW")
+        with pytest.raises(KeyError, match="unknown TurboPairFormer execution flag"):
+            turbopairformer_distributed_execution_flag("UNRELATED_FLAG")
     finally:
-        _set_stablefold_distributed_strict(False)
-    assert not stablefold_distributed_strict_enabled()
+        _set_turbopairformer_distributed_strict(False)
+    assert not turbopairformer_distributed_strict_enabled()
 
 
 def _kernel_record(rank: int) -> dict:
@@ -129,7 +195,7 @@ def _kernel_record(rank: int) -> dict:
         "expected_world_size": 2,
         "expected_num_nodes": 1,
         "expected_devices_per_node": 2,
-        "declared_aot_modules": ["stablefold_forward"],
+        "declared_aot_modules": ["turbopairformer_forward"],
         "trainer_world_size": 2,
         "process_group_rank": rank,
         "process_group_world_size": 2,
@@ -160,12 +226,148 @@ def _kernel_record(rank: int) -> dict:
                 "installed_package_tree_sha256": "b" * 64,
             },
         },
-        "required_aot_modules": ["stablefold_forward"],
+        "required_aot_modules": ["turbopairformer_forward"],
         "aot_identity": {
             "manifest_sha256": "a" * 64,
-            "modules": {"stablefold_forward": {"sha256": "c" * 64}},
+            "modules": {"turbopairformer_forward": {"sha256": "c" * 64}},
         },
     }
+
+
+@pytest.fixture
+def collect_mocked_kernel_record(monkeypatch):
+    """Exercise the actual per-rank gate without CUDA or a process group."""
+    from openfold3.core.kernels.cuda import _aot_runtime
+
+    monkeypatch.setattr(distributed_contract.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(distributed_contract.dist, "get_world_size", lambda: 2)
+    monkeypatch.setattr(distributed_contract.dist, "get_backend", lambda: "nccl")
+    monkeypatch.setattr(distributed_contract.pl, "__version__", "2.6.1")
+    monkeypatch.setattr(distributed_contract, "_runtime_identity", lambda: {})
+    for name, value in _kernel_record(0)["execution_environment"].items():
+        monkeypatch.setenv(name, value)
+
+    aot_calls = []
+
+    def aot_identity(modules):
+        aot_calls.append(modules)
+        return {"modules": list(modules)}
+
+    monkeypatch.setattr(_aot_runtime, "distributed_aot_identity", aot_identity)
+    cuda = distributed_contract.torch.cuda
+    monkeypatch.setattr(cuda, "is_available", lambda: True)
+    monkeypatch.setattr(cuda, "current_device", lambda: 0)
+
+    def collect(
+        *,
+        device_name="NVIDIA H200",
+        capability=(9, 0),
+        memory_gib=141,
+        multiprocessors=132,
+        device_uuid="GPU-00000000-0000-0000-0000-000000000001",
+    ):
+        properties = SimpleNamespace(
+            name=device_name,
+            total_memory=memory_gib * 1024**3,
+            multi_processor_count=multiprocessors,
+            uuid=device_uuid,
+        )
+        monkeypatch.setattr(cuda, "get_device_properties", lambda index: properties)
+        monkeypatch.setattr(cuda, "get_device_capability", lambda index: capability)
+        monkeypatch.setattr(cuda, "get_device_name", lambda index: device_name)
+        module = SimpleNamespace(
+            config=_config(train_attention=True, train_trimul=True)
+        )
+        trainer = SimpleNamespace(
+            global_rank=0,
+            local_rank=0,
+            node_rank=0,
+            world_size=2,
+            strategy=distributed_contract.DDPStrategy(),
+        )
+        return distributed_contract._local_kernel_record(
+            trainer,
+            module,
+            expected_world_size=2,
+            expected_num_nodes=1,
+            expected_devices_per_node=2,
+            expected_aot_modules=required_turbopairformer_aot_modules(module),
+        )
+
+    return collect, aot_calls
+
+
+@pytest.mark.parametrize(
+    ("device_name", "memory_gib"),
+    (("NVIDIA H100 80GB HBM3", 80), ("NVIDIA H200", 141), ("NVIDIA H200 NVL", 141)),
+)
+def test_local_kernel_record_accepts_full_h100_and_h200(
+    collect_mocked_kernel_record, device_name, memory_gib
+):
+    collect, aot_calls = collect_mocked_kernel_record
+    record = collect(device_name=device_name, memory_gib=memory_gib)
+
+    assert record["ok"], record.get("error")
+    assert record["device_name"] == device_name
+    assert record["compute_capability"] == [9, 0]
+    assert len(aot_calls) == 1
+    assert set(aot_calls[0]) == {
+        "turbopairformer_forward",
+        "turbopairformer_delta",
+        "turbopairformer_dkdv",
+        "turbopairformer_dq_dbias",
+        "turbopairformer_trimul",
+    }
+
+
+def test_local_kernel_record_accepts_unset_sr_defaults(
+    collect_mocked_kernel_record, monkeypatch
+):
+    collect, _ = collect_mocked_kernel_record
+    monkeypatch.delenv("OPENFOLD3_SR_BACKWARD", raising=False)
+    monkeypatch.delenv("OPENFOLD3_SR_SHADOW", raising=False)
+    record = collect()
+    assert record["ok"], record.get("error")
+    assert record["execution_environment"] == _kernel_record(0)["execution_environment"]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"capability": (8, 0)},
+        {"capability": (10, 0)},
+        {"device_name": "NVIDIA H800"},
+        {"device_name": "NVIDIA B200"},
+        {"device_name": "NVIDIA H200 MIG 7g.141gb"},
+        {"device_uuid": "MIG-00000000-0000-0000-0000-000000000001"},
+        {"device_uuid": ""},
+        {"memory_gib": 74},
+        {"multiprocessors": 99},
+    ),
+)
+def test_local_kernel_record_retains_device_rejections(
+    collect_mocked_kernel_record, changes
+):
+    collect, aot_calls = collect_mocked_kernel_record
+    record = collect(**changes)
+
+    assert not record["ok"]
+    assert "DistributedContractError" in record["error"]
+    assert aot_calls == []
+
+
+def test_kernel_rank_identity_accepts_h200_and_rejects_mixed_models():
+    first, second = _kernel_record(0), _kernel_record(1)
+    for record in (first, second):
+        record.update(
+            device_name="NVIDIA H200",
+            device_total_memory_bytes=141 * 1024**3,
+            device_multiprocessor_count=132,
+        )
+    _validate_kernel_records([first, second])
+
+    with pytest.raises(DistributedContractError, match="device_name"):
+        _validate_kernel_records([first, _kernel_record(1)])
 
 
 def test_kernel_rank_identity_accepts_one_rank_per_gpu():
@@ -176,7 +378,7 @@ def test_kernel_rank_identity_rejects_aot_drift():
     second = _kernel_record(1)
     second["aot_identity"] = {
         "manifest_sha256": "f" * 64,
-        "modules": {"stablefold_forward": {"sha256": "e" * 64}},
+        "modules": {"turbopairformer_forward": {"sha256": "e" * 64}},
     }
     with pytest.raises(DistributedContractError, match="aot_identity"):
         _validate_kernel_records([_kernel_record(0), second])
@@ -201,7 +403,7 @@ def test_kernel_rank_identity_rejects_duplicate_physical_gpu():
 
 def test_kernel_rank_identity_rejects_declared_module_drift():
     second = _kernel_record(1)
-    second["declared_aot_modules"] = ["stablefold_trimul"]
+    second["declared_aot_modules"] = ["turbopairformer_trimul"]
     with pytest.raises(DistributedContractError, match="declared_aot_modules"):
         _validate_kernel_records([_kernel_record(0), second])
 
@@ -209,8 +411,8 @@ def test_kernel_rank_identity_rejects_declared_module_drift():
 def test_kernel_rank_identity_rejects_discovery_mismatch():
     first = _kernel_record(0)
     second = _kernel_record(1)
-    first["declared_aot_modules"] = ["stablefold_trimul"]
-    second["declared_aot_modules"] = ["stablefold_trimul"]
+    first["declared_aot_modules"] = ["turbopairformer_trimul"]
+    second["declared_aot_modules"] = ["turbopairformer_trimul"]
     with pytest.raises(DistributedContractError, match="module discovery"):
         _validate_kernel_records([first, second])
 
@@ -249,7 +451,7 @@ def test_kernel_rank_identity_reports_local_aot_failure():
 
 
 def test_kernel_receipt_has_content_hash_sidecar(tmp_path: Path):
-    receipt = tmp_path / "stablefold_kernel_ddp.json"
+    receipt = tmp_path / "turbopairformer_kernel_ddp.json"
     digest = _write_receipt(receipt, {"schema_version": 1, "status": "PASS"})
 
     assert digest == hashlib.sha256(receipt.read_bytes()).hexdigest()
@@ -263,12 +465,12 @@ def test_kernel_receipt_has_content_hash_sidecar(tmp_path: Path):
 
 
 def test_fit_start_rejects_missing_kernel_preflight(tmp_path: Path):
-    callback = StableFoldKernelDDPCallback(
+    callback = TurboPairFormerKernelDDPCallback(
         expected_world_size=2,
         expected_num_nodes=1,
         expected_devices_per_node=2,
-        expected_aot_modules=("stablefold_forward",),
-        receipt_path=tmp_path / "stablefold_kernel_ddp.json",
+        expected_aot_modules=("turbopairformer_forward",),
+        receipt_path=tmp_path / "turbopairformer_kernel_ddp.json",
     )
     with pytest.raises(DistributedContractError, match="process group"):
         callback.on_fit_start(SimpleNamespace(), SimpleNamespace())
@@ -311,16 +513,16 @@ def test_training_runner_keeps_aqlab_ddp_and_adds_only_kernel_callback(
     kernel_callbacks = [
         callback
         for callback in runner.callbacks
-        if isinstance(callback, StableFoldKernelDDPCallback)
+        if isinstance(callback, TurboPairFormerKernelDDPCallback)
     ]
     assert len(kernel_callbacks) == 1
     assert kernel_callbacks[0].expected_world_size == 2
     assert kernel_callbacks[0].expected_aot_modules == (
-        "stablefold_forward",
-        "stablefold_delta",
-        "stablefold_dkdv",
-        "stablefold_dq_dbias",
-        "stablefold_trimul",
+        "turbopairformer_forward",
+        "turbopairformer_delta",
+        "turbopairformer_dkdv",
+        "turbopairformer_dq_dbias",
+        "turbopairformer_trimul",
     )
 
 
@@ -337,7 +539,7 @@ def local_hopper_record(monkeypatch):
     monkeypatch.setattr(contract, "_runtime_identity", lambda: {"fixture": "CPU guard"})
     monkeypatch.setattr(contract.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(contract.torch.cuda, "current_device", lambda: 0)
-    for name in ("OPENFOLD3_TRIANGLE_ALLOW_JIT", "STABLEFOLD_ALLOW_JIT"):
+    for name in ("OPENFOLD3_TRIANGLE_ALLOW_JIT", "TURBOPAIRFORMER_ALLOW_JIT"):
         monkeypatch.setenv(name, "0")
     aot_identity = Mock(return_value={"fixture": "AOT identity not executed"})
     monkeypatch.setattr(aot_runtime, "distributed_aot_identity", aot_identity)
@@ -378,7 +580,7 @@ def local_hopper_record(monkeypatch):
             expected_world_size=2,
             expected_num_nodes=1,
             expected_devices_per_node=2,
-            expected_aot_modules=("stablefold_trimul",),
+            expected_aot_modules=("turbopairformer_trimul",),
         )
 
     return collect, aot_identity
@@ -393,7 +595,6 @@ def local_hopper_record(monkeypatch):
         "NVIDIA H200",
         "NVIDIA H200 SXM",
         "NVIDIA H200 NVL",
-        "NVIDIA Hopper",
     ),
 )
 def test_local_hopper_hardware_guard_accepts_product_names(
@@ -405,7 +606,7 @@ def test_local_hopper_hardware_guard_accepts_product_names(
     assert record["ok"], record.get("error")
     assert record["device_name"] == device_name
     assert record["compute_capability"] == [9, 0]
-    aot_identity.assert_called_once_with(("stablefold_trimul",))
+    aot_identity.assert_called_once_with(("turbopairformer_trimul",))
 
 
 @pytest.mark.parametrize(
@@ -414,6 +615,7 @@ def test_local_hopper_hardware_guard_accepts_product_names(
         {"capability": (8, 0)},
         {"capability": (9, 1)},
         {"capability": (10, 0)},
+        {"device_name": "NVIDIA Hopper"},
         {"device_name": "NVIDIA H200 MIG 1g.18gb"},
         {"uuid": "MIG-00000000-0000-0000-0000-000000000000"},
         {"uuid": ""},
@@ -429,7 +631,9 @@ def test_local_hopper_hardware_guard_retains_architecture_and_full_gpu_checks(
 
     assert not record["ok"]
     assert "DistributedContractError" in record["error"]
-    assert "CUDA device UUID" in record["error"] or "full Hopper" in record["error"]
+    assert (
+        "CUDA device UUID" in record["error"] or "full H100 or H200" in record["error"]
+    )
     aot_identity.assert_not_called()
 
 
@@ -438,4 +642,4 @@ def test_local_hopper_hardware_guard_preserves_minimum_resources(local_hopper_re
     record = collect(total_memory=75 * 1024**3, multiprocessor_count=100)
 
     assert record["ok"], record.get("error")
-    aot_identity.assert_called_once_with(("stablefold_trimul",))
+    aot_identity.assert_called_once_with(("turbopairformer_trimul",))

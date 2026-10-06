@@ -418,9 +418,11 @@ def turbopairformer_triangle_sr_backward(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Single-reconstruction backward: dQ, dK, dV, per-batch dBias.
 
-    Experimental v1 contract: classic delta for every gradient, flat BF16
-    dQ partials of [key_blocks, B*O, H, N, D] folded in fixed ascending
-    key-block order.  Exact-tiles shapes only (sequence % 64 == 0, D <= 64).
+    Uses the caller-supplied FP32 delta when forming dS. The public
+    facade uses the forward rounding residual to compute delta by default.
+    Flat BF16 dQ partials of [key_blocks, B*O, H, N, D] are folded in fixed
+    ascending key-block order. Requires sequence % 64 == 0 and D <= 64 with
+    D % 8 == 0.
     """
 
     outer = int(q.shape[1])

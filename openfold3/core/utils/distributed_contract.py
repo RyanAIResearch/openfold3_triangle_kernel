@@ -1,12 +1,12 @@
 # Copyright 2026 AlQuraishi Laboratory
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kernel-only distributed preflight for the StableFold AOT backends.
+"""Kernel-only distributed preflight for the TurboPairFormer AOT backends.
 
 The OpenFold3 training loop, DDP strategy, gradients, EMA, losses, logging, and
 checkpoint behavior remain owned by AQLab.  This module only makes sure that
-every DDP rank is about to execute the same attested StableFold kernels on a
-distinct compatible GPU, then freezes the StableFold route policy.
+every DDP rank is about to execute the same attested TurboPairFormer kernels on a
+distinct compatible GPU, then freezes the TurboPairFormer route policy.
 """
 
 from __future__ import annotations
@@ -27,42 +27,52 @@ import torch.distributed as dist
 from pytorch_lightning.strategies import DDPStrategy
 
 _ATTENTION_AOT_MODULES = (
-    "stablefold_forward",
-    "stablefold_delta",
-    "stablefold_dkdv",
-    "stablefold_dq_dbias",
+    "turbopairformer_forward",
+    "turbopairformer_delta",
+    "turbopairformer_dkdv",
+    "turbopairformer_dq_dbias",
 )
-_TRIMUL_AOT_MODULES = ("stablefold_trimul",)
+_TRIMUL_AOT_MODULES = ("turbopairformer_trimul",)
 _EXECUTION_ENV_KEYS = (
     "OPENFOLD3_SR_BACKWARD",
     "OPENFOLD3_SR_SHADOW",
     "OPENFOLD3_TRIANGLE_ALLOW_JIT",
 )
+_DEFAULT_EXECUTION_FLAGS = {
+    "OPENFOLD3_SR_BACKWARD": "1",
+    "OPENFOLD3_SR_SHADOW": "1",
+}
 
-_STRICT_DISTRIBUTED_STABLEFOLD = False
+_STRICT_DISTRIBUTED_TURBOPAIRFORMER = False
 _STRICT_EXECUTION_ENVIRONMENT: dict[str, str | None] | None = None
 
 
 class DistributedContractError(RuntimeError):
-    """Raised when StableFold kernel identities differ across DDP ranks."""
+    """Raised when TurboPairFormer kernel identities differ across DDP ranks."""
+
+
+def _execution_flag_value(name: str) -> str | None:
+    return os.environ.get(name, _DEFAULT_EXECUTION_FLAGS.get(name))
 
 
 def _execution_environment() -> dict[str, str | None]:
-    return {name: os.environ.get(name) for name in _EXECUTION_ENV_KEYS}
+    """Snapshot effective flags so unset SR defaults match explicit ones."""
+
+    return {name: _execution_flag_value(name) for name in _EXECUTION_ENV_KEYS}
 
 
-def stablefold_distributed_strict_enabled() -> bool:
-    """Return whether unexpected StableFold model-level fallbacks are fatal."""
+def turbopairformer_distributed_strict_enabled() -> bool:
+    """Return whether unexpected TurboPairFormer model-level fallbacks are fatal."""
 
-    return _STRICT_DISTRIBUTED_STABLEFOLD
+    return _STRICT_DISTRIBUTED_TURBOPAIRFORMER
 
 
-def _set_stablefold_distributed_strict(
+def _set_turbopairformer_distributed_strict(
     enabled: bool,
     execution_environment: dict[str, str | None] | None = None,
 ) -> None:
-    global _STRICT_DISTRIBUTED_STABLEFOLD, _STRICT_EXECUTION_ENVIRONMENT
-    _STRICT_DISTRIBUTED_STABLEFOLD = bool(enabled)
+    global _STRICT_DISTRIBUTED_TURBOPAIRFORMER, _STRICT_EXECUTION_ENVIRONMENT
+    _STRICT_DISTRIBUTED_TURBOPAIRFORMER = bool(enabled)
     _STRICT_EXECUTION_ENVIRONMENT = (
         dict(execution_environment)
         if enabled and execution_environment is not None
@@ -70,30 +80,42 @@ def _set_stablefold_distributed_strict(
     )
 
 
-def validate_stablefold_distributed_environment() -> None:
-    """Reject changes to StableFold execution flags after rank preflight."""
+def validate_turbopairformer_distributed_environment() -> None:
+    """Reject changes to TurboPairFormer execution flags after rank preflight."""
 
-    if _STRICT_DISTRIBUTED_STABLEFOLD and (
+    if _STRICT_DISTRIBUTED_TURBOPAIRFORMER and (
         _STRICT_EXECUTION_ENVIRONMENT is None
         or _execution_environment() != _STRICT_EXECUTION_ENVIRONMENT
     ):
         raise DistributedContractError(
-            "StableFold execution environment changed after DDP kernel preflight"
+            "TurboPairFormer execution environment changed after DDP kernel preflight"
         )
 
 
-def stablefold_distributed_execution_flag(name: str) -> bool:
-    """Read a StableFold flag from the immutable DDP policy when armed."""
+def turbopairformer_distributed_execution_flag(name: str) -> bool:
+    """Read a TurboPairFormer flag from the immutable DDP policy when armed."""
 
     if name not in _EXECUTION_ENV_KEYS:
-        raise KeyError(f"unknown StableFold execution flag: {name}")
-    if not _STRICT_DISTRIBUTED_STABLEFOLD:
-        return os.environ.get(name) == "1"
+        raise KeyError(f"unknown TurboPairFormer execution flag: {name}")
+    if not _STRICT_DISTRIBUTED_TURBOPAIRFORMER:
+        return _execution_flag_value(name) == "1"
     if _STRICT_EXECUTION_ENVIRONMENT is None:
         raise DistributedContractError(
-            "strict StableFold execution policy was not initialized"
+            "strict TurboPairFormer execution policy was not initialized"
         )
     return _STRICT_EXECUTION_ENVIRONMENT[name] == "1"
+
+
+def validate_turbopairformer_attention_policy() -> None:
+    """Require single reconstruction whenever TurboPairFormer attention is selected."""
+
+    if not turbopairformer_distributed_execution_flag("OPENFOLD3_SR_BACKWARD"):
+        raise RuntimeError(
+            "TurboPairFormer attention requires single-reconstruction backward; "
+            "OPENFOLD3_SR_BACKWARD must be unset or 1. Setting it to 0 cannot "
+            "select the old algorithm. Use historical source or low-level "
+            "reference kernels for ablations."
+        )
 
 
 def _setting(settings: Any, name: str) -> bool:
@@ -102,8 +124,8 @@ def _setting(settings: Any, name: str) -> bool:
     return bool(getattr(settings, name, False))
 
 
-def stablefold_aot_modules_from_config(config: Any) -> tuple[str, ...]:
-    """Return the StableFold AOT union selected by train and eval configs."""
+def turbopairformer_aot_modules_from_config(config: Any) -> tuple[str, ...]:
+    """Return the TurboPairFormer AOT union selected by train and eval configs."""
 
     try:
         memory = config.settings.memory
@@ -125,12 +147,12 @@ def stablefold_aot_modules_from_config(config: Any) -> tuple[str, ...]:
     )
 
 
-def required_stablefold_aot_modules(
+def required_turbopairformer_aot_modules(
     pl_module: pl.LightningModule,
 ) -> tuple[str, ...]:
-    """Return the StableFold AOT union selected by a Lightning module."""
+    """Return the TurboPairFormer AOT union selected by a Lightning module."""
 
-    return stablefold_aot_modules_from_config(getattr(pl_module, "config", None))
+    return turbopairformer_aot_modules_from_config(getattr(pl_module, "config", None))
 
 
 def installed_distribution_identity() -> dict[str, Any]:
@@ -140,7 +162,7 @@ def installed_distribution_identity() -> dict[str, Any]:
         distribution = importlib.metadata.distribution("openfold3")
     except importlib.metadata.PackageNotFoundError as error:
         raise DistributedContractError(
-            "StableFold DDP requires an installed openfold3 wheel"
+            "TurboPairFormer DDP requires an installed openfold3 wheel"
         ) from error
 
     direct_url_text = distribution.read_text("direct_url.json")
@@ -153,7 +175,7 @@ def installed_distribution_identity() -> dict[str, Any]:
             ) from error
         if direct_url.get("dir_info", {}).get("editable") is True:
             raise DistributedContractError(
-                "StableFold DDP rejects editable OpenFold3 installs"
+                "TurboPairFormer DDP rejects editable OpenFold3 installs"
             )
 
     files = distribution.files or ()
@@ -262,38 +284,38 @@ def _local_kernel_record(
         )
         if record["process_group_backend"] != "nccl":
             raise DistributedContractError(
-                "StableFold kernel DDP preflight requires the NCCL backend"
+                "TurboPairFormer kernel DDP preflight requires the NCCL backend"
             )
         if not record["is_ddp_strategy"]:
             raise DistributedContractError(
-                "StableFold kernel DDP preflight requires AQLab DDPStrategy"
+                "TurboPairFormer kernel DDP preflight requires AQLab DDPStrategy"
             )
         if pl.__version__ != "2.6.1":
             raise DistributedContractError(
-                "StableFold kernel DDP preflight is qualified with "
+                "TurboPairFormer kernel DDP preflight is qualified with "
                 f"pytorch-lightning 2.6.1, got {pl.__version__}"
             )
 
-        required_modules = required_stablefold_aot_modules(pl_module)
+        required_modules = required_turbopairformer_aot_modules(pl_module)
         if not required_modules:
             raise DistributedContractError(
-                "StableFold kernel callback was installed with no selected module"
+                "TurboPairFormer kernel callback was installed with no selected module"
             )
         execution_environment = _execution_environment()
         if execution_environment["OPENFOLD3_TRIANGLE_ALLOW_JIT"] != "0":
             raise DistributedContractError(
-                "StableFold kernel DDP requires OPENFOLD3_TRIANGLE_ALLOW_JIT=0"
+                "TurboPairFormer kernel DDP requires OPENFOLD3_TRIANGLE_ALLOW_JIT=0"
             )
-        if "stablefold_forward" in required_modules and (
+        if "turbopairformer_forward" in required_modules and (
             execution_environment["OPENFOLD3_SR_BACKWARD"] != "1"
             or execution_environment["OPENFOLD3_SR_SHADOW"] != "1"
         ):
             raise DistributedContractError(
-                "StableFold Attention DDP requires OPENFOLD3_SR_BACKWARD=1 "
+                "TurboPairFormer Attention DDP requires OPENFOLD3_SR_BACKWARD=1 "
                 "and OPENFOLD3_SR_SHADOW=1"
             )
         if not torch.cuda.is_available():
-            raise DistributedContractError("StableFold kernel DDP requires CUDA")
+            raise DistributedContractError("TurboPairFormer kernel DDP requires CUDA")
 
         device_index = torch.cuda.current_device()
         properties = torch.cuda.get_device_properties(device_index)
@@ -304,15 +326,16 @@ def _local_kernel_record(
             raise DistributedContractError("CUDA device UUID is unavailable")
         if (
             capability != (9, 0)
+            or not any(model in device_name.upper() for model in ("H100", "H200"))
             or "MIG" in device_name.upper()
             or device_uuid.upper().startswith("MIG")
             or int(properties.total_memory) < 75 * 1024**3
             or int(properties.multi_processor_count) < 100
         ):
             raise DistributedContractError(
-                "StableFold kernel DDP requires full Hopper sm90a GPUs "
-                "(H100/H200) with MIG disabled, at least 75 GiB memory "
-                "and at least 100 multiprocessors"
+                "TurboPairFormer kernel DDP requires full H100 or H200 GPUs "
+                "with compute capability 9.0, at least 75 GiB and 100 SMs, "
+                "and MIG disabled"
             )
 
         from openfold3.core.kernels.cuda._aot_runtime import (
@@ -343,7 +366,7 @@ def _validate_kernel_records(records: list[dict[str, Any]]) -> None:
     """Validate gathered rank records without inspecting training state."""
 
     if not records:
-        raise DistributedContractError("no StableFold kernel rank records gathered")
+        raise DistributedContractError("no TurboPairFormer kernel rank records gathered")
     failures = {
         record.get("global_rank", index): record.get("error", "unknown error")
         for index, record in enumerate(records)
@@ -351,7 +374,7 @@ def _validate_kernel_records(records: list[dict[str, Any]]) -> None:
     }
     if failures:
         raise DistributedContractError(
-            f"StableFold kernel rank preflight failed: {failures}"
+            f"TurboPairFormer kernel rank preflight failed: {failures}"
         )
 
     first = records[0]
@@ -422,18 +445,18 @@ def _validate_kernel_records(records: list[dict[str, Any]]) -> None:
     for field in invariant_fields:
         if any(record[field] != first[field] for record in records[1:]):
             raise DistributedContractError(
-                f"StableFold kernel ranks disagree on {field}"
+                f"TurboPairFormer kernel ranks disagree on {field}"
             )
     if first["process_group_backend"] != "nccl" or not first["is_ddp_strategy"]:
         raise DistributedContractError(
-            "StableFold kernel preflight requires AQLab DDPStrategy over NCCL"
+            "TurboPairFormer kernel preflight requires AQLab DDPStrategy over NCCL"
         )
     if (
         not first["required_aot_modules"]
         or first["declared_aot_modules"] != first["required_aot_modules"]
     ):
         raise DistributedContractError(
-            "StableFold module discovery differs from the runner declaration: "
+            "TurboPairFormer module discovery differs from the runner declaration: "
             f"declared={first['declared_aot_modules']}, "
             f"required={first['required_aot_modules']}"
         )
@@ -468,15 +491,15 @@ def _receipt_readback_status(path: Path, expected_sha256: str) -> dict[str, Any]
             or fields[1] != path.name
         ):
             raise DistributedContractError(
-                "StableFold kernel receipt readback hash mismatch"
+                "TurboPairFormer kernel receipt readback hash mismatch"
             )
         return {"ok": True, "sha256": actual}
     except Exception as error:
         return {"ok": False, "error": f"{type(error).__name__}: {error}"}
 
 
-class StableFoldKernelDDPCallback(pl.Callback):
-    """Preload and compare StableFold kernels before the first DDP forward."""
+class TurboPairFormerKernelDDPCallback(pl.Callback):
+    """Preload and compare TurboPairFormer kernels before the first DDP forward."""
 
     def __init__(
         self,
@@ -502,7 +525,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
     ) -> None:
         if not dist.is_available() or not dist.is_initialized():
             raise DistributedContractError(
-                "DDP process group is not initialized for StableFold preflight"
+                "DDP process group is not initialized for TurboPairFormer preflight"
             )
 
         process_group_world_size = int(dist.get_world_size())
@@ -533,7 +556,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
                 receipt_payload = {
                     "schema_version": 1,
                     "status": "PENDING_ALL_RANK_READBACK",
-                    "scope": "stablefold_kernel_ddp_only",
+                    "scope": "turbopairformer_kernel_ddp_only",
                     "backend": gathered[0]["process_group_backend"],
                     "expected_world_size": self.expected_world_size,
                     "expected_num_nodes": self.expected_num_nodes,
@@ -551,7 +574,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
         dist.broadcast_object_list(receipt_status, src=0)
         if not receipt_status[0] or not receipt_status[0].get("ok"):
             raise DistributedContractError(
-                f"failed to seal StableFold kernel DDP receipt: {receipt_status[0]}"
+                f"failed to seal TurboPairFormer kernel DDP receipt: {receipt_status[0]}"
             )
 
         local_readback = _receipt_readback_status(
@@ -569,7 +592,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
         }
         if failures:
             raise DistributedContractError(
-                f"StableFold kernel receipt is not readable on every rank: {failures}"
+                f"TurboPairFormer kernel receipt is not readable on every rank: {failures}"
             )
 
         final_status: list[dict[str, Any] | None] = [None]
@@ -577,7 +600,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
             try:
                 if receipt_payload is None:
                     raise DistributedContractError(
-                        "rank zero lost the StableFold kernel receipt payload"
+                        "rank zero lost the TurboPairFormer kernel receipt payload"
                     )
                 receipt_payload["status"] = "PASS"
                 final_status[0] = {
@@ -592,7 +615,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
         dist.broadcast_object_list(final_status, src=0)
         if not final_status[0] or not final_status[0].get("ok"):
             raise DistributedContractError(
-                f"failed to finalize StableFold kernel DDP receipt: {final_status[0]}"
+                f"failed to finalize TurboPairFormer kernel DDP receipt: {final_status[0]}"
             )
 
         final_readback = _receipt_readback_status(
@@ -614,7 +637,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
                 try:
                     if receipt_payload is None:
                         raise DistributedContractError(
-                            "rank zero lost the StableFold kernel receipt payload"
+                            "rank zero lost the TurboPairFormer kernel receipt payload"
                         )
                     receipt_payload["status"] = "FAIL_FINAL_READBACK"
                     receipt_payload["final_readback_failures"] = final_failures
@@ -632,11 +655,11 @@ class StableFoldKernelDDPCallback(pl.Callback):
                     }
             dist.broadcast_object_list(downgrade_status, src=0)
             raise DistributedContractError(
-                "final StableFold kernel receipt is not readable on every rank: "
+                "final TurboPairFormer kernel receipt is not readable on every rank: "
                 f"{final_failures}; downgrade={downgrade_status[0]}"
             )
 
-        _set_stablefold_distributed_strict(
+        _set_turbopairformer_distributed_strict(
             True,
             gathered[0]["execution_environment"],
         )
@@ -659,18 +682,18 @@ class StableFoldKernelDDPCallback(pl.Callback):
         del trainer, pl_module
         if not dist.is_available() or not dist.is_initialized():
             raise DistributedContractError(
-                "DDP process group is not initialized for StableFold fit"
+                "DDP process group is not initialized for TurboPairFormer fit"
             )
         self._audit_environment()
 
     def _audit_environment(self) -> None:
         local_error = None
         try:
-            if not self._validated or not stablefold_distributed_strict_enabled():
+            if not self._validated or not turbopairformer_distributed_strict_enabled():
                 raise DistributedContractError(
-                    "StableFold kernel strict policy is not armed"
+                    "TurboPairFormer kernel strict policy is not armed"
                 )
-            validate_stablefold_distributed_environment()
+            validate_turbopairformer_distributed_environment()
         except Exception as error:
             local_error = f"{type(error).__name__}: {error}"
         device = (
@@ -686,7 +709,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
             errors: list[str | None] = [None for _ in range(dist.get_world_size())]
             dist.all_gather_object(errors, local_error)
             raise DistributedContractError(
-                f"StableFold execution flag drift across DDP ranks: {errors}"
+                f"TurboPairFormer execution flag drift across DDP ranks: {errors}"
             )
 
     def on_train_epoch_start(
@@ -706,7 +729,7 @@ class StableFoldKernelDDPCallback(pl.Callback):
         self._audit_environment()
 
     def _reset(self) -> None:
-        _set_stablefold_distributed_strict(False)
+        _set_turbopairformer_distributed_strict(False)
         self._validated = False
 
     def on_fit_end(
@@ -738,11 +761,11 @@ class StableFoldKernelDDPCallback(pl.Callback):
 
 __all__ = [
     "DistributedContractError",
-    "StableFoldKernelDDPCallback",
+    "TurboPairFormerKernelDDPCallback",
     "installed_distribution_identity",
-    "required_stablefold_aot_modules",
-    "stablefold_aot_modules_from_config",
-    "stablefold_distributed_execution_flag",
-    "stablefold_distributed_strict_enabled",
-    "validate_stablefold_distributed_environment",
+    "required_turbopairformer_aot_modules",
+    "turbopairformer_aot_modules_from_config",
+    "turbopairformer_distributed_execution_flag",
+    "turbopairformer_distributed_strict_enabled",
+    "validate_turbopairformer_distributed_environment",
 ]

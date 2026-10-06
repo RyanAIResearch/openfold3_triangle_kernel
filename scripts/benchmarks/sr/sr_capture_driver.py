@@ -1,4 +1,4 @@
-"""Run `run_openfold train` with a capture patch on the StableFold facade.
+"""Run `run_openfold train` with a capture patch on the TurboPairFormer facade.
 
 Saves the first CAPTURE_LIMIT triangle-attention calls (inputs + the
 gradient that later arrives at the output) from a real pretrained
@@ -18,10 +18,10 @@ os.makedirs(CAPTURE_DIR, exist_ok=True)
 import torch  # noqa: E402
 
 from openfold3.core.kernels.cuda import (  # noqa: E402
-    stablefold_triangle_attention as facade_module,
+    turbopairformer_triangle_attention as facade_module,
 )
 
-_original = facade_module.stablefold_triangle_attention
+_original = facade_module.turbopairformer_triangle_attention
 _state = {"captured": 0, "pending": 0, "seen": 0}
 
 
@@ -62,7 +62,7 @@ def _capturing(q, k, v, res_mask, pair_bias):
     return out
 
 
-facade_module.stablefold_triangle_attention = _capturing
+facade_module.turbopairformer_triangle_attention = _capturing
 
 # The model's attention primitive may have imported the symbol by value;
 # patch every already-imported alias too (none exist yet at this point,

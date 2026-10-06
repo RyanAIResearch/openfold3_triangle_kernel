@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Select one mutually exclusive OpenFold3 training-kernel backend in a YAML."""
+"""Select one mutually exclusive OpenFold3 training-kernel backend in a YAML.
+
+TurboPairFormer uses the existing production kernel configuration flags.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_triton_triangle_kernels": False,
         "use_cueq_triangle_kernels": False,
         "use_stable_triangle_attention": False,
+        "use_protenix_triangle_attention": False,
         "use_stable_triangle_multiplicative": False,
         "use_deepspeed_evo_attention": False,
         "use_lma": False,
@@ -22,6 +26,16 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_triton_triangle_kernels": False,
         "use_cueq_triangle_kernels": True,
         "use_stable_triangle_attention": False,
+        "use_protenix_triangle_attention": False,
+        "use_stable_triangle_multiplicative": False,
+        "use_deepspeed_evo_attention": False,
+        "use_lma": False,
+    },
+    "protenix": {
+        "use_triton_triangle_kernels": False,
+        "use_cueq_triangle_kernels": True,
+        "use_stable_triangle_attention": False,
+        "use_protenix_triangle_attention": True,
         "use_stable_triangle_multiplicative": False,
         "use_deepspeed_evo_attention": False,
         "use_lma": False,
@@ -30,6 +44,7 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_triton_triangle_kernels": True,
         "use_cueq_triangle_kernels": False,
         "use_stable_triangle_attention": False,
+        "use_protenix_triangle_attention": False,
         "use_stable_triangle_multiplicative": False,
         "use_deepspeed_evo_attention": False,
         "use_lma": False,
@@ -38,6 +53,7 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_triton_triangle_kernels": False,
         "use_cueq_triangle_kernels": False,
         "use_stable_triangle_attention": True,
+        "use_protenix_triangle_attention": False,
         "use_stable_triangle_multiplicative": True,
         "use_deepspeed_evo_attention": False,
         "use_lma": False,
@@ -46,6 +62,7 @@ BACKEND_FLAGS: dict[str, dict[str, bool]] = {
         "use_triton_triangle_kernels": False,
         "use_cueq_triangle_kernels": False,
         "use_stable_triangle_attention": False,
+        "use_protenix_triangle_attention": False,
         "use_stable_triangle_multiplicative": False,
         "use_deepspeed_evo_attention": True,
         "use_lma": False,

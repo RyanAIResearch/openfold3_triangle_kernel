@@ -1,0 +1,100 @@
+{
+  "repository": "https://github.com/bytedance/Protenix",
+  "commit": "4c355be4553512f72453ecbfb65e69f4c35d1413",
+  "algorithm_changes": false,
+  "files": [
+    {
+      "path": "_vendor/op.py",
+      "upstream_path": "protenix/model/tri_attention/op.py",
+      "upstream_sha256": "e0942e6d6b06607ad399ee972465edbcb868fa1328cf39322730f3b3e4a4135b",
+      "upstream_git_blob_sha1": "291ad69763320c515b5114c34a7ea8a2fd4eee88",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/op.py",
+      "vendored_sha256": "576a6ca9fd6ecf5fb17aa740a77de1abb964f6477762565d02015d51257d2bee",
+      "adaptation": "Only the import namespace replacements declared in import_rewrites; reversing them reproduces upstream bytes exactly.",
+      "algorithm_ast_sha256": "89fee57bcfde5630e1696fa3ccde35522e832a27b57494ca1a618b0f4d18c85f"
+    },
+    {
+      "path": "_vendor/forward.py",
+      "upstream_path": "protenix/model/tri_attention/forward.py",
+      "upstream_sha256": "42fc170c998d3170fbf5781837a71b7d7b9f7e569be7554f39287236a7d4ae93",
+      "upstream_git_blob_sha1": "e7cd8a3135980203e871e368a7469c2a7273151e",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/forward.py",
+      "vendored_sha256": "6dfc4c8094b33db9f7742ee2f79487c581b412b1e3729117ce93380ff631c93c",
+      "adaptation": "Only the import namespace replacements declared in import_rewrites; reversing them reproduces upstream bytes exactly.",
+      "algorithm_ast_sha256": "8cd21409cba39e11ed10bf3733cd7ad48ac651cb5819f4f7c529fe4c6e72d03a"
+    },
+    {
+      "path": "_vendor/backward.py",
+      "upstream_path": "protenix/model/tri_attention/backward.py",
+      "upstream_sha256": "fac61c5601a2b0fe5d6f236f5de0e59a3382e094115f8654c0f9d675c14eea46",
+      "upstream_git_blob_sha1": "d9e020f02f4c44cf47a452862455d6f40b8ab3b0",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/backward.py",
+      "vendored_sha256": "66541deed6b3aa68751b55466d30aa3bd4d82dcd7bb96eb94a0928a10cd85c2b",
+      "adaptation": "Only the import namespace replacements declared in import_rewrites; reversing them reproduces upstream bytes exactly.",
+      "algorithm_ast_sha256": "9f1146c16622c352bb0bdd0ee6bf85ed81a27e9b9c600a777f3525fa96699e93"
+    },
+    {
+      "path": "_vendor/autotune.py",
+      "upstream_path": "protenix/model/tri_attention/autotune.py",
+      "upstream_sha256": "4da7f146f0c7e399b624ed818354c6e5044213ff873a3b995f66d3af988f0de8",
+      "upstream_git_blob_sha1": "4d9a05f5b53c2de9c854bbd7ba6137cffdf7c731",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/autotune.py",
+      "vendored_sha256": "d4a06b4d936b39acf9d72fecab2f1d53da8fc1352f3bbf837fb374febe5e4847",
+      "adaptation": "Only the import namespace replacements declared in import_rewrites; reversing them reproduces upstream bytes exactly."
+    },
+    {
+      "path": "_vendor/autotune_helpers.py",
+      "upstream_path": "protenix/model/tri_attention/autotune_helpers.py",
+      "upstream_sha256": "e9f1a96c63a0218b2bd25198d9aa31a9165a0ec20534e5607a0692995d3743d7",
+      "upstream_git_blob_sha1": "1ad8bd903d007b4b5d15d260f02a2c2dea91965b",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/model/tri_attention/autotune_helpers.py",
+      "vendored_sha256": "fe1d9965509795f2908d44d231341271518c817b0c9c9be61d06ddc86adb9187",
+      "adaptation": "Only the import namespace replacements declared in import_rewrites; reversing them reproduces upstream bytes exactly.",
+      "configuration_ast_sha256": "9eff9c69e8089cee7c27f86ac03e12cc9c7e1605339c8980cacebd8999dfe7e8"
+    },
+    {
+      "path": "_vendor/distributed.py",
+      "upstream_path": "protenix/utils/distributed.py",
+      "upstream_sha256": "10e8a47fe679cfc8844534e45f032d9908bb16fb8ab714e90d74ebfc439fbbb2",
+      "upstream_git_blob_sha1": "c0e6c5089c81634d973217879e33889f3638cf6b",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/protenix/utils/distributed.py",
+      "vendored_sha256": "10e8a47fe679cfc8844534e45f032d9908bb16fb8ab714e90d74ebfc439fbbb2",
+      "adaptation": "Unmodified upstream bytes."
+    },
+    {
+      "path": "LICENSE",
+      "upstream_path": "LICENSE",
+      "upstream_sha256": "add3b0d4449b29559d6f429d84a09a9b363d78fd516b3315a8ed946eb12ad8eb",
+      "upstream_git_blob_sha1": "c6dd1f322a49000ac84f511711b418fdcaaeda9e",
+      "source_url": "https://github.com/bytedance/Protenix/blob/4c355be4553512f72453ecbfb65e69f4c35d1413/LICENSE",
+      "vendored_sha256": "add3b0d4449b29559d6f429d84a09a9b363d78fd516b3315a8ed946eb12ad8eb",
+      "adaptation": "Unmodified upstream bytes."
+    }
+  ],
+  "host_layout": {
+    "source": "Frozen three-crop 70-step experiment adapter (2026-09-20)",
+    "function_sha256": "a11b6da4d9e3ee3e87e87037b0180ab131ffc1d4c86f532ec67c58a79e93756d",
+    "adaptation": "Function body copied unchanged; host Q scaling, native deterministic=False and contiguous dO hook preserved."
+  },
+  "omitted_upstream_files": [
+    "protenix/model/tri_attention/__init__.py"
+  ],
+  "integration_changes": [
+    "Keep the six native implementation/runtime sources byte-identical to pinned upstream after reversing only declared import namespace substitutions.",
+    "Preserve upstream package-relative TriAttentionCache/<RANK>, import-time CUDA capability/device lookup, import-time cache loading, rank-0 cache seeding, cache filenames, errors, and autotune behavior.",
+    "No custom cache root, per-device/runtime cache partition, dynamic rank substitution, cache retry handling, or vendored type-annotation changes.",
+    "Expose lazy attention_scaled under openfold3.core.kernels.protenix; do not inject the global protenix namespace or load the upstream public fallback wrapper.",
+    "Retain host CUDA/BF16 input validation and non-trainable mask contract separately from the unmodified native implementation.",
+    "Retain caller-prescaled Q with no additional scale/cast, 4D/5D/6D OpenFold layout normalization, native deterministic=False, and the contiguous dO boundary hook.",
+    "Do not ship experiment-specific pre-tuned cache entries."
+  ],
+  "strict_upstream": true,
+  "strict_upstream_scope": "The six vendored native implementation/runtime source files and LICENSE. The OpenFold host adapter remains separately documented.",
+  "import_rewrites": {
+    "from protenix.model.tri_attention.autotune_helpers import ": "from openfold3.core.kernels.protenix._vendor.autotune_helpers import ",
+    "from protenix.model.tri_attention.autotune import ": "from openfold3.core.kernels.protenix._vendor.autotune import ",
+    "from protenix.model.tri_attention.backward import ": "from openfold3.core.kernels.protenix._vendor.backward import ",
+    "from protenix.model.tri_attention.forward import ": "from openfold3.core.kernels.protenix._vendor.forward import ",
+    "from protenix.utils.distributed import ": "from openfold3.core.kernels.protenix._vendor.distributed import "
+  }
+}

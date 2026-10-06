@@ -1,4 +1,4 @@
-# Modified by RyanAIResearch in 2026 to package StableFold Triangle Attention.
+# Modified by RyanAIResearch in 2026 to package TurboPairFormer triangle kernels.
 
 [build-system]
 # CUDAExtension imports the exact runtime Torch ABI.  The canonical sm_90a
@@ -13,7 +13,7 @@ dynamic = ["version"]
 authors = [
     { name = "OpenFold Team", email = "support@openfold.io" }
 ]
-description = "OpenFold's Biological Structure Prediction Model based on DeepMind's AlphaFold 3"
+description = "OpenFold3 with TurboPairFormer Triangle Attention and Triangle Multiplicative Update kernels"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 classifiers = [
@@ -78,10 +78,17 @@ optional-dependencies.cuequivariance = [
     "cuequivariance-torch==0.10.0",
     "torch==2.10.0",
 ]
+optional-dependencies.protenix = [
+    "triton==3.6.0; platform_system == 'Linux'",
+    "cuequivariance==0.10.0",
+    "cuequivariance-ops-torch-cu12==0.10.0",
+    "cuequivariance-torch==0.10.0",
+    "torch==2.10.0",
+]
 optional-dependencies.deepspeed = [
     "deepspeed>=0.18.7",
 ]
-optional-dependencies.stablefold-h100 = [
+optional-dependencies.turbopairformer-h100 = [
     "torch==2.10.0",
     "pytorch-lightning==2.6.1",
 ]
@@ -124,12 +131,15 @@ openfold3 = [
     "projects/*/config/*.yml",
     "tests/test_data/**/*",
     "scripts/*.sh",
-    "core/kernels/cuda/stablefold_triangle_forward.cu",
-    "core/kernels/cuda/stablefold_triangle_delta.cu",
-    "core/kernels/cuda/stablefold_triangle_dkdv.cu",
-    "core/kernels/cuda/stablefold_triangle_dq_dbias.cu",
-    "core/kernels/cuda/stablefold_trimul_cuda.cu",
-    "core/kernels/cuda/_build_manifest.json"
+    "core/kernels/cuda/turbopairformer_triangle_forward.cu",
+    "core/kernels/cuda/turbopairformer_triangle_delta.cu",
+    "core/kernels/cuda/turbopairformer_triangle_dkdv.cu",
+    "core/kernels/cuda/turbopairformer_triangle_dq_dbias.cu",
+    "core/kernels/cuda/turbopairformer_trimul_cuda.cu",
+    "core/kernels/cuda/_build_manifest.json",
+    "core/kernels/protenix/*.json",
+    "core/kernels/protenix/*.md",
+    "core/kernels/protenix/LICENSE"
 ]
 
 # The ABI-locked H100 artifact is intentionally not built through the generic
@@ -138,7 +148,7 @@ openfold3 = [
 
 [tool.ruff]
 line-length = 88
-extend-exclude = ["docs"]
+extend-exclude = ["docs", "openfold3/core/kernels/protenix/_vendor"]
 
 [tool.ruff.lint]
 select = [
@@ -213,6 +223,13 @@ follow_imports_for_stubs = true
 [[tool.mypy.overrides]]
 module = ["rdkit.*", "gemmi.*"]
 follow_imports = "skip"
+
+# Keep pinned third-party sources intact, including their upstream annotations.
+# Byte identity after namespace normalization is checked by the provider tests.
+# Host adapters remain fully type-checked.
+[[tool.mypy.overrides]]
+module = ["openfold3.core.kernels.protenix._vendor.*"]
+ignore_errors = true
 
 [tool.mypy-baseline]
 # Keep the baseline sorted so its diffs stay reviewable.

@@ -1,0 +1,567 @@
+{
+  "aot_identity": {
+    "abi": {
+      "python_soabi": "cpython-314-x86_64-linux-gnu",
+      "python_version": "3.14.7",
+      "torch_cuda_version": "12.9",
+      "torch_cxx11_abi": true,
+      "torch_version": "2.10.0"
+    },
+    "extensions": {
+      "turbopairformer_delta": {
+        "filename": "_turbopairformer_delta_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_delta_sm90a",
+        "sha256": "d12bfa5c38847d28c4e8ef1ca6ebb7f82144ed8f1ca85e85e7cae51318158e55",
+        "symbols": [
+          "turbopairformer_triangle_delta_out",
+          "turbopairformer_triangle_delta_shadow_out"
+        ]
+      },
+      "turbopairformer_dkdv": {
+        "filename": "_turbopairformer_dkdv_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_dkdv_sm90a",
+        "sha256": "fcac4ea16d17cc3d851f80a4c897df40a8ce7445b9d455c443ef9a0f04843f81",
+        "symbols": [
+          "turbopairformer_triangle_dkdv_out",
+          "turbopairformer_triangle_dkdv_delta_true_out"
+        ]
+      },
+      "turbopairformer_dq_dbias": {
+        "filename": "_turbopairformer_dq_dbias_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_dq_dbias_sm90a",
+        "sha256": "1730947272ce90f29fdaa8b8e2a8bfb768e278d9d947315841ad6526c9c8c2c2",
+        "symbols": [
+          "turbopairformer_triangle_dq_dbias_out",
+          "turbopairformer_reduce_broadcast_dbias_out",
+          "turbopairformer_triangle_sr_backward_out"
+        ]
+      },
+      "turbopairformer_forward": {
+        "filename": "_turbopairformer_forward_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_forward_sm90a",
+        "sha256": "a6ca649c1d0631f7f309fc61407a9831c418098aebf092d25da022fdb29e027b",
+        "symbols": [
+          "turbopairformer_triangle_forward_out",
+          "turbopairformer_pack_qkv",
+          "turbopairformer_triangle_forward_shadow_out"
+        ]
+      },
+      "turbopairformer_trimul": {
+        "filename": "_turbopairformer_trimul_sm90a.cpython-314-x86_64-linux-gnu.so",
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_trimul_sm90a",
+        "sha256": "2fcccea9bae29df2a72f5b3f54ad1b391d845a108db967b5371f607269ee6a8b",
+        "symbols": [
+          "trimul_in_fwd",
+          "trimul_out_fwd",
+          "trimul_gate_split_bwd",
+          "sig_mul_bwd_out",
+          "ln_bwd_dx",
+          "ln_bwd_dgb",
+          "transpose_ln_bwd",
+          "trimul_wgrad_fixed_fold"
+        ]
+      }
+    },
+    "git": {
+      "commit": "84f96a31e96f27324a93df7e0485a8326a15fd40",
+      "dirty": false
+    },
+    "manifest_sha256": "c792f68cd07924f68129d277cb703c0274837054123bcb6ae82b0ee9a383fb13",
+    "packaged_source_sha256": {
+      "openfold3/core/kernels/cuda/PRODUCTION_MANIFEST.md": "d899606dcddaaa025a2d24c1d90b26a2c93228df07d06d277ebc1a9516975754",
+      "openfold3/core/kernels/cuda/_aot_runtime.py": "a03bb4e70e1fbcb278414ea9c9229163ae4849b4cbb2d9211fe9019826574dd3",
+      "openfold3/core/kernels/cuda/_ext/__init__.py": "aa2f233e4579b76984c3867e1ddbb88273800b70c60010c220b9714ee77a0c49",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_attention.py": "bfb09c48579941ece14a8052191c0ca490bad3ead4a83d935570fc71b04c4755",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_delta.cu": "69ef59706d33e7de5928abdabe0c9439db359fd81f0bd7f10baefc68a2bdd759",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_delta.py": "523e0e1a87c9a0acfe2e3194b0db32528d699177182d2df55042fb4639edca8a",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_dkdv.cu": "1f4cebb0fd3aa234b9f41318810dcffaadc6f314c706ae29b2a67a753f9aee59",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_dkdv.py": "835300bcf6e22db055b3cdd873d84b8943cfc1099481c7bafca6b13010c8b959",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_dq_dbias.cu": "f6be2429062c888b3e08a643df53968821303f7a685549330c418add6e4ca995",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_dq_dbias.py": "3b607a1bc6cd2626204f0796f3389f6a9642ed47286f544b42b506caf86de82d",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_forward.cu": "dfb6aacc26076018599545771e5beedcb75e8d98ab9868211f052a694ee19f3d",
+      "openfold3/core/kernels/cuda/turbopairformer_triangle_forward.py": "044d001edd1898e96ddfb84c587112d6892442415906e3bc57e999790b0ad754",
+      "openfold3/core/kernels/cuda/turbopairformer_trimul.py": "799866a5c3cca5279cfc8468136a40a62860e138d844fda5b4f7258ab1fb1294",
+      "openfold3/core/kernels/cuda/turbopairformer_trimul_cuda.cu": "8962ca3513538070e5fb21259bd57a38a586641123aadfda40c62c44f9c9aa03",
+      "openfold3/core/kernels/cuda/turbopairformer_trimul_cuda.py": "51d62aadb352fd79538dfce92eddc038c845d53e8f7b2d89889afaf43a1a4fa3"
+    },
+    "schema_version": 1,
+    "target": {
+      "cuda_arch": "sm_90a",
+      "ptx_embedded": false,
+      "torch_cuda_arch_list": "9.0a"
+    }
+  },
+  "attention": [
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.0030848956445808516,
+          "relative_l2": 0.0024563408031800984,
+          "stock_relative_l2": 0.002803541495073501
+        },
+        "dk": {
+          "limit": 0.003642232099889552,
+          "relative_l2": 0.0023774349417825485,
+          "stock_relative_l2": 0.0033102109998995924
+        },
+        "dq": {
+          "limit": 0.00361534395118088,
+          "relative_l2": 0.0029444377400873307,
+          "stock_relative_l2": 0.0032857672283462544
+        },
+        "dv": {
+          "limit": 0.0031772030588792352,
+          "relative_l2": 0.0023610922152671955,
+          "stock_relative_l2": 0.00288745732625385
+        },
+        "out": {
+          "limit": 0.003173095105559535,
+          "relative_l2": 0.0018252142876837999,
+          "stock_relative_l2": 0.0028837228232359404
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1"
+      },
+      "fully_masked_zero": null,
+      "name": "prod N=128 D=32",
+      "shape": {
+        "B": 1,
+        "D": 32,
+        "H": 4,
+        "N": 128,
+        "O": 8,
+        "full_planes": 0,
+        "mask_frac": 0.0
+      },
+      "status": "PASS"
+    },
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.003048628051729681,
+          "relative_l2": 0.0024353271436381566,
+          "stock_relative_l2": 0.0027705709561178914
+        },
+        "dk": {
+          "limit": 0.003552201444837703,
+          "relative_l2": 0.002414234636385565,
+          "stock_relative_l2": 0.003228364949852457
+        },
+        "dq": {
+          "limit": 0.0035357259166087307,
+          "relative_l2": 0.0029481996089403663,
+          "stock_relative_l2": 0.0032133871969170277
+        },
+        "dv": {
+          "limit": 0.0029945165634129934,
+          "relative_l2": 0.0023227168766644583,
+          "stock_relative_l2": 0.002721378694011812
+        },
+        "out": {
+          "limit": 0.003035510838778194,
+          "relative_l2": 0.0018036160949594586,
+          "stock_relative_l2": 0.002758646217071085
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1"
+      },
+      "fully_masked_zero": null,
+      "name": "prod N=100 pad D=32 masked",
+      "shape": {
+        "B": 1,
+        "D": 32,
+        "H": 4,
+        "N": 100,
+        "O": 8,
+        "full_planes": 0,
+        "mask_frac": 0.3
+      },
+      "status": "PASS"
+    },
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.003184020286025501,
+          "relative_l2": 0.0016511593412905023,
+          "stock_relative_l2": 0.0028936548054777278
+        },
+        "dk": {
+          "limit": 0.003800839859525403,
+          "relative_l2": 0.002354285157441704,
+          "stock_relative_l2": 0.0034543998722958206
+        },
+        "dq": {
+          "limit": 0.003791948793763323,
+          "relative_l2": 0.00289980583927511,
+          "stock_relative_l2": 0.003446317085239384
+        },
+        "dv": {
+          "limit": 0.003402202999118302,
+          "relative_l2": 0.0023526538165393883,
+          "stock_relative_l2": 0.003092002726471183
+        },
+        "out": {
+          "limit": 0.0033916247689614884,
+          "relative_l2": 0.0018189747692401962,
+          "stock_relative_l2": 0.003082386153601353
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1"
+      },
+      "fully_masked_zero": null,
+      "name": "prod N=384 D=24",
+      "shape": {
+        "B": 1,
+        "D": 24,
+        "H": 4,
+        "N": 384,
+        "O": 4,
+        "full_planes": 0,
+        "mask_frac": 0.2
+      },
+      "status": "PASS"
+    },
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.0030997714952711143,
+          "relative_l2": 0.002726140946491662,
+          "stock_relative_l2": 0.0028170649957010127
+        },
+        "dk": {
+          "limit": 0.003709538121085212,
+          "relative_l2": 0.00318108428728638,
+          "stock_relative_l2": 0.003371398291895647
+        },
+        "dq": {
+          "limit": 0.0037332073486180803,
+          "relative_l2": 0.003623483009995318,
+          "stock_relative_l2": 0.0033929157714709815
+        },
+        "dv": {
+          "limit": 0.00325891233020883,
+          "relative_l2": 0.002641392148390432,
+          "stock_relative_l2": 0.002961738482008027
+        },
+        "out": {
+          "limit": 0.0032303714411343267,
+          "relative_l2": 0.0021976268450621364,
+          "stock_relative_l2": 0.002935792219213024
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1"
+      },
+      "fully_masked_zero": null,
+      "name": "prod N=200 D=20 padD",
+      "shape": {
+        "B": 2,
+        "D": 20,
+        "H": 4,
+        "N": 200,
+        "O": 4,
+        "full_planes": 0,
+        "mask_frac": 0.2
+      },
+      "status": "PASS"
+    },
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.003188119522590461,
+          "relative_l2": 0.0024152907967412863,
+          "stock_relative_l2": 0.002897381384173146
+        },
+        "dk": {
+          "limit": 0.0036547521345751096,
+          "relative_l2": 0.002364205713169575,
+          "stock_relative_l2": 0.0033215928496137356
+        },
+        "dq": {
+          "limit": 0.00365519370585761,
+          "relative_l2": 0.0029126418926646728,
+          "stock_relative_l2": 0.0033219942780523723
+        },
+        "dv": {
+          "limit": 0.003270894107166348,
+          "relative_l2": 0.002354351431555464,
+          "stock_relative_l2": 0.0029726310065148615
+        },
+        "out": {
+          "limit": 0.003258725901226239,
+          "relative_l2": 0.0018141503947264688,
+          "stock_relative_l2": 0.0029615690011147626
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1"
+      },
+      "fully_masked_zero": true,
+      "name": "prod N=256 D=64 full planes",
+      "shape": {
+        "B": 1,
+        "D": 64,
+        "H": 4,
+        "N": 256,
+        "O": 6,
+        "full_planes": 2,
+        "mask_frac": 0.2
+      },
+      "status": "PASS"
+    },
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.0032277643493085497,
+          "relative_l2": 0.0016727822173553087,
+          "stock_relative_l2": 0.002933422135735045
+        },
+        "dk": {
+          "limit": 0.0037110369366702162,
+          "relative_l2": 0.0023758805600198303,
+          "stock_relative_l2": 0.003372760851518378
+        },
+        "dq": {
+          "limit": 0.003702792783925693,
+          "relative_l2": 0.0029131878773996397,
+          "stock_relative_l2": 0.003365266167205175
+        },
+        "dv": {
+          "limit": 0.0033676585498570977,
+          "relative_l2": 0.002336756797000418,
+          "stock_relative_l2": 0.0030605986816882704
+        },
+        "out": {
+          "limit": 0.0033806142381991914,
+          "relative_l2": 0.0018176225016780243,
+          "stock_relative_l2": 0.003072376580181083
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1"
+      },
+      "fully_masked_zero": null,
+      "name": "prod N=384 D=48",
+      "shape": {
+        "B": 1,
+        "D": 48,
+        "H": 4,
+        "N": 384,
+        "O": 2,
+        "full_planes": 0,
+        "mask_frac": 0.1
+      },
+      "status": "PASS"
+    },
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.003394967637546786,
+          "relative_l2": 0.0016678113898476996,
+          "stock_relative_l2": 0.003085425125042532
+        },
+        "dk": {
+          "limit": 0.003924481933947794,
+          "relative_l2": 0.0023486698955249015,
+          "stock_relative_l2": 0.0035668017581343575
+        },
+        "dq": {
+          "limit": 0.003906517597130969,
+          "relative_l2": 0.0029725031211319587,
+          "stock_relative_l2": 0.0035504705428463347
+        },
+        "dv": {
+          "limit": 0.0035388074817209515,
+          "relative_l2": 0.002346424336337045,
+          "stock_relative_l2": 0.003216188619746319
+        },
+        "out": {
+          "limit": 0.0035560144017850854,
+          "relative_l2": 0.0018343328022933576,
+          "stock_relative_l2": 0.003231831274350077
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "1",
+        "OPENFOLD3_SR_SHADOW": "1"
+      },
+      "fully_masked_zero": null,
+      "name": "prod N=768 D=16 H=8",
+      "shape": {
+        "B": 1,
+        "D": 16,
+        "H": 8,
+        "N": 768,
+        "O": 2,
+        "full_planes": 0,
+        "mask_frac": 0.1
+      },
+      "status": "PASS"
+    },
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.003184020286025501,
+          "relative_l2": 0.0016303764749987897,
+          "stock_relative_l2": 0.0028936548054777278
+        },
+        "dk": {
+          "limit": 0.003800839859525403,
+          "relative_l2": 0.0025117207554327804,
+          "stock_relative_l2": 0.0034543998722958206
+        },
+        "dq": {
+          "limit": 0.003791948793763323,
+          "relative_l2": 0.0023428523097781804,
+          "stock_relative_l2": 0.003446317085239384
+        },
+        "dv": {
+          "limit": 0.003402202999118302,
+          "relative_l2": 0.0023526538165393883,
+          "stock_relative_l2": 0.003092002726471183
+        },
+        "out": {
+          "limit": 0.0033916247689614884,
+          "relative_l2": 0.0018189747692401962,
+          "stock_relative_l2": 0.003082386153601353
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "0",
+        "OPENFOLD3_SR_SHADOW": "0"
+      },
+      "fully_masked_zero": null,
+      "name": "classic N=384 D=24",
+      "shape": {
+        "B": 1,
+        "D": 24,
+        "H": 4,
+        "N": 384,
+        "O": 4,
+        "full_planes": 0,
+        "mask_frac": 0.2
+      },
+      "status": "PASS"
+    },
+    {
+      "bitwise_replay": true,
+      "errors": {
+        "dbias": {
+          "limit": 0.003188119522590461,
+          "relative_l2": 0.00237747219883347,
+          "stock_relative_l2": 0.002897381384173146
+        },
+        "dk": {
+          "limit": 0.0036547521345751096,
+          "relative_l2": 0.002560072293338858,
+          "stock_relative_l2": 0.0033215928496137356
+        },
+        "dq": {
+          "limit": 0.00365519370585761,
+          "relative_l2": 0.00234982877988368,
+          "stock_relative_l2": 0.0033219942780523723
+        },
+        "dv": {
+          "limit": 0.003270894107166348,
+          "relative_l2": 0.002354351431555464,
+          "stock_relative_l2": 0.0029726310065148615
+        },
+        "out": {
+          "limit": 0.003258725901226239,
+          "relative_l2": 0.0018141503947264688,
+          "stock_relative_l2": 0.0029615690011147626
+        }
+      },
+      "finite": true,
+      "flags": {
+        "OPENFOLD3_SR_BACKWARD": "0",
+        "OPENFOLD3_SR_SHADOW": "0"
+      },
+      "fully_masked_zero": true,
+      "name": "classic N=256 D=64 full planes",
+      "shape": {
+        "B": 1,
+        "D": 64,
+        "H": 4,
+        "N": 256,
+        "O": 6,
+        "full_planes": 2,
+        "mask_frac": 0.2
+      },
+      "status": "PASS"
+    }
+  ],
+  "compute_capability": [
+    9,
+    0
+  ],
+  "device": "NVIDIA H100 80GB HBM3",
+  "git_commit": "84f96a31e96f27324a93df7e0485a8326a15fd40",
+  "gpu_count": 1,
+  "installed_distribution": {
+    "installed_package_tree_sha256": "ac4e60b3c425e38e9ea988a032d28dbe4dde1a4f284778f81465cf9a863ccd24",
+    "name": "openfold3",
+    "runtime_from_verified_distribution": true,
+    "verified_package_files": 472,
+    "version": "0.5.1.dev5924+g84f96a31e"
+  },
+  "limitations": [
+    "No fresh multi-GPU or end-to-end training qualification",
+    "TriMul reference covers FP32 weight-gradient folding; full-operator accuracy is outside this check"
+  ],
+  "schema_version": 1,
+  "scope": "Attention FP64 error envelope and TriMul FP32 weight-gradient fold",
+  "status": "PASS",
+  "trimul_fp32_fold": [
+    {
+      "bitwise_equal": true,
+      "channels": 32,
+      "status": "PASS"
+    },
+    {
+      "bitwise_equal": true,
+      "channels": 64,
+      "status": "PASS"
+    },
+    {
+      "bitwise_equal": true,
+      "channels": 96,
+      "status": "PASS"
+    },
+    {
+      "bitwise_equal": true,
+      "channels": 128,
+      "status": "PASS"
+    }
+  ],
+  "validator": {
+    "path": "tools/aot_numeric_smoke.py",
+    "sha256": "c33ad3e3dbe3f4b881db132240ba673d52976b9719f1a4de185271e439f56067"
+  },
+  "wheel_sha256": "5a7c8915f0d9be2534c85809f6b32aa9ab9404e930d0b1ea72fafd1c09aa318b"
+}

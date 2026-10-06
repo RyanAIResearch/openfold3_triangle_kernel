@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import torch
 
-from openfold3.core.kernels.cuda import stablefold_triangle_attention as facade
-from openfold3.core.kernels.cuda.stablefold_triangle_dq_dbias import (
-    stablefold_triangle_sr_backward,
+from openfold3.core.kernels.cuda import turbopairformer_triangle_attention as facade
+from openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias import (
+    turbopairformer_triangle_sr_backward,
 )
 
 
@@ -46,7 +46,7 @@ def main() -> None:
     )
     lse = torch.empty(shape[:-1], device="cuda", dtype=torch.float32)
     shadow = torch.empty_like(out)
-    facade._forward_extension().stablefold_triangle_forward_shadow_out(
+    facade._forward_extension().turbopairformer_triangle_forward_shadow_out(
         q, k, v, mask, bias, out, lse, shadow
     )
     delta = (
@@ -55,7 +55,7 @@ def main() -> None:
         .permute(0, 1, 3, 2)
         .contiguous()
     )
-    stablefold_triangle_sr_backward(
+    turbopairformer_triangle_sr_backward(
         q,
         k,
         v,

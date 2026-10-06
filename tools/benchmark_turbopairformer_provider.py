@@ -86,11 +86,11 @@ def _load_provider(name: str) -> Callable[..., Any]:
 
         return triangle_attention
     if name == "intree":
-        from openfold3.core.kernels.cuda.stablefold_triangle_attention import (
-            stablefold_triangle_attention,
+        from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+            turbopairformer_triangle_attention,
         )
 
-        return stablefold_triangle_attention
+        return turbopairformer_triangle_attention
     if name == "stock":
         return _stock_attention
     raise SystemExit(f"unknown provider: {name}")
@@ -128,6 +128,7 @@ def _measure(attention, shape, iters, *, backward: bool) -> dict[str, Any] | Non
                 out.backward(grad_out)
 
         else:
+
             def step():
                 with torch.no_grad():
                     attention(*inputs)
@@ -165,9 +166,11 @@ def main() -> int:
     capability = torch.cuda.get_device_capability()
     print(f"device   {device} (sm_{capability[0]}{capability[1]})")
     print(f"torch    {torch.__version__} / CUDA {torch.version.cuda}")
-    print(f"flags    SR_BACKWARD={os.environ.get('OPENFOLD3_SR_BACKWARD')} "
-          f"SR_SHADOW={os.environ.get('OPENFOLD3_SR_SHADOW')} "
-          f"ALLOW_JIT={os.environ.get('OPENFOLD3_TRIANGLE_ALLOW_JIT')}")
+    print(
+        f"flags    SR_BACKWARD={os.environ.get('OPENFOLD3_SR_BACKWARD')} "
+        f"SR_SHADOW={os.environ.get('OPENFOLD3_SR_SHADOW')} "
+        f"ALLOW_JIT={os.environ.get('OPENFOLD3_TRIANGLE_ALLOW_JIT')}"
+    )
     print(f"iters    {arguments.iters} (after {WARMUP} warmup)")
     print()
 

@@ -11,8 +11,8 @@
 
 The complete AQLab source tree is retained so that the OpenFold3 model,
 training recipe, configuration system, and data pipeline remain runnable. The
-RyanAIResearch delta is limited to the StableFold Triangle Attention and
-Triangle Multiplicative Update runtimes, their routing/configuration
+RyanAIResearch delta is limited to the TurboPairFormer
+Triangle Attention and Triangle Multiplicative Update runtimes, their routing/configuration
 integration, AOT package data, a kernel-only DDP identity preflight, and focused
 release tests. AQLab's DDP strategy, gradient reduction, EMA, loss, checkpoint,
 logging, optimizer, data pipeline, and training recipe remain unchanged.
@@ -20,8 +20,10 @@ logging, optimizer, data pipeline, and training recipe remain unchanged.
 The historical kernel experiments and obsolete PyTorch-aligned variants remain
 in the development repository and are intentionally excluded here.
 
-The 2026-09-18 synchronization retains the fork's kernel routes, CUDA source,
-and pinned production wheel. Upstream inference/data/metrics fixes and the
-Pixi-based CI/Docker changes are merged into the host source. The current
-production wheel remains the artifact built from `87ebe22da`; this source
-merge does not rebuild it or extend its hardware/training qualification.
+The 2026-09-18 synchronization includes upstream inference, data, metrics,
+and Pixi-based CI/Docker changes. The subsequent naming migration updates the
+kernel modules, compiled symbols, operator namespaces, and installed artifact.
+The new artifact and its validation scope are recorded in
+`release_artifacts/turbopairformer-h100-20260918/RECEIPT.json`.
+Historical training measurements remain bound to their original source and
+binary identities in Git history; they do not certify the rebuilt artifact.

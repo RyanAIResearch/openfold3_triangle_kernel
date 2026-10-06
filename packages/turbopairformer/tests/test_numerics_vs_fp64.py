@@ -29,7 +29,14 @@ pytestmark = pytest.mark.skipif(
 DEV = torch.device("cuda")
 NEG = -1e4
 PROD_FLAGS = {"TURBOPAIRFORMER_SR_BACKWARD": "1", "TURBOPAIRFORMER_SR_SHADOW": "1"}
-CLASSIC_FLAGS = {"TURBOPAIRFORMER_SR_BACKWARD": "0", "TURBOPAIRFORMER_SR_SHADOW": "0"}
+DEFAULT_FLAGS = {}
+
+
+@pytest.fixture(autouse=True)
+def isolated_attention_policy(monkeypatch):
+    for prefix in ("TURBOPAIRFORMER", "OPENFOLD3"):
+        for name in ("SR_BACKWARD", "SR_SHADOW"):
+            monkeypatch.delenv(f"{prefix}_{name}", raising=False)
 
 
 def _finite_mask(mask: torch.Tensor) -> torch.Tensor:
@@ -126,13 +133,13 @@ CASES = [
         dict(B=1, O=2, H=8, N=768, D=16, mask_frac=0.1, full_planes=0),
     ),
     (
-        "classic N=384 D=24",
-        CLASSIC_FLAGS,
+        "default SR N=384 D=24",
+        DEFAULT_FLAGS,
         dict(B=1, O=4, H=4, N=384, D=24, mask_frac=0.2, full_planes=0),
     ),
     (
-        "classic N=256 D=64 full planes",
-        CLASSIC_FLAGS,
+        "default SR N=256 D=64 full planes",
+        DEFAULT_FLAGS,
         dict(B=1, O=6, H=4, N=256, D=64, mask_frac=0.2, full_planes=2),
     ),
 ]

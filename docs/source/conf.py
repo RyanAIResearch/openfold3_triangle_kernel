@@ -6,7 +6,7 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "OpenFold3"
+project = "TurboPairFormer for OpenFold3"
 copyright = "2025, OpenFold Team"
 author = "OpenFold Team"
 

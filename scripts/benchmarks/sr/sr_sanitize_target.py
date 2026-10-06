@@ -14,8 +14,8 @@ os.environ.setdefault(
 
 import torch  # noqa: E402
 
-from openfold3.core.kernels.cuda.stablefold_triangle_attention import (  # noqa: E402
-    stablefold_triangle_attention,
+from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (  # noqa: E402
+    turbopairformer_triangle_attention,
 )
 
 for batch, outer, heads, seq, dim in (
@@ -33,7 +33,7 @@ for batch, outer, heads, seq, dim in (
         0.1
         * torch.randn(batch, 1, heads, seq, seq, device="cuda", dtype=torch.float32)
     ).requires_grad_()
-    out = stablefold_triangle_attention(q, k, v, mask, bias)
+    out = turbopairformer_triangle_attention(q, k, v, mask, bias)
     torch.autograd.grad(out, (q, k, v, bias), grad_outputs=torch.ones_like(out))
     torch.cuda.synchronize()
     print(f"shape {shape} done", flush=True)

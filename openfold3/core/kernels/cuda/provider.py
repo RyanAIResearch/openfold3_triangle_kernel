@@ -11,9 +11,10 @@ Two providers expose the same facade:
 ``intree``
     the kernel copy vendored under ``openfold3/core/kernels/cuda``.
 
-Both compile byte-identical ``.cu`` sources, so the two providers are expected
-to be numerically indistinguishable; the provider-equivalence test suite
-asserts that forward outputs and gradients match bitwise.
+Builds of both providers from the same current source use byte-identical
+``.cu`` files; the provider-equivalence tests check their outputs and gradients
+bitwise. Published wheels may contain historical sources, so this claim does
+not extend to an arbitrary installed wheel.
 
 Selection is explicit and logged once:
 
@@ -119,15 +120,15 @@ def _module(kind: str) -> Any:
             # The package, not the private implementation module: the public
             # names are what the package guarantees.
             TURBOPAIRFORMER,
-            "openfold3.core.kernels.cuda.stablefold_triangle_attention",
+            "openfold3.core.kernels.cuda.turbopairformer_triangle_attention",
         ),
         "trimul_support": (
             "turbopairformer.trimul_support",
-            "openfold3.core.kernels.cuda.stablefold_trimul_support",
+            "openfold3.core.kernels.cuda.turbopairformer_trimul_support",
         ),
         "trimul_runner": (
             "turbopairformer._trimul",
-            "openfold3.core.kernels.cuda.stablefold_trimul",
+            "openfold3.core.kernels.cuda.turbopairformer_trimul",
         ),
     }[kind]
     return _import(names[0] if turbopairformer_serving else names[1])
@@ -144,7 +145,10 @@ def triangle_attention_facade() -> tuple[Callable[..., Any], Callable[..., Any]]
     module = _module("attention")
     if active_provider() == TURBOPAIRFORMER:
         return module.is_triangle_attention_supported, module.triangle_attention
-    return module.is_stablefold_supported, module.stablefold_triangle_attention
+    return (
+        module.is_turbopairformer_supported,
+        module.turbopairformer_triangle_attention,
+    )
 
 
 def trimul_support_check() -> Callable[..., Any]:
@@ -171,6 +175,33 @@ def trimul_runner() -> Callable[..., Any]:
     return module._run_supported_stable_trimul
 
 
+def validate_attention_policy() -> None:
+    """Validate the selected provider's policy before any host shape fallback."""
+
+    if active_provider() == TURBOPAIRFORMER:
+        policy = _import("turbopairformer.policy")
+        validator = getattr(policy, "validate_attention_policy", None)
+        if validator is not None:
+            validator()
+        else:
+            # Published wheels predate the mandatory-policy helper. Their
+            # existing getters retain canonical flag precedence and DDP state.
+            policy.validate_distributed_environment()
+            if not policy.distributed_execution_flag(policy.SR_BACKWARD):
+                raise RuntimeError(
+                    "TurboPairFormer attention requires single-reconstruction "
+                    "backward; the effective SR_BACKWARD flag must be 1. "
+                    "Use historical source or low-level reference kernels "
+                    "for ablations."
+                )
+        return
+    from openfold3.core.utils.distributed_contract import (
+        validate_turbopairformer_attention_policy,
+    )
+
+    validate_turbopairformer_attention_policy()
+
+
 def strict_fallback_enabled() -> bool:
     """Return whether an unexpected model-level fallback must raise.
 
@@ -179,10 +210,10 @@ def strict_fallback_enabled() -> bool:
     """
 
     from openfold3.core.utils.distributed_contract import (
-        stablefold_distributed_strict_enabled,
+        turbopairformer_distributed_strict_enabled,
     )
 
-    if stablefold_distributed_strict_enabled():
+    if turbopairformer_distributed_strict_enabled():
         return True
     if active_provider() == TURBOPAIRFORMER:
         return bool(_import("turbopairformer.policy").distributed_strict_enabled())
@@ -223,4 +254,5 @@ __all__ = [
     "triangle_attention_facade",
     "trimul_runner",
     "trimul_support_check",
+    "validate_attention_policy",
 ]

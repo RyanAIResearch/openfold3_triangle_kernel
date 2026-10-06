@@ -16,38 +16,38 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
 EXPECTED_EXTENSIONS = {
-    "stablefold_forward": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_forward_sm90a",
+    "turbopairformer_forward": {
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_forward_sm90a",
         "symbols": [
-            "stablefold_triangle_forward_out",
-            "stablefold_triangle_forward_shadow_out",
-            "stablefold_pack_qkv",
+            "turbopairformer_triangle_forward_out",
+            "turbopairformer_triangle_forward_shadow_out",
+            "turbopairformer_pack_qkv",
         ],
     },
-    "stablefold_delta": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_delta_sm90a",
+    "turbopairformer_delta": {
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_delta_sm90a",
         "symbols": [
-            "stablefold_triangle_delta_out",
-            "stablefold_triangle_delta_shadow_out",
+            "turbopairformer_triangle_delta_out",
+            "turbopairformer_triangle_delta_shadow_out",
         ],
     },
-    "stablefold_dkdv": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_dkdv_sm90a",
+    "turbopairformer_dkdv": {
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_dkdv_sm90a",
         "symbols": [
-            "stablefold_triangle_dkdv_out",
-            "stablefold_triangle_dkdv_delta_true_out",
+            "turbopairformer_triangle_dkdv_out",
+            "turbopairformer_triangle_dkdv_delta_true_out",
         ],
     },
-    "stablefold_dq_dbias": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_dq_dbias_sm90a",
+    "turbopairformer_dq_dbias": {
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_dq_dbias_sm90a",
         "symbols": [
-            "stablefold_triangle_dq_dbias_out",
-            "stablefold_reduce_broadcast_dbias_out",
-            "stablefold_triangle_sr_backward_out",
+            "turbopairformer_triangle_dq_dbias_out",
+            "turbopairformer_reduce_broadcast_dbias_out",
+            "turbopairformer_triangle_sr_backward_out",
         ],
     },
-    "stablefold_trimul": {
-        "module": "openfold3.core.kernels.cuda._ext._stablefold_trimul_sm90a",
+    "turbopairformer_trimul": {
+        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_trimul_sm90a",
         "symbols": [
             "trimul_in_fwd",
             "trimul_out_fwd",
@@ -61,11 +61,11 @@ EXPECTED_EXTENSIONS = {
     },
 }
 LOADER_MEMBERS = (
-    "openfold3/core/kernels/cuda/stablefold_triangle_forward.py",
-    "openfold3/core/kernels/cuda/stablefold_triangle_delta.py",
-    "openfold3/core/kernels/cuda/stablefold_triangle_dkdv.py",
-    "openfold3/core/kernels/cuda/stablefold_triangle_dq_dbias.py",
-    "openfold3/core/kernels/cuda/stablefold_trimul_cuda.py",
+    "openfold3/core/kernels/cuda/turbopairformer_triangle_forward.py",
+    "openfold3/core/kernels/cuda/turbopairformer_triangle_delta.py",
+    "openfold3/core/kernels/cuda/turbopairformer_triangle_dkdv.py",
+    "openfold3/core/kernels/cuda/turbopairformer_triangle_dq_dbias.py",
+    "openfold3/core/kernels/cuda/turbopairformer_trimul_cuda.py",
 )
 
 

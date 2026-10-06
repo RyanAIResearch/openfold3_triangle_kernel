@@ -61,6 +61,12 @@ turbopairformer api --all
 
 `turbo_attention` accelerates the triangle attention mechanism with native autograd support for Q, K, V, and pair bias.
 
+The current source always uses single-reconstruction backward. No SR switch is
+needed. An effective `TURBOPAIRFORMER_SR_BACKWARD=0` (or legacy
+`OPENFOLD3_SR_BACKWARD=0`) raises instead of selecting another backward method.
+See [DEVELOPMENT.md](DEVELOPMENT.md#current-source-synchronization) for the exact
+main-source revision; this source update does not change published wheels.
+
 ```python
 import torch
 from turbopairformer import turbo_attention

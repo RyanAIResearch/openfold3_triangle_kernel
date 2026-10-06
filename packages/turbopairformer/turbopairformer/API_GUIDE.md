@@ -2,6 +2,9 @@
 
 ## attention - Triangle Attention
 
+Single-reconstruction backward is mandatory in the current source. The effective
+`TURBOPAIRFORMER_SR_BACKWARD` value must be unset or `1`; `0` raises.
+
 ```python
 from turbopairformer import turbo_attention
 
