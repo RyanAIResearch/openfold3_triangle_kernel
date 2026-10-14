@@ -37,7 +37,7 @@ _MODULE_CACHE: dict[str, Any] = {}
 # Shared binary names and exports for per-kernel loaders and distributed preload.
 _PRODUCTION_MODULE_CONTRACT: dict[str, tuple[str, tuple[str, ...]]] = {
     "turbopairformer_forward": (
-        "openfold3.core.kernels.cuda._ext._turbopairformer_forward_sm90a",
+        "openfold3.core.kernels.turbopairformer._ext._turbopairformer_forward_sm90a",
         (
             # Attention output and log-sum-exp (LSE).
             "turbopairformer_triangle_forward_out",
@@ -48,7 +48,7 @@ _PRODUCTION_MODULE_CONTRACT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "turbopairformer_delta": (
-        "openfold3.core.kernels.cuda._ext._turbopairformer_delta_sm90a",
+        "openfold3.core.kernels.turbopairformer._ext._turbopairformer_delta_sm90a",
         (
             # Sum dOutput * output over head channels.
             "turbopairformer_triangle_delta_out",
@@ -57,7 +57,7 @@ _PRODUCTION_MODULE_CONTRACT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "turbopairformer_dkdv": (
-        "openfold3.core.kernels.cuda._ext._turbopairformer_dkdv_sm90a",
+        "openfold3.core.kernels.turbopairformer._ext._turbopairformer_dkdv_sm90a",
         (
             # Write dK/dV using the supplied delta.
             "turbopairformer_triangle_dkdv_out",
@@ -66,7 +66,7 @@ _PRODUCTION_MODULE_CONTRACT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "turbopairformer_dq_dbias": (
-        "openfold3.core.kernels.cuda._ext._turbopairformer_dq_dbias_sm90a",
+        "openfold3.core.kernels.turbopairformer._ext._turbopairformer_dq_dbias_sm90a",
         (
             # Split backward: write dQ and per-batch FP32 dBias.
             "turbopairformer_triangle_dq_dbias_out",
@@ -77,7 +77,7 @@ _PRODUCTION_MODULE_CONTRACT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "turbopairformer_trimul": (
-        "openfold3.core.kernels.cuda._ext._turbopairformer_trimul_sm90a",
+        "openfold3.core.kernels.turbopairformer._ext._turbopairformer_trimul_sm90a",
         (
             # Forward: input projections/gates, then output LN/projection/gate.
             "trimul_in_fwd",

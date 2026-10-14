@@ -1,6 +1,6 @@
 # TurboPairFormer CUDA Kernels: Architecture & Developer Tutorial
 
-This document serves as the comprehensive architectural reference and developer guide for the **TurboPairFormer** CUDA kernels in OpenFold3 (`openfold3/core/kernels/cuda/`).
+This document serves as the comprehensive architectural reference and developer guide for the **TurboPairFormer** CUDA kernels in OpenFold3 (`openfold3/core/kernels/turbopairformer/`).
 
 TurboPairFormer provides high-throughput, memory-fused, and replay-deterministic implementations of the two core geometric operations in the AlphaFold3 / OpenFold3 Pairformer stack:
 1. **Triangle Attention** (with Starting / Ending node variants and Pair Bias)
@@ -11,7 +11,7 @@ TurboPairFormer provides high-throughput, memory-fused, and replay-deterministic
 ## 1. Directory Structure & Kernel Overview
 
 ```
-openfold3/core/kernels/cuda/
+openfold3/core/kernels/turbopairformer/
 ├── turbopairformer_triangle_attention.py   # Public PyTorch Autograd facade (entry point)
 ├── turbopairformer_triangle_forward.cu     # Forward: online softmax, cp.async & TMA+WGMMA
 ├── turbopairformer_triangle_forward.py     # C++ extension loader for forward
@@ -65,7 +65,7 @@ In standard Multi-Head Attention, tensors are 4D: $[B, H, N, D]$. In OpenFold3 T
 
 ---
 
-## 3. Forward Pass: Dual-Kernel Engine ([turbopairformer_triangle_forward.cu](file:///Users/yideran/Desktop/research_product/openfold_product/openfold3/core/kernels/cuda/turbopairformer_triangle_forward.cu))
+## 3. Forward Pass: Dual-Kernel Engine ([turbopairformer_triangle_forward.cu](./turbopairformer_triangle_forward.cu))
 
 The forward pass keeps attention weights entirely on-chip using **Online Softmax** (FlashAttention-2 recurrence).
 
@@ -182,7 +182,7 @@ TurboPairFormer uses **Single-Reconstruction**:
 - All four gradients ($dQ$, $dK$, $dV$, $dBias$) are accumulated concurrently.
 - Reconstructed $P$ and $dS = P \cdot (dP - \Delta)$ are kept in registers and consumed immediately without saving to HBM.
 
-### 4.2 Shadow Residual Delta Precomputation ([turbopairformer_triangle_delta.cu](file:///Users/yideran/Desktop/research_product/openfold_product/openfold3/core/kernels/cuda/turbopairformer_triangle_delta.cu))
+### 4.2 Shadow Residual Delta Precomputation ([turbopairformer_triangle_delta.cu](./turbopairformer_triangle_delta.cu))
 
 For one query row, attention backward requires a dot product over its head channels. Write $g$ for the upstream output-gradient vector and $O$ for the stored output vector:
 $$\Delta = \langle g, O \rangle$$
@@ -190,11 +190,11 @@ $$\Delta = \langle g, O \rangle$$
 When $O$ is written to HBM in BF16, quantization error introduces noise into $\Delta$.
 - Let $F$ be the normalized FP32 output before storing $O=\text{BF16}(F)$. Forward saves a BF16 approximation of the rounding residual:
   $$r = \text{BF16}(F - \text{float}(O))$$
-- In [`turbopairformer_triangle_delta.cu`](file:///Users/yideran/Desktop/research_product/openfold_product/openfold3/core/kernels/cuda/turbopairformer_triangle_delta.cu), the shadow variant computes:
+- In [`turbopairformer_triangle_delta.cu`](./turbopairformer_triangle_delta.cu), the shadow variant computes:
   $$\Delta = \langle \text{float}(g),\ \text{float}(O) + \text{float}(r) \rangle$$
 - This reduces the error from storing the output in BF16 without re-traversing probabilities. The residual itself is rounded, so it does not exactly recover $F$.
 
-### 4.3 Deterministic dBias Reduction Tree ([turbopairformer_triangle_dq_dbias.cu](file:///Users/yideran/Desktop/research_product/openfold_product/openfold3/core/kernels/cuda/turbopairformer_triangle_dq_dbias.cu))
+### 4.3 Deterministic dBias Reduction Tree ([turbopairformer_triangle_dq_dbias.cu](./turbopairformer_triangle_dq_dbias.cu))
 
 In AlphaFold3, $dBias$ has shape $[B, 1, H, N, N]$ and sums contributions over all outer planes $O$. Naive implementations use atomic adds, causing non-deterministic floating-point reordering.
 
@@ -206,7 +206,7 @@ TurboPairFormer guarantees **bitwise reproducible gradients**:
 
 ---
 
-## 5. Triangle Multiplicative Update ([turbopairformer_trimul_cuda.cu](file:///Users/yideran/Desktop/research_product/openfold_product/openfold3/core/kernels/cuda/turbopairformer_trimul_cuda.cu))
+## 5. Triangle Multiplicative Update ([turbopairformer_trimul_cuda.cu](./turbopairformer_trimul_cuda.cu))
 
 Triangle Multiplicative Update (TriMul) models 3-way residue interactions. For one batch item and hidden channel, $A$ and $B$ are $N \times N$ matrices and $Z$ is their contraction result:
 - **Outgoing**: $Z = AB^T$
@@ -239,7 +239,7 @@ The CUDA kernel fuses:
 
 ### Launching Forward via Python:
 ```python
-from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (
     turbopairformer_triangle_attention,
 )
 

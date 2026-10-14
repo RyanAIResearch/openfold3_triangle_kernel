@@ -38,7 +38,7 @@ import torch
 REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY))
 
-from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (  # noqa: E402
+from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (  # noqa: E402
     invocation_count,
     is_turbopairformer_supported,
     turbopairformer_triangle_attention,
@@ -282,15 +282,15 @@ def _broadcast_bias_reference(
 
 def _source_manifest() -> dict[str, str]:
     relatives = (
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_attention.py",
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_forward.py",
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_forward.cu",
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_delta.py",
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_delta.cu",
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_dkdv.py",
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_dkdv.cu",
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_dq_dbias.py",
-        "openfold3/core/kernels/cuda/turbopairformer_triangle_dq_dbias.cu",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_attention.py",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_forward.py",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_forward.cu",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_delta.py",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_delta.cu",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_dkdv.py",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_dkdv.cu",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_dq_dbias.py",
+        "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_dq_dbias.cu",
         "scripts/benchmarks/turbopairformer_triangle_sanitizer_smoke.py",
     )
     return {
@@ -410,7 +410,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     route = {
         "entrypoint": (
-            "openfold3.core.kernels.cuda.turbopairformer_triangle_attention."
+            "openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention."
             "turbopairformer_triangle_attention"
         ),
         "support_check": support_reason,

@@ -17,7 +17,7 @@ import pytest
 import torch
 from torch._subclasses.fake_tensor import FakeTensorMode
 
-from openfold3.core.kernels.cuda import turbopairformer_trimul as stable
+from openfold3.core.kernels.turbopairformer import turbopairformer_trimul as stable
 from openfold3.core.model.layers.triangular_multiplicative_update import (
     TriangleMultiplicationOutgoing,
     TriangleMultiplicativeUpdate,
@@ -221,9 +221,12 @@ def test_clean_import_registers_ops_without_importing_aot_loader():
 import sys
 import torch
 from unittest.mock import patch
-from openfold3.core.kernels.cuda import turbopairformer_trimul as stable
+from openfold3.core.kernels.turbopairformer import turbopairformer_trimul as stable
 assert stable._ext is None
-assert 'openfold3.core.kernels.cuda.turbopairformer_trimul_cuda' not in sys.modules
+assert (
+    'openfold3.core.kernels.turbopairformer.turbopairformer_trimul_cuda'
+    not in sys.modules
+)
 z = torch.empty((1, 5, 5, 32), device='meta', dtype=torch.bfloat16)
 mask = torch.empty((1, 5, 5), device='meta', dtype=torch.float32)
 weights = [torch.empty((32, 32), device='meta') for _ in range(6)]
@@ -233,7 +236,10 @@ with patch.object(stable, '_get_ext', side_effect=AssertionError('loaded')) as l
     assert len(outputs) == 11
     load.assert_not_called()
 assert stable._ext is None
-assert 'openfold3.core.kernels.cuda.turbopairformer_trimul_cuda' not in sys.modules
+assert (
+    'openfold3.core.kernels.turbopairformer.turbopairformer_trimul_cuda'
+    not in sys.modules
+)
 """
     subprocess.run(
         [sys.executable, "-c", script],

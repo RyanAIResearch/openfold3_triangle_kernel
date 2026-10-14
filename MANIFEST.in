@@ -2,6 +2,6 @@ include setup.py
 include pyproject.toml
 include README.md
 recursive-include tools *.py *.sh
-recursive-include openfold3/core/kernels/cuda *.cu *.py *.json *.md
+recursive-include openfold3/core/kernels/turbopairformer *.cu *.py *.json *.md
 recursive-include openfold3/core/kernels/protenix *.py *.json *.md LICENSE
 prune openfold3/core/kernels/protenix/_vendor/TriAttentionCache

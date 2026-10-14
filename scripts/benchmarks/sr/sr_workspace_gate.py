@@ -16,13 +16,13 @@ from dataclasses import asdict
 
 import torch
 
-from openfold3.core.kernels.cuda import (
+from openfold3.core.kernels.turbopairformer import (
     turbopairformer_triangle_attention as facade,
 )
-from openfold3.core.kernels.cuda.turbopairformer_triangle_dkdv import (
+from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_dkdv import (
     turbopairformer_triangle_dkdv,
 )
-from openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias import (
+from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_dq_dbias import (
     sr_workspace_plan,
     turbopairformer_triangle_sr_backward,
 )

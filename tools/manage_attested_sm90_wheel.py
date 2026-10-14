@@ -49,7 +49,7 @@ PREBUILT_FILE_SHA256 = {
         "d1c71c9e147617bb4696c8f7f152d1a6c31c3d44852fc6eb521f400af843a77c"
     ),
 }
-MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
+MANIFEST_MEMBER = "openfold3/core/kernels/turbopairformer/_build_manifest.json"
 MODULE_KEYS = (
     "turbopairformer_forward",
     "turbopairformer_delta",
@@ -207,9 +207,16 @@ def discover_bundle(
     if receipt.get("wheel_sha256") != wheel_sha256:
         raise ArtifactError("attestation wheel digest does not match")
 
+    # The pinned historical wheel keeps its original namespace and receipts.
+    # Every other artifact must use the current package layout.
+    manifest_member = (
+        "openfold3/core/kernels/cuda/_build_manifest.json"
+        if wheel_sha256 == PREBUILT_FILE_SHA256[PREBUILT_WHEEL]
+        else MANIFEST_MEMBER
+    )
     try:
         with zipfile.ZipFile(wheel) as archive:
-            manifest_bytes = archive.read(MANIFEST_MEMBER)
+            manifest_bytes = archive.read(manifest_member)
             manifest = json.loads(manifest_bytes)
             installed_distribution = _wheel_distribution_identity(archive)
             members = set(archive.namelist())
@@ -497,6 +504,9 @@ def _verification_program(bundle: ArtifactBundle, expected_commit: str) -> str:
         _canonical_aot_identity(_expected_aot_identity(bundle)), sort_keys=True
     )
     expected_distribution = json.dumps(bundle.installed_distribution, sort_keys=True)
+    runtime_module = "openfold3.core.kernels.turbopairformer._aot_runtime"
+    if bundle.wheel_sha256 == PREBUILT_FILE_SHA256[PREBUILT_WHEEL]:
+        runtime_module = "openfold3.core.kernels.cuda._aot_runtime"
     return f"""
 import json
 import os
@@ -519,7 +529,7 @@ for key, expected in expected_distribution.items():
             f'installed distribution mismatch for {{key}}: '
             f'{{distribution.get(key)}} != {{expected}}'
         )
-from openfold3.core.kernels.cuda._aot_runtime import distributed_aot_identity
+from {runtime_module} import distributed_aot_identity
 identity = distributed_aot_identity({MODULE_KEYS!r})
 expected_aot = json.loads({expected_aot!r})
 for extension in identity.get('extensions', {{}}).values():

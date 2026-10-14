@@ -12,6 +12,26 @@ The integrated backend is selected with `--backend turbopairformer`. Current
 module names, extension identities, artifact paths and kernel receipts use the
 TurboPairFormer name.
 
+The current implementation lives in `openfold3/core/kernels/turbopairformer/`.
+Direct source imports use `openfold3.core.kernels.turbopairformer` in place of
+`openfold3.core.kernels.cuda`; function names and CUDA computations are unchanged.
+AOT wheels built from this source use the new package path and must be rebuilt
+and verified together with the Python package. The pinned September 18 wheel
+retains its original namespace and validation receipts.
+
+There is no compatibility alias for the old import path. Direct callers should
+update imports, for example:
+
+```python
+from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (
+    turbopairformer_triangle_attention,
+)
+```
+
+The `--backend turbopairformer` selector and training YAML keys are unchanged.
+The [kernel tutorial](openfold3/core/kernels/turbopairformer/tutorial.md) explains
+the current implementation.
+
 This `main` branch provides the integrated OpenFold3 production workflow. The
 standalone **TurboPairFormer 0.1.0** Python package is available on
 [PyPI](https://pypi.org/project/turbopairformer/0.1.0/). Package development and
@@ -241,6 +261,42 @@ pixi run -e openfold3-cuda12-dev env OPENFOLD3_TRIANGLE_ALLOW_JIT=1 \
 pinned wheel. Its classic cases and the `OPENFOLD3_SR_BACKWARD=0` comparison arms
 in `scripts/benchmarks/sr/` require their recorded historical runtime. The
 current source's public facade rejects those legacy two-pass arms.
+
+Choose the check that matches the code you are running:
+
+| Target | Check | What it establishes |
+| --- | --- | --- |
+| Current source checkout | `test_turbopairformer_sr_policy.py`, invoked above with JIT enabled | SR routing, FP64 error bounds, and bitwise replay for the tested cases |
+| New AOT wheel | `tools/aot_clean_install_smoke.py`, run automatically by `tools/build_sm90_wheel.sh` | Compiler-free installed-wheel forward/backward, finite results, layout consistency, and TriMul eager/compiled consistency |
+| New AOT wheel, numerical qualification | `tools/aot_current_numeric_smoke.py`, invoked separately below | Attention FP64 error bounds and same-process bitwise replay; TriMul fixed FP32 weight-gradient fold |
+| Pinned September 18 wheel | Frozen `tools/aot_numeric_smoke.py` | The historical artifact's FP64 error bounds and replay checks |
+
+In new clean-install reports, `default_sr_shadow` leaves the SR flags unset and
+`explicit_sr_shadow` sets both to `1`. Both execute SR with shadow; these labels
+do not represent two different backward algorithms.
+
+After installing a new wheel non-editably in the locked H100 environment, run
+its numerical qualification separately. Replace the paths and commit below;
+the commit must be the wheel's full build commit, as recorded in its attestation.
+Keep the original `tools/aot_numeric_smoke.py` beside the new script, since its
+hash-checked input generator, FP64 oracle, and stock reference are reused.
+
+```bash
+env -u PYTHONPATH CUDA_VISIBLE_DEVICES=0 OPENFOLD3_TRIANGLE_ALLOW_JIT=0 \
+  python /absolute/path/to/checkout/tools/aot_current_numeric_smoke.py \
+  --wheel /absolute/path/to/openfold3.whl \
+  --expected-commit FULL_40_CHARACTER_WHEEL_BUILD_COMMIT \
+  --output-json /absolute/path/to/single_h100_current_numerics.json
+```
+
+Use a fresh output path for each run. A PASS report records the wheel, validator,
+oracle, installed Python files, and all five AOT binary identities. All nine
+Attention input specifications use the current SR facade; default flags,
+explicit SR+shadow flags, and replay must agree bitwise. The FP64 error limit
+remains `1.1 * stock_relative_l2 + 1e-6`. The report covers one H100 and the tested
+cases; it does not qualify full TriMul accuracy, model training, multi-GPU
+execution, or performance. This command does not replace the pinned Pixi wheel
+or its historical qualification receipts.
 
 Before trusting performance, run a short paired canary with the same checkpoint,
 data order, precision, crop, and logging configuration as the comparator. Check:

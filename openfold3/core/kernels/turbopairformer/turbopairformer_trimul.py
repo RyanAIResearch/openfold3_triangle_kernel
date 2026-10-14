@@ -71,7 +71,7 @@ def _get_ext():
     """Load the CUDA extension on first execution, then reuse it."""
     global _ext
     if _ext is None:
-        from openfold3.core.kernels.cuda.turbopairformer_trimul_cuda import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_cuda import (
             load_extension,
         )
 
@@ -934,7 +934,7 @@ def run_stable_trimul(module, z, mask):
 
     Selection of the stock fallback belongs to the caller, not this entry point.
     """
-    from openfold3.core.kernels.cuda.turbopairformer_trimul_support import (
+    from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support import (
         check_stable_trimul_support,
     )
 

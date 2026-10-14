@@ -8,7 +8,7 @@ output buffers and optional row-scalar workspace for direct callers. The public
 attention facade uses the separate single-reconstruction backward route in
 ``turbopairformer_triangle_dq_dbias.py``.
 
-The binary is installed under ``openfold3.core.kernels.cuda._ext.*``;
+The binary is installed under ``openfold3.core.kernels.turbopairformer._ext.*``;
 ``_aot_runtime`` owns its module name, required exports, and loading policy.
 """
 
@@ -29,7 +29,7 @@ def source_sha256() -> dict[str, str]:
     See ``_aot_runtime.source_sha256_for`` for manifest precedence, local-file
     fallback, and errors. A recorded hash need not match the current source.
     """
-    from openfold3.core.kernels.cuda._aot_runtime import source_sha256_for
+    from openfold3.core.kernels.turbopairformer._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
     return source_sha256_for("turbopairformer_dkdv", source)
@@ -43,7 +43,7 @@ def load_extension(*, verbose: bool | None = None) -> Any:
     """
     global _EXTENSION
     if _EXTENSION is None:
-        from openfold3.core.kernels.cuda._aot_runtime import (
+        from openfold3.core.kernels.turbopairformer._aot_runtime import (
             _PRODUCTION_MODULE_CONTRACT,
             load_extension_module,
         )

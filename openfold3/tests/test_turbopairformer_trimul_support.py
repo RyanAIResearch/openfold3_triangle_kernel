@@ -13,12 +13,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from openfold3.core.kernels.cuda import (
+from openfold3.core.kernels.turbopairformer import (
     STABLE_TRIMUL_STOCK_FALLBACK_THRESHOLD,
     check_stable_trimul_support,
     evaluate_stable_trimul_support,
 )
-from openfold3.core.kernels.cuda.turbopairformer_trimul_support import (
+from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support import (
     MAX_FLATTENED_BATCH,
     NamedTensorMetadata,
     StableTrimulSupportMetadata,
@@ -431,9 +431,11 @@ def test_package_export_does_not_import_or_build_cuda_extension():
     )
     script = """
 import sys
-from openfold3.core.kernels.cuda import check_stable_trimul_support
+from openfold3.core.kernels.turbopairformer import check_stable_trimul_support
 assert callable(check_stable_trimul_support)
-assert 'openfold3.core.kernels.cuda.turbopairformer_trimul' not in sys.modules
+assert (
+    'openfold3.core.kernels.turbopairformer.turbopairformer_trimul' not in sys.modules
+)
 """
 
     subprocess.run(

@@ -566,7 +566,7 @@ class Attention(nn.Module):
             # build, support, launch, and backward failures propagate unchanged.
             # The facade validates (memoized) and raises on unsupported cases,
             # so no separate pre-check runs on this hot path.
-            from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (  # noqa: E501
+            from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (  # noqa: E501
                 is_turbopairformer_supported,
                 turbopairformer_triangle_attention,
             )

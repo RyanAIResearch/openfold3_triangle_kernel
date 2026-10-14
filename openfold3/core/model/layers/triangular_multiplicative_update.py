@@ -63,13 +63,13 @@ def _route_stable_trimul(module, z, mask):
     # source environment at epoch boundaries; this hot-path getter is read-only.
     strict = turbopairformer_distributed_strict_enabled()
 
-    from openfold3.core.kernels.cuda.turbopairformer_trimul_support import (
+    from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support import (
         check_stable_trimul_support,
     )
 
     support = check_stable_trimul_support(module, z, mask)
     if support:
-        from openfold3.core.kernels.cuda.turbopairformer_trimul import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_trimul import (
             _run_supported_stable_trimul,
         )
 

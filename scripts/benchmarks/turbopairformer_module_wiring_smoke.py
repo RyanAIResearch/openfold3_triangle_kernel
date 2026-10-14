@@ -15,7 +15,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import openfold3.core.model.primitives.attention as attention_module  # noqa: E402
-from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (  # noqa: E402
+from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (  # noqa: E402
     invocation_count,
 )
 from openfold3.core.model.layers.triangular_attention import (  # noqa: E402

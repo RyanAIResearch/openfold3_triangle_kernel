@@ -63,7 +63,7 @@ def _forward_extension() -> Any:
     """Load the forward/packing extension on first use and retain the module."""
     global _FORWARD
     if _FORWARD is None:
-        from openfold3.core.kernels.cuda.turbopairformer_triangle_forward import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_forward import (  # noqa: E501
             load_extension,
         )
 
@@ -75,7 +75,7 @@ def _delta_extension() -> Any:
     """Load the delta extension when backward first needs it."""
     global _DELTA
     if _DELTA is None:
-        from openfold3.core.kernels.cuda.turbopairformer_triangle_delta import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_delta import (  # noqa: E501
             load_extension,
         )
 
@@ -300,7 +300,7 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
         # Import backward helpers when backward is first needed. These local
         # imports reuse Python's module cache; their CUDA extensions load on
         # the first kernel call.
-        from openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_dq_dbias import (  # noqa: E501
             turbopairformer_reduce_broadcast_dbias,
             turbopairformer_triangle_sr_backward,
         )

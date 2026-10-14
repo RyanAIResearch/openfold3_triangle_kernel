@@ -33,9 +33,9 @@ CASE_IDS = [f"sr-{i + 1}-N{s['N']}-D{s['D']}" for i, s in enumerate(SHAPES)]
 
 
 def _module(name):
-    module = importlib.import_module("openfold3.core.kernels.cuda." + name)
+    module = importlib.import_module("openfold3.core.kernels.turbopairformer." + name)
     assert Path(module.__file__).resolve() == ROOT / (
-        "openfold3/core/kernels/cuda/" + name + ".py"
+        "openfold3/core/kernels/turbopairformer/" + name + ".py"
     ), "This check must import the current source checkout"
     return module
 
@@ -165,7 +165,7 @@ def hopper_source_routes(monkeypatch):
         ("turbopairformer_delta", "turbopairformer_triangle_delta"),
         ("turbopairformer_dq_dbias", "turbopairformer_triangle_dq_dbias"),
     ):
-        source = ROOT / f"openfold3/core/kernels/cuda/{stem}.cu"
+        source = ROOT / f"openfold3/core/kernels/turbopairformer/{stem}.cu"
         digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
         # _load_development_jit generates this source-hashed name. Torch may
         # append a cache-version suffix; a wheel module cannot match it.

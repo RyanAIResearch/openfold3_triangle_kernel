@@ -17,7 +17,7 @@ os.makedirs(CAPTURE_DIR, exist_ok=True)
 
 import torch  # noqa: E402
 
-from openfold3.core.kernels.cuda import (  # noqa: E402
+from openfold3.core.kernels.turbopairformer import (  # noqa: E402
     turbopairformer_triangle_attention as facade_module,
 )
 

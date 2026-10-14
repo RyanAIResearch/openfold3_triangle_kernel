@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import openfold3.core.model.layers.triangular_multiplicative_update as tmu
-from openfold3.core.kernels.cuda.turbopairformer_trimul_support import (
+from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support import (
     SupportResult,
     check_stable_trimul_support,
 )
@@ -69,12 +69,12 @@ def test_short_sequence_rejection_falls_back_to_stock_output_and_gradients(
     stock.backward(grad)
     with (
         patch(
-            "openfold3.core.kernels.cuda.turbopairformer_trimul_support."
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support."
             "check_stable_trimul_support",
             return_value=rejection,
         ) as support_check,
         patch(
-            "openfold3.core.kernels.cuda.turbopairformer_trimul."
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul."
             "_run_supported_stable_trimul",
             side_effect=AssertionError("short N must not enter the AOT runner"),
         ) as runner,
@@ -114,12 +114,12 @@ def test_supported_metadata_calls_prechecked_runner_once():
 
     with (
         patch(
-            "openfold3.core.kernels.cuda.turbopairformer_trimul_support."
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support."
             "check_stable_trimul_support",
             return_value=_accepted(),
         ) as support_check,
         patch(
-            "openfold3.core.kernels.cuda.turbopairformer_trimul."
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul."
             "_run_supported_stable_trimul",
             return_value=expected,
         ) as runner,
@@ -143,12 +143,12 @@ def test_supported_runner_failure_propagates_without_fallback():
 
     with (
         patch(
-            "openfold3.core.kernels.cuda.turbopairformer_trimul_support."
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support."
             "check_stable_trimul_support",
             return_value=_accepted(),
         ),
         patch(
-            "openfold3.core.kernels.cuda.turbopairformer_trimul."
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul."
             "_run_supported_stable_trimul",
             side_effect=RuntimeError("synthetic AOT launch failure"),
         ),
@@ -158,7 +158,7 @@ def test_supported_runner_failure_propagates_without_fallback():
 
 
 def test_public_runner_rejects_before_extension_load():
-    from openfold3.core.kernels.cuda import turbopairformer_trimul
+    from openfold3.core.kernels.turbopairformer import turbopairformer_trimul
 
     module = TriangleMultiplicationOutgoing(32, 32)
     z = torch.randn((1, 3, 3, 32), dtype=torch.bfloat16)
@@ -185,7 +185,7 @@ def test_fallback_warning_is_logged_once(caplog):
     try:
         with (
             patch(
-                "openfold3.core.kernels.cuda.turbopairformer_trimul_support."
+                "openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support."
                 "check_stable_trimul_support",
                 return_value=rejection,
             ),
@@ -220,7 +220,7 @@ def test_strict_ddp_route_allows_short_n_but_rejects_unexpected_fallback():
             "declared fixed stock route",
         )
         with patch(
-            "openfold3.core.kernels.cuda.turbopairformer_trimul_support."
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support."
             "check_stable_trimul_support",
             return_value=short_n,
         ):
@@ -229,7 +229,7 @@ def test_strict_ddp_route_allows_short_n_but_rejects_unexpected_fallback():
         unexpected = SupportResult(False, "channels", "synthetic rejection")
         with (
             patch(
-                "openfold3.core.kernels.cuda.turbopairformer_trimul_support."
+                "openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support."
                 "check_stable_trimul_support",
                 return_value=unexpected,
             ),
@@ -327,7 +327,7 @@ def _call_public_fields(
 
 
 def _call_stable_with_route(module, z, mask, grad_out, *, training: bool):
-    from openfold3.core.kernels.cuda import turbopairformer_trimul as facade
+    from openfold3.core.kernels.turbopairformer import turbopairformer_trimul as facade
 
     original_get_ext = facade._get_ext
     original_runner = facade._run_supported_stable_trimul

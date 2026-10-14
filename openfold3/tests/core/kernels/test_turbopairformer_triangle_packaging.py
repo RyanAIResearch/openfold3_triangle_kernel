@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[4]
-CUDA_PACKAGE = REPOSITORY / "openfold3/core/kernels/cuda"
+CUDA_PACKAGE = REPOSITORY / "openfold3/core/kernels/turbopairformer"
 
 
 def _top_level_imports(path: Path) -> set[str]:
@@ -49,11 +49,11 @@ class TurboPairFormerTrianglePackagingTest(unittest.TestCase):
             project["tool"]["setuptools"]["package-data"]["openfold3"]
         )
         required = {
-            "core/kernels/cuda/turbopairformer_triangle_forward.cu",
-            "core/kernels/cuda/turbopairformer_triangle_delta.cu",
-            "core/kernels/cuda/turbopairformer_triangle_dkdv.cu",
-            "core/kernels/cuda/turbopairformer_triangle_dq_dbias.cu",
-            "core/kernels/cuda/turbopairformer_trimul_cuda.cu",
+            "core/kernels/turbopairformer/turbopairformer_triangle_forward.cu",
+            "core/kernels/turbopairformer/turbopairformer_triangle_delta.cu",
+            "core/kernels/turbopairformer/turbopairformer_triangle_dkdv.cu",
+            "core/kernels/turbopairformer/turbopairformer_triangle_dq_dbias.cu",
+            "core/kernels/turbopairformer/turbopairformer_trimul_cuda.cu",
         }
         self.assertTrue(required.issubset(package_data))
         for relative in required:

@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load the CUDA extension used by ``turbopairformer_trimul.py``.
+"""Load the CUDA extension for the TurboPairFormer softmax-backward delta.
 
-The sibling ``.cu`` file implements fused stages and fixed-order reductions.
-The binary is installed under ``openfold3.core.kernels.cuda._ext.*``;
-``_aot_runtime`` owns its module name, required exports, and loading policy.
+The sibling ``.cu`` file computes one FP32 correction per query row, using
+either the BF16 forward output alone or that output plus its rounding residual.
+``turbopairformer_triangle_attention.py`` chooses the route. The binary is
+installed under ``openfold3.core.kernels.turbopairformer._ext.*``;
+``_aot_runtime`` selects its module name and required exports, validates it,
+and handles development JIT.
 """
 
 from __future__ import annotations
@@ -22,10 +25,10 @@ def source_sha256() -> dict[str, str]:
     See ``_aot_runtime.source_sha256_for`` for manifest precedence, local-file
     fallback, and errors. A recorded hash need not match the current source.
     """
-    from openfold3.core.kernels.cuda._aot_runtime import source_sha256_for
+    from openfold3.core.kernels.turbopairformer._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
-    return source_sha256_for("turbopairformer_trimul", source)
+    return source_sha256_for("turbopairformer_delta", source)
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
@@ -36,12 +39,12 @@ def load_extension(*, verbose: bool | None = None) -> Any:
     """
     global _EXTENSION
     if _EXTENSION is None:
-        from openfold3.core.kernels.cuda._aot_runtime import (
+        from openfold3.core.kernels.turbopairformer._aot_runtime import (
             _PRODUCTION_MODULE_CONTRACT,
             load_extension_module,
         )
 
-        module_key = "turbopairformer_trimul"
+        module_key = "turbopairformer_delta"
         aot_module, expected_symbols = _PRODUCTION_MODULE_CONTRACT[module_key]
         _EXTENSION = load_extension_module(
             module_key=module_key,

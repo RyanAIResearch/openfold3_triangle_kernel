@@ -230,7 +230,7 @@ def _kernel_record(rank: int) -> dict:
 @pytest.fixture
 def collect_mocked_kernel_record(monkeypatch):
     """Exercise the actual per-rank gate without CUDA or a process group."""
-    from openfold3.core.kernels.cuda import _aot_runtime
+    from openfold3.core.kernels.turbopairformer import _aot_runtime
 
     monkeypatch.setattr(distributed_contract.dist, "get_rank", lambda: 0)
     monkeypatch.setattr(distributed_contract.dist, "get_world_size", lambda: 2)

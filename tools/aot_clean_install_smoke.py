@@ -14,11 +14,11 @@ from pathlib import Path
 import torch
 
 MODULES = (
-    "openfold3.core.kernels.cuda._ext._turbopairformer_forward_sm90a",
-    "openfold3.core.kernels.cuda._ext._turbopairformer_delta_sm90a",
-    "openfold3.core.kernels.cuda._ext._turbopairformer_dkdv_sm90a",
-    "openfold3.core.kernels.cuda._ext._turbopairformer_dq_dbias_sm90a",
-    "openfold3.core.kernels.cuda._ext._turbopairformer_trimul_sm90a",
+    "openfold3.core.kernels.turbopairformer._ext._turbopairformer_forward_sm90a",
+    "openfold3.core.kernels.turbopairformer._ext._turbopairformer_delta_sm90a",
+    "openfold3.core.kernels.turbopairformer._ext._turbopairformer_dkdv_sm90a",
+    "openfold3.core.kernels.turbopairformer._ext._turbopairformer_dq_dbias_sm90a",
+    "openfold3.core.kernels.turbopairformer._ext._turbopairformer_trimul_sm90a",
 )
 
 FORWARD_SCHEMA = (
@@ -64,7 +64,7 @@ def main() -> None:
         raise RuntimeError(f"expected five AOT shared objects, got {binary_paths}")
     assert_no_jit_cache("AOT binary import")
 
-    from openfold3.core.kernels.cuda import turbopairformer_trimul as stable
+    from openfold3.core.kernels.turbopairformer import turbopairformer_trimul as stable
 
     if stable._ext is not None:
         raise RuntimeError("custom-op registration eagerly loaded the TriMul facade")
@@ -255,7 +255,7 @@ def main() -> None:
 
     dynamic_export_receipt = run_dynamic_export()
 
-    from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+    from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (  # noqa: E501
         invocation_count,
         turbopairformer_triangle_attention,
     )
@@ -266,7 +266,7 @@ def main() -> None:
     prefix, sequence, heads, head_dim = 1, 64, 4, 32
 
     def run_arm(arm: str) -> dict[str, str]:
-        if arm == "sr_r":
+        if arm == "explicit_sr_shadow":
             os.environ["OPENFOLD3_SR_BACKWARD"] = "1"
             os.environ["OPENFOLD3_SR_SHADOW"] = "1"
         else:
@@ -360,7 +360,9 @@ def main() -> None:
         return {name: raw_sha256(value) for name, value in named.items()}
 
     arm_receipts = {}
-    for arm in ("two_pass", "sr_r"):
+    # Both arms use SR + shadow: one selects the defaults, the other sets the
+    # flags explicitly. The current facade has no public two-pass backward.
+    for arm in ("default_sr_shadow", "explicit_sr_shadow"):
         arm_receipts[arm] = run_arm(arm)
 
     def run_trimul(outgoing: bool) -> dict[str, object]:
@@ -445,7 +447,7 @@ def main() -> None:
         }
 
     def run_short_sequence_stock() -> dict[str, object]:
-        from openfold3.core.kernels.cuda.turbopairformer_trimul_support import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support import (  # noqa: E501
             check_stable_trimul_support,
         )
         from openfold3.core.model.layers import (
@@ -566,7 +568,9 @@ def main() -> None:
     }
     short_sequence_stock_receipt = run_short_sequence_stock()
 
-    from openfold3.core.kernels.cuda._aot_runtime import distributed_aot_identity
+    from openfold3.core.kernels.turbopairformer._aot_runtime import (
+        distributed_aot_identity,
+    )
     from openfold3.core.utils.distributed_contract import (
         installed_distribution_identity,
     )
