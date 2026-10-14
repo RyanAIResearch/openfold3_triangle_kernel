@@ -177,7 +177,8 @@ class TurboPairFormerTriangleWorkspaceTest(unittest.TestCase):
         self.assertIn("leaf_base += wave_leaves", source)
         self.assertNotIn("leaf_base += resident_leaves", source)
         self.assertIn("TaskInGridZ", source)
-        self.assertIn("task_in_grid_z = leaf_tasks <= 65535", source)
+        self.assertIn("constexpr int kMaxGridYZ = 65535;", source)
+        self.assertIn("task_in_grid_z = leaf_tasks <= kMaxGridYZ", source)
         self.assertNotIn("atomicAdd", source)
         self.assertNotIn("semaphore", source.lower())
 

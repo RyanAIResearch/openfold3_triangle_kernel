@@ -1,17 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""AOT loader for the TurboPairFormer softmax-delta precompute."""
+"""Load the CUDA extension for the TurboPairFormer softmax-backward delta.
+
+The sibling ``.cu`` file computes one FP32 correction per query row, using
+either the BF16 forward output alone or that output plus its rounding residual.
+``turbopairformer_triangle_attention.py`` chooses the route. The binary is
+installed under ``openfold3.core.kernels.cuda._ext.*``; ``_aot_runtime`` selects
+its module name and required exports, validates it, and handles development JIT.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
+# Load on first use, then reuse the successfully loaded extension module.
 _EXTENSION: Any = None
 
 
 def source_sha256() -> dict[str, str]:
-    """Return the source digest recorded by the AOT build."""
+    """Return ``{source filename: SHA256}`` without loading the extension.
+
+    See ``_aot_runtime.source_sha256_for`` for manifest precedence, local-file
+    fallback, and errors. A recorded hash need not match the current source.
+    """
     from openfold3.core.kernels.cuda._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
@@ -19,21 +31,25 @@ def source_sha256() -> dict[str, str]:
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
-    """Import the wheel-owned delta extension (JIT only by explicit opt-in)."""
+    """Load once using the shared AOT/JIT policy; return the cached module.
+
+    See ``_aot_runtime.load_extension_module`` for validation and fallback.
+    ``verbose`` controls JIT logging; ``None`` means ``False``.
+    """
     global _EXTENSION
     if _EXTENSION is None:
-        from openfold3.core.kernels.cuda._aot_runtime import load_extension_module
+        from openfold3.core.kernels.cuda._aot_runtime import (
+            _PRODUCTION_MODULE_CONTRACT,
+            load_extension_module,
+        )
 
+        module_key = "turbopairformer_delta"
+        aot_module, expected_symbols = _PRODUCTION_MODULE_CONTRACT[module_key]
         _EXTENSION = load_extension_module(
-            module_key="turbopairformer_delta",
-            aot_module=(
-                "openfold3.core.kernels.cuda._ext._turbopairformer_delta_sm90a"
-            ),
+            module_key=module_key,
+            aot_module=aot_module,
             source=Path(__file__).with_suffix(".cu"),
-            expected_symbols=(
-                "turbopairformer_triangle_delta_out",
-                "turbopairformer_triangle_delta_shadow_out",
-            ),
+            expected_symbols=expected_symbols,
             verbose=bool(verbose),
         )
     return _EXTENSION
