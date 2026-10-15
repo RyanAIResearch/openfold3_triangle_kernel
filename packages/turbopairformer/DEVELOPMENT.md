@@ -38,9 +38,8 @@ rounding residual are enabled, and JIT is disabled.
 
 ## Current source synchronization
 
-The CUDA files below match
-[main commit `2842a19e`](https://github.com/RyanAIResearch/openfold3_triangle_kernel/commit/2842a19e41cbdbc7bc4c4ea2313c64e68e92f0c2)
-byte for byte.
+The package uses the same CUDA sources as the
+[main repository](https://github.com/RyanAIResearch/openfold3_triangle_kernel/tree/2842a19e41cbdbc7bc4c4ea2313c64e68e92f0c2/openfold3/core/kernels/turbopairformer).
 
 - Package directory: `packages/turbopairformer/turbopairformer/`
 - Host directory: `openfold3/core/kernels/turbopairformer/`
