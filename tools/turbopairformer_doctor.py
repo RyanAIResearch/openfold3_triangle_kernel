@@ -30,19 +30,19 @@ EXTENSION_FACADES = {
     },
     "intree": {
         "turbopairformer_forward": (
-            "openfold3.core.kernels.cuda.turbopairformer_triangle_forward"
+            "openfold3.core.kernels.turbopairformer.turbopairformer_triangle_forward"
         ),
         "turbopairformer_delta": (
-            "openfold3.core.kernels.cuda.turbopairformer_triangle_delta"
+            "openfold3.core.kernels.turbopairformer.turbopairformer_triangle_delta"
         ),
         "turbopairformer_dkdv": (
-            "openfold3.core.kernels.cuda.turbopairformer_triangle_dkdv"
+            "openfold3.core.kernels.turbopairformer.turbopairformer_triangle_dkdv"
         ),
         "turbopairformer_dq_dbias": (
-            "openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias"
+            "openfold3.core.kernels.turbopairformer.turbopairformer_triangle_dq_dbias"
         ),
         "turbopairformer_trimul": (
-            "openfold3.core.kernels.cuda.turbopairformer_trimul_cuda"
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul_cuda"
         ),
     },
 }
@@ -81,11 +81,11 @@ def _check_provider(expected: str | None) -> dict[str, Any]:
     requested = os.environ.get("OPENFOLD3_TRIANGLE_PROVIDER", "intree").strip().lower()
     if importlib.util.find_spec("openfold3") is not None:
         try:
-            provider = importlib.import_module("openfold3.core.kernels.cuda.provider")
+            provider = importlib.import_module("openfold3.core.kernels.turbopairformer.provider")
             identity = provider.provider_identity()
         except ModuleNotFoundError as error:
             if (
-                error.name == "openfold3.core.kernels.cuda.provider"
+                error.name == "openfold3.core.kernels.turbopairformer.provider"
                 and requested == "intree"
             ):
                 # Older OpenFold3 wheels always serve their vendored kernels.
@@ -141,7 +141,7 @@ def _check_extensions(provider_name: str) -> dict[str, Any]:
     runtime_name = (
         "turbopairformer._aot_runtime"
         if provider_name == "turbopairformer"
-        else "openfold3.core.kernels.cuda._aot_runtime"
+        else "openfold3.core.kernels.turbopairformer._aot_runtime"
     )
     runtime = importlib.import_module(runtime_name)
     manifest_path = (

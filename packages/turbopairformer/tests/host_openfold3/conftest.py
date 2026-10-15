@@ -12,7 +12,7 @@ pytest.importorskip("openfold3", reason="host tests need an OpenFold3 install")
 @pytest.fixture(autouse=True)
 def _isolate_turbopairformer_triangle_provider(monkeypatch):
     """Package integration tests must exercise the installed package provider."""
-    from openfold3.core.kernels.cuda import provider
+    from openfold3.core.kernels.turbopairformer import provider
 
     monkeypatch.setenv(provider.PROVIDER_ENV, provider.TURBOPAIRFORMER)
     provider._reset_for_tests()

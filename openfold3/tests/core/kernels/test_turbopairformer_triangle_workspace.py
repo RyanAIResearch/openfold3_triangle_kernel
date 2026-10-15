@@ -5,7 +5,7 @@ import struct
 import unittest
 from pathlib import Path
 
-from openfold3.core.kernels.cuda.turbopairformer_triangle_dq_dbias import (
+from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_dq_dbias import (
     outer_leaf_for,
     sr_workspace_plan,
     workspace_elements,
@@ -142,7 +142,7 @@ class TurboPairFormerTriangleWorkspaceTest(unittest.TestCase):
     def test_cuda_source_owns_a_fixed_non_atomic_left_fold(self):
         source = (
             Path(__file__).parents[3]
-            / "core/kernels/cuda/turbopairformer_triangle_dq_dbias.cu"
+            / "core/kernels/turbopairformer/turbopairformer_triangle_dq_dbias.cu"
         ).read_text()
         start = source.index(
             "__global__ void turbopairformer_dq_dbias_finalize_kernel("
@@ -177,14 +177,15 @@ class TurboPairFormerTriangleWorkspaceTest(unittest.TestCase):
         self.assertIn("leaf_base += wave_leaves", source)
         self.assertNotIn("leaf_base += resident_leaves", source)
         self.assertIn("TaskInGridZ", source)
-        self.assertIn("task_in_grid_z = leaf_tasks <= 65535", source)
+        self.assertIn("constexpr int kMaxGridYZ = 65535;", source)
+        self.assertIn("task_in_grid_z = leaf_tasks <= kMaxGridYZ", source)
         self.assertNotIn("atomicAdd", source)
         self.assertNotIn("semaphore", source.lower())
 
     def test_sr_query_stripes_preserve_fp32_dkdv_continuation(self):
         source = (
             Path(__file__).parents[3]
-            / "core/kernels/cuda/turbopairformer_triangle_dq_dbias.cu"
+            / "core/kernels/turbopairformer/turbopairformer_triangle_dq_dbias.cu"
         ).read_text()
         self.assertIn("float* __restrict__ dk_continuation", source)
         self.assertIn("float* __restrict__ dv_continuation", source)

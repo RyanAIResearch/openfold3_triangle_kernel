@@ -464,7 +464,7 @@ class TrainingExperimentRunner(ExperimentRunner):
             self.model_config
         )
         if turbopairformer_modules:
-            from openfold3.core.kernels.cuda.provider import (
+            from openfold3.core.kernels.turbopairformer.provider import (
                 TURBOPAIRFORMER,
                 active_provider,
             )

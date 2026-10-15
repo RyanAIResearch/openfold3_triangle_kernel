@@ -1,6 +1,15 @@
 # SR campaign scripts (imported from the 2026-08-21/22 session scratchpad)
 
-Environment contract shared by all scripts (override via env):
+`sr_workspace_gate.py`, `sr_workspace_sanitize_target.py`, and
+`sr_capture_driver.py` use the current `openfold3.core.kernels.turbopairformer`
+package. The other kernel-importing scripts retain
+`openfold3.core.kernels.cuda` for the historical worktrees and wheels described
+below. Run those scripts with their recorded source/runtime; they are not gates
+for the current checkout. In particular, the old two-pass facade comparisons
+require a historical implementation that accepts `OPENFOLD3_SR_BACKWARD=0`.
+
+Historical campaign environment (not automatically applied by the three current
+tools above; override via env):
 - `SR_ROOT` — the worktree to test (default: /home/ubuntu/xzz/of3_sr_dq)
 - `TORCH_EXTENSIONS_DIR` — prewarmed JIT cache (scripts default to a
   session-scratch path: SET THIS EXPLICITLY when reusing)

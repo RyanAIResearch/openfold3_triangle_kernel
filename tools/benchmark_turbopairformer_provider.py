@@ -86,7 +86,7 @@ def _load_provider(name: str) -> Callable[..., Any]:
 
         return triangle_attention
     if name == "intree":
-        from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (
             turbopairformer_triangle_attention,
         )
 

@@ -14,10 +14,12 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_MEMBER = "openfold3/core/kernels/cuda/_build_manifest.json"
+MANIFEST_MEMBER = "openfold3/core/kernels/turbopairformer/_build_manifest.json"
 EXPECTED_EXTENSIONS = {
     "turbopairformer_forward": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_forward_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_forward_sm90a"
+        ),
         "symbols": [
             "turbopairformer_triangle_forward_out",
             "turbopairformer_triangle_forward_shadow_out",
@@ -25,21 +27,27 @@ EXPECTED_EXTENSIONS = {
         ],
     },
     "turbopairformer_delta": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_delta_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_delta_sm90a"
+        ),
         "symbols": [
             "turbopairformer_triangle_delta_out",
             "turbopairformer_triangle_delta_shadow_out",
         ],
     },
     "turbopairformer_dkdv": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_dkdv_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_dkdv_sm90a"
+        ),
         "symbols": [
             "turbopairformer_triangle_dkdv_out",
             "turbopairformer_triangle_dkdv_delta_true_out",
         ],
     },
     "turbopairformer_dq_dbias": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_dq_dbias_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_dq_dbias_sm90a"
+        ),
         "symbols": [
             "turbopairformer_triangle_dq_dbias_out",
             "turbopairformer_reduce_broadcast_dbias_out",
@@ -47,7 +55,9 @@ EXPECTED_EXTENSIONS = {
         ],
     },
     "turbopairformer_trimul": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_trimul_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_trimul_sm90a"
+        ),
         "symbols": [
             "trimul_in_fwd",
             "trimul_out_fwd",
@@ -61,11 +71,11 @@ EXPECTED_EXTENSIONS = {
     },
 }
 LOADER_MEMBERS = (
-    "openfold3/core/kernels/cuda/turbopairformer_triangle_forward.py",
-    "openfold3/core/kernels/cuda/turbopairformer_triangle_delta.py",
-    "openfold3/core/kernels/cuda/turbopairformer_triangle_dkdv.py",
-    "openfold3/core/kernels/cuda/turbopairformer_triangle_dq_dbias.py",
-    "openfold3/core/kernels/cuda/turbopairformer_trimul_cuda.py",
+    "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_forward.py",
+    "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_delta.py",
+    "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_dkdv.py",
+    "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_dq_dbias.py",
+    "openfold3/core/kernels/turbopairformer/turbopairformer_trimul_cuda.py",
 )
 
 
@@ -178,7 +188,7 @@ def main() -> None:
                 raise RuntimeError(f"unexpected extension symbol contract: {key}")
             module_basename = str(record["module"]).rsplit(".", 1)[-1]
             expected_prefix = (
-                "openfold3/core/kernels/cuda/_ext/" + module_basename + "."
+                "openfold3/core/kernels/turbopairformer/_ext/" + module_basename + "."
             )
             if not member.startswith(expected_prefix) or not member.endswith(".so"):
                 raise RuntimeError(
@@ -194,7 +204,7 @@ def main() -> None:
         packaged_shared_objects = {
             name
             for name in names
-            if name.startswith("openfold3/core/kernels/cuda/_ext/")
+            if name.startswith("openfold3/core/kernels/turbopairformer/_ext/")
             and name.endswith(".so")
         }
         if packaged_shared_objects != binary_members:

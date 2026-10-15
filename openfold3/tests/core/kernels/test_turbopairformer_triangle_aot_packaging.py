@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
+import sys
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 REPOSITORY = Path(__file__).resolve().parents[4]
-CUDA_PACKAGE = REPOSITORY / "openfold3/core/kernels/cuda"
+CUDA_PACKAGE = REPOSITORY / "openfold3/core/kernels/turbopairformer"
 LOADERS = (
     "turbopairformer_triangle_forward.py",
     "turbopairformer_triangle_delta.py",
@@ -30,7 +35,7 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
             text = (CUDA_PACKAGE / loader).read_text()
             self.assertNotIn("torch.utils.cpp_extension", text, loader)
             self.assertIn("load_extension_module", text, loader)
-            self.assertIn(".cuda._ext.", text, loader)
+            self.assertIn(".turbopairformer._ext.", text, loader)
 
     def test_jit_import_is_isolated_to_explicit_development_function(self):
         path = CUDA_PACKAGE / "_aot_runtime.py"
@@ -89,9 +94,9 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
 
     def test_trimul_aot_excludes_legacy_row_gather_symbols(self):
         production_members = (
-            "openfold3/core/kernels/cuda/turbopairformer_trimul.py",
-            "openfold3/core/kernels/cuda/turbopairformer_trimul_cuda.py",
-            "openfold3/core/kernels/cuda/turbopairformer_trimul_cuda.cu",
+            "openfold3/core/kernels/turbopairformer/turbopairformer_trimul.py",
+            "openfold3/core/kernels/turbopairformer/turbopairformer_trimul_cuda.py",
+            "openfold3/core/kernels/turbopairformer/turbopairformer_trimul_cuda.cu",
             "setup.py",
             "tools/attest_sm90_wheel.py",
         )
@@ -122,14 +127,73 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
             {"Programming Language :: Python :: 3.14"},
         )
         package_data = project["tool"]["setuptools"]["package-data"]["openfold3"]
-        self.assertIn("core/kernels/cuda/_build_manifest.json", package_data)
-        self.assertIn("core/kernels/cuda/turbopairformer_trimul_cuda.cu", package_data)
+        self.assertIn("core/kernels/turbopairformer/_build_manifest.json", package_data)
+        self.assertIn(
+            "core/kernels/turbopairformer/turbopairformer_trimul_cuda.cu", package_data
+        )
         self.assertNotIn("cibuildwheel", project.get("tool", {}))
 
     def test_source_tree_manifest_is_fail_closed(self):
         manifest = json.loads((CUDA_PACKAGE / "_build_manifest.json").read_text())
         self.assertEqual(manifest["schema_version"], 1)
         self.assertIs(manifest["built"], False)
+
+    def test_artifact_manager_limits_legacy_namespace_to_exact_pinned_wheel(self):
+        spec = importlib.util.spec_from_file_location(
+            "aot_packaging_manager", REPOSITORY / "tools/manage_attested_sm90_wheel.py"
+        )
+        assert spec is not None and spec.loader is not None
+        manager = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {spec.name: manager}):
+            spec.loader.exec_module(manager)
+
+        class ManifestReadProbe(Exception):
+            pass
+
+        pinned_sha256 = manager.PREBUILT_FILE_SHA256[manager.PREBUILT_WHEEL]
+        for digest, package in (
+            (pinned_sha256, "cuda"),
+            ("0" * 64, "turbopairformer"),
+        ):
+            with (
+                self.subTest(package=package),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                artifact_dir = Path(directory)
+                # Reuse the pinned filename in both cases: only its exact digest
+                # may select the historical namespace, never the name alone.
+                wheel = artifact_dir / manager.PREBUILT_WHEEL
+                wheel.write_bytes(b"manifest-selection probe")
+                wheel.with_suffix(wheel.suffix + ".sha256").write_text(
+                    f"{digest}  {wheel.name}\n"
+                )
+                wheel.with_suffix(wheel.suffix + ".attestation.json").write_text(
+                    json.dumps({"wheel": wheel.name, "wheel_sha256": digest})
+                )
+                (artifact_dir / "aot_clean_install_smoke.json").write_text(
+                    json.dumps({"verdict": "PASS"})
+                )
+                with (
+                    patch.object(manager, "sha256_file", return_value=digest),
+                    patch.object(manager.zipfile, "ZipFile") as archive_factory,
+                ):
+                    archive = archive_factory.return_value.__enter__.return_value
+                    archive.read.side_effect = ManifestReadProbe
+                    with self.assertRaises(ManifestReadProbe):
+                        manager.discover_bundle(artifact_dir)
+                    archive.read.assert_called_once_with(
+                        f"openfold3/core/kernels/{package}/_build_manifest.json"
+                    )
+
+                bundle = SimpleNamespace(wheel_sha256=digest, installed_distribution={})
+                with patch.object(manager, "_expected_aot_identity", return_value={}):
+                    program = manager._verification_program(bundle, "0" * 40)
+                ast.parse(program)
+                self.assertIn(
+                    f"from openfold3.core.kernels.{package}._aot_runtime "
+                    "import distributed_aot_identity",
+                    program,
+                )
 
     def test_facade_metadata_contract_is_release_bounded(self):
         text = (CUDA_PACKAGE / "turbopairformer_triangle_attention.py").read_text()
@@ -177,7 +241,7 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIn('"dBias": gradients[3]', text)
         self.assertIn("prefix, sequence, heads, head_dim = 1, 64, 4, 32", text)
         self.assertIn("non-contiguous fused pack differs", text)
-        self.assertIn('for arm in ("two_pass", "sr_r")', text)
+        self.assertIn('for arm in ("default_sr_shadow", "explicit_sr_shadow")', text)
         self.assertIn("_turbopairformer_trimul_sm90a", text)
         self.assertIn('"outgoing": run_trimul(True)', text)
         self.assertIn('"incoming": run_trimul(False)', text)
@@ -256,13 +320,13 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
             self.assertIn(relative, text)
         self.assertIn('"--frandom-seed=0"', text)
         self.assertIn(
-            "sources=[f\"openfold3/core/kernels/cuda/{value['source']}\"],",
+            "sources=[f\"openfold3/core/kernels/turbopairformer/{value['source']}\"],",
             text,
         )
         source_manifest = (REPOSITORY / "MANIFEST.in").read_text()
         self.assertIn("recursive-include tools *.py *.sh", source_manifest)
         self.assertIn(
-            "recursive-include openfold3/core/kernels/cuda *.cu *.py *.json *.md",
+            "recursive-include openfold3/core/kernels/turbopairformer *.cu *.py *.json *.md",
             source_manifest,
         )
 

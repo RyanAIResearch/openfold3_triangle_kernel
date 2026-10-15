@@ -144,7 +144,7 @@ def _providers(names: list[str]) -> dict[str, Callable[..., Any]]:
 
             resolved[name] = _kernel(triangle_attention)
         elif name == "intree":
-            from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+            from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (
                 turbopairformer_triangle_attention,
             )
 

@@ -338,7 +338,7 @@ def _local_kernel_record(
                 "and MIG disabled"
             )
 
-        from openfold3.core.kernels.cuda._aot_runtime import (
+        from openfold3.core.kernels.turbopairformer._aot_runtime import (
             distributed_aot_identity,
         )
 

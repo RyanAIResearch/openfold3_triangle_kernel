@@ -9,7 +9,7 @@ Two providers expose the same facade:
     ``packages/turbopairformer`` in this repository (install a built wheel
     with ``pip install <wheel>``).
 ``intree``
-    the kernel copy vendored under ``openfold3/core/kernels/cuda``.
+    the kernel copy vendored under ``openfold3/core/kernels/turbopairformer``.
 
 Builds of both providers from the same current source use byte-identical
 ``.cu`` files; the provider-equivalence tests check their outputs and gradients
@@ -120,15 +120,15 @@ def _module(kind: str) -> Any:
             # The package, not the private implementation module: the public
             # names are what the package guarantees.
             TURBOPAIRFORMER,
-            "openfold3.core.kernels.cuda.turbopairformer_triangle_attention",
+            "openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention",
         ),
         "trimul_support": (
             "turbopairformer.trimul_support",
-            "openfold3.core.kernels.cuda.turbopairformer_trimul_support",
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support",
         ),
         "trimul_runner": (
             "turbopairformer._trimul",
-            "openfold3.core.kernels.cuda.turbopairformer_trimul",
+            "openfold3.core.kernels.turbopairformer.turbopairformer_trimul",
         ),
     }[kind]
     return _import(names[0] if turbopairformer_serving else names[1])

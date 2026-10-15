@@ -12,7 +12,9 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def extension():
-    from openfold3.core.kernels.cuda.turbopairformer_trimul_cuda import load_extension
+    from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_cuda import (
+        load_extension,
+    )
 
     return load_extension()
 
@@ -345,7 +347,7 @@ def test_cpp_source_pins_device_and_cuda_error_contracts():
         Path(__file__)
         .resolve()
         .parents[3]
-        .joinpath("core/kernels/cuda/turbopairformer_trimul_cuda.cu")
+        .joinpath("core/kernels/turbopairformer/turbopairformer_trimul_cuda.cu")
         .read_text()
     )
     assert source.count("CUDAGuard device_guard") == 8

@@ -21,7 +21,7 @@ from openfold3.setup_openfold import setup_biotite_ccd
 @pytest.fixture(autouse=True)
 def _isolate_intree_triangle_provider(monkeypatch):
     """Host tests patch the in-tree kernels, independently of installed packages."""
-    from openfold3.core.kernels.cuda import provider
+    from openfold3.core.kernels.turbopairformer import provider
 
     monkeypatch.setenv(provider.PROVIDER_ENV, provider.INTREE)
     provider._reset_for_tests()

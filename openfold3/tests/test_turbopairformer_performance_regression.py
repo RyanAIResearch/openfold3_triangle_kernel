@@ -110,7 +110,7 @@ def _stock_attention(q, k, v, mask, bias):
 def _implementations():
     from turbopairformer import triangle_attention
 
-    from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+    from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (
         turbopairformer_triangle_attention,
     )
 

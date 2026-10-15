@@ -23,7 +23,7 @@ else:
     CUDA_HOME = None
 
 ROOT = Path(__file__).resolve().parent
-CUDA_PACKAGE = ROOT / "openfold3/core/kernels/cuda"
+CUDA_PACKAGE = ROOT / "openfold3/core/kernels/turbopairformer"
 EXPECTED_PYTHON = (3, 14)
 EXPECTED_TORCH = "2.10.0"
 EXPECTED_TORCH_CUDA = "12.9"
@@ -39,7 +39,9 @@ NVCC_FLAGS = [
 
 EXTENSION_SPECS = {
     "turbopairformer_forward": {
-        "module": ("openfold3.core.kernels.cuda._ext._turbopairformer_forward_sm90a"),
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_forward_sm90a"
+        ),
         "source": "turbopairformer_triangle_forward.cu",
         "symbols": [
             "turbopairformer_triangle_forward_out",
@@ -48,7 +50,9 @@ EXTENSION_SPECS = {
         ],
     },
     "turbopairformer_delta": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_delta_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_delta_sm90a"
+        ),
         "source": "turbopairformer_triangle_delta.cu",
         "symbols": [
             "turbopairformer_triangle_delta_out",
@@ -56,7 +60,9 @@ EXTENSION_SPECS = {
         ],
     },
     "turbopairformer_dkdv": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_dkdv_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_dkdv_sm90a"
+        ),
         "source": "turbopairformer_triangle_dkdv.cu",
         "symbols": [
             "turbopairformer_triangle_dkdv_out",
@@ -64,7 +70,9 @@ EXTENSION_SPECS = {
         ],
     },
     "turbopairformer_dq_dbias": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_dq_dbias_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_dq_dbias_sm90a"
+        ),
         "source": "turbopairformer_triangle_dq_dbias.cu",
         "symbols": [
             "turbopairformer_triangle_dq_dbias_out",
@@ -73,7 +81,9 @@ EXTENSION_SPECS = {
         ],
     },
     "turbopairformer_trimul": {
-        "module": "openfold3.core.kernels.cuda._ext._turbopairformer_trimul_sm90a",
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_trimul_sm90a"
+        ),
         "source": "turbopairformer_trimul_cuda.cu",
         "symbols": [
             "trimul_in_fwd",
@@ -157,7 +167,7 @@ def _source_paths() -> list[Path]:
             "pyproject.toml",
             "MANIFEST.in",
             "README.md",
-            "openfold3/core/kernels/cuda/_ext/__init__.py",
+            "openfold3/core/kernels/turbopairformer/_ext/__init__.py",
             "tools/build_sm90_wheel.sh",
             "tools/attest_sm90_wheel.py",
             "tools/aot_clean_install_smoke.py",
@@ -191,7 +201,9 @@ if BUILD_AOT:
                 try:
                     relative_binary = binary.relative_to(build_lib).as_posix()
                 except ValueError:
-                    relative_binary = "openfold3/core/kernels/cuda/_ext/" + binary.name
+                    relative_binary = (
+                        "openfold3/core/kernels/turbopairformer/_ext/" + binary.name
+                    )
                 extension_records[key] = {
                     "module": extension.name,
                     "filename": relative_binary,
@@ -255,7 +267,10 @@ if BUILD_AOT:
                 "sources": source_records,
                 "extensions": extension_records,
             }
-            destination = build_lib / "openfold3/core/kernels/cuda/_build_manifest.json"
+            destination = (
+                build_lib
+                / "openfold3/core/kernels/turbopairformer/_build_manifest.json"
+            )
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -266,7 +281,7 @@ if BUILD_AOT:
             name=value["module"],
             # Keep the compiler input relative to the fresh checkout so CUDA
             # line-info does not capture a random mktemp source prefix.
-            sources=[f"openfold3/core/kernels/cuda/{value['source']}"],
+            sources=[f"openfold3/core/kernels/turbopairformer/{value['source']}"],
             extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
         )
         for value in EXTENSION_SPECS.values()

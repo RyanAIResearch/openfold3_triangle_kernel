@@ -2,9 +2,9 @@
 
 """The ``turbopairformer`` pip package must be indistinguishable from the in-tree copy.
 
-``openfold3/core/kernels/cuda/provider.py`` lets the stable triangle routes be
+``openfold3/core/kernels/turbopairformer/provider.py`` lets the stable triangle routes be
 served either by the installed ``turbopairformer`` package or by the kernel copy
-vendored under ``openfold3/core/kernels/cuda``.  Both providers build the same
+vendored under ``openfold3/core/kernels/turbopairformer``.  Both providers build the same
 ``.cu`` sources, so switching between them with the same execution policy must
 not move a single bit: these tests compare the raw bytes of forward outputs and
 every input gradient. Attention comparisons select mandatory single-reconstruction backward
@@ -148,7 +148,7 @@ class TriangleAttentionProviderEquivalenceTest(unittest.TestCase):
             triangle_attention,
         )
 
-        from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (
             is_turbopairformer_supported,
             turbopairformer_triangle_attention,
         )
@@ -314,10 +314,10 @@ class TriMulProviderEquivalenceTest(unittest.TestCase):
         from turbopairformer._trimul import _run_supported_trimul
         from turbopairformer.trimul_support import check_trimul_support
 
-        from openfold3.core.kernels.cuda.turbopairformer_trimul import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_trimul import (
             _run_supported_stable_trimul,
         )
-        from openfold3.core.kernels.cuda.turbopairformer_trimul_support import (
+        from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_support import (
             check_stable_trimul_support,
         )
 
@@ -411,7 +411,7 @@ class ProviderResolutionTest(unittest.TestCase):
     """Provider selection is explicit, validated, and fails closed."""
 
     def setUp(self):
-        from openfold3.core.kernels.cuda import provider
+        from openfold3.core.kernels.turbopairformer import provider
 
         self.provider = provider
         provider._reset_for_tests()

@@ -170,7 +170,7 @@ explicit and memoized on first use:
 The `openfold3-cuda12` Pixi environment sets the package provider automatically.
 Installing TurboPairFormer alone does not change an existing OpenFold3 run. An
 explicit package selection fails if the package is unavailable. The production
-OpenFold3 wheel must include `openfold3/core/kernels/cuda/provider.py` to use
+OpenFold3 wheel must include `openfold3/core/kernels/turbopairformer/provider.py` to use
 this switch; an older host wheel does not gain this adapter by installing
 TurboPairFormer.
 

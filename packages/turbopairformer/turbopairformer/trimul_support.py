@@ -5,6 +5,11 @@
 This module deliberately does not import :mod:`turbopairformer._trimul`, load an
 extension, or launch a kernel.  It separates the Hopper sm90a
 fast-path domain from future selector/fallback policy.
+
+``check_trimul_support`` collects tensor/module properties and queries
+the CUDA device. ``evaluate_trimul_support`` checks that collected
+metadata without touching tensors or a CUDA device. Both report the first
+rejection reason, so validation order is part of the contract.
 """
 
 from __future__ import annotations
@@ -46,7 +51,7 @@ _LAYER_NORM_NAMES = ("layer_norm_in", "layer_norm_out")
 
 @dataclass(frozen=True)
 class SupportResult:
-    """Reasoned fast-path verdict suitable for a future fail-closed selector."""
+    """Fast-path verdict and reason; accepted results include flattened dimensions."""
 
     supported: bool
     code: str
@@ -77,6 +82,8 @@ class TensorMetadata:
 
 @dataclass(frozen=True)
 class NamedTensorMetadata:
+    """One expected module parameter and the metadata needed to validate it."""
+
     name: str
     tensor: TensorMetadata
 
@@ -136,6 +143,7 @@ def _expected_weight_shapes(c_z: int, c_hidden: int) -> dict[str, tuple[int, ...
 
 
 def _broadcasts_exactly(source: tuple[int, ...], target: tuple[int, ...]) -> bool:
+    """Left-pad the source shape with ones and require an exact target broadcast."""
     if len(source) > len(target):
         return False
     padded = (1,) * (len(target) - len(source)) + source
@@ -145,8 +153,13 @@ def _broadcasts_exactly(source: tuple[int, ...], target: tuple[int, ...]) -> boo
 def evaluate_trimul_support(
     metadata: TrimulSupportMetadata,
 ) -> SupportResult:
-    """Evaluate the TurboPairFormer TriMul contract without CUDA/JIT side effects."""
+    """Check device, input, launch sizes, parameters, mask, then short-N policy.
 
+    The first failed check determines the returned code. A short sequence is
+    reported as stock fallback only after every preceding contract check passes.
+    """
+
+    # 1. Require the supported Hopper device family and valid launch metadata.
     if metadata.capability != (9, 0):
         return _rejected(
             "architecture",
@@ -159,6 +172,8 @@ def evaluate_trimul_support(
             "Hopper multiprocessor_count must be a positive integer",
         )
 
+    # 2. Read logical dimensions. The runner later packs z contiguously, so its
+    # current strides need not match the kernel layout [batch, N, N, C].
     z = metadata.z
     if z.device_type != "cuda":
         return _rejected("z_device", "z must be a CUDA tensor")
@@ -169,7 +184,7 @@ def evaluate_trimul_support(
     if any(not isinstance(dimension, int) or dimension <= 0 for dimension in z.shape):
         return _rejected("z_shape", "every z dimension must be a positive integer")
 
-    prefix = z.shape[:-3]
+    batch_prefix = z.shape[:-3]
     row_sequence, col_sequence, tensor_channels = z.shape[-3:]
     if row_sequence != col_sequence:
         return _rejected(
@@ -180,6 +195,7 @@ def evaluate_trimul_support(
     if sequence <= 0:
         return _rejected("sequence", "TriMul requires N > 0")
 
+    # 3. Match the module's channels and direction to the compiled kernels.
     if type(metadata.c_z) is not int or type(metadata.c_hidden) is not int:
         return _rejected("module_channels", "module c_z and c_hidden must be integers")
     if metadata.c_z != tensor_channels:
@@ -207,7 +223,9 @@ def evaluate_trimul_support(
             "module _outgoing must be an explicit bool",
         )
 
-    batch = prod(prefix) if prefix else 1
+    # 4. Check launch dimensions before allocating or dispatching. Each bound
+    # mirrors a grid or signed-index calculation in the CUDA implementation.
+    batch = prod(batch_prefix) if batch_prefix else 1
     if batch > MAX_FLATTENED_BATCH:
         return _rejected(
             "batch_grid_z",
@@ -217,9 +235,9 @@ def evaluate_trimul_support(
             ),
         )
 
-    nn = sequence * sequence
-    rows = batch * nn
-    transpose_tiles = _ceil_div(nn, 32)
+    pair_elements = sequence * sequence
+    rows = batch * pair_elements
+    transpose_tiles = _ceil_div(pair_elements, 32)
     if transpose_tiles > MAX_GRID_X:
         return _rejected(
             "transpose_grid_x",
@@ -242,12 +260,12 @@ def evaluate_trimul_support(
             "ceil(batch*N*N*C/256) exceeds the CUDA grid-x limit",
         )
 
-    slices = channels // 32
+    channel_slices = channels // 32
     persistent_grid_y = max(
         1,
         min(
             _ceil_div(rows, 128),
-            (2 * metadata.multiprocessor_count) // slices,
+            (2 * metadata.multiprocessor_count) // channel_slices,
         ),
     )
     if persistent_grid_y > MAX_GRID_YZ:
@@ -256,11 +274,13 @@ def evaluate_trimul_support(
             "persistent projection grid-y exceeds the CUDA grid-y limit",
         )
 
-    target_chunks = metadata.multiprocessor_count * _DGB_BLOCKS_PER_SM
-    chunk_rows = _ceil_div(rows, target_chunks)
-    chunk_rows = _ceil_div(chunk_rows, _DGB_ROW_QUANTUM) * _DGB_ROW_QUANTUM
-    chunk_rows = max(_DGB_ROW_QUANTUM, min(_DGB_MAX_CHUNK_ROWS, chunk_rows))
-    dgb_chunks = _ceil_div(rows, chunk_rows)
+    # LayerNorm scale/bias gradients divide rows into 64-row-aligned chunks.
+    # Their grid-y count must fit after the 2048-row chunk-size cap is applied.
+    target_dgb_chunks = metadata.multiprocessor_count * _DGB_BLOCKS_PER_SM
+    dgb_chunk_rows = _ceil_div(rows, target_dgb_chunks)
+    dgb_chunk_rows = _ceil_div(dgb_chunk_rows, _DGB_ROW_QUANTUM) * _DGB_ROW_QUANTUM
+    dgb_chunk_rows = max(_DGB_ROW_QUANTUM, min(_DGB_MAX_CHUNK_ROWS, dgb_chunk_rows))
+    dgb_chunks = _ceil_div(rows, dgb_chunk_rows)
     if dgb_chunks > MAX_GRID_YZ:
         return _rejected(
             "layer_norm_dgb_grid_y",
@@ -270,6 +290,8 @@ def evaluate_trimul_support(
             ),
         )
 
+    # 5. Require all ten weight/LN parameters exactly once, with the shapes,
+    # FP32 dtype, dense storage and device expected by the extension.
     expected_shapes = _expected_weight_shapes(metadata.c_z, metadata.c_hidden)
     named_weights = {item.name: item.tensor for item in metadata.weights}
     if len(named_weights) != len(metadata.weights) or set(named_weights) != set(
@@ -303,6 +325,7 @@ def evaluate_trimul_support(
                 f"{name} must be on the same CUDA device as z",
             )
 
+    # Linear biases are unsupported; both LayerNorm epsilons are fixed at 1e-5.
     bias_states = dict(metadata.linear_bias_is_none)
     if len(bias_states) != len(metadata.linear_bias_is_none) or set(bias_states) != set(
         _LINEAR_NAMES
@@ -333,6 +356,8 @@ def evaluate_trimul_support(
                 f"{name}.eps must equal 1e-5 exactly",
             )
 
+    # 6. A mask may be broadcast or strided: the runner expands and packs it.
+    # Validate metadata only; do not inspect mask values or synchronize a tensor.
     mask = metadata.mask
     if mask is not None:
         if mask.device_key != z.device_key:
@@ -360,6 +385,7 @@ def evaluate_trimul_support(
                 f"mask shape {mask.shape} cannot broadcast to {z.shape[:-1]}",
             )
 
+    # 7. Apply the fixed short-sequence policy last, preserving earlier errors.
     if sequence <= TRIMUL_STOCK_FALLBACK_THRESHOLD:
         return _rejected(
             "sequence_stock_fallback",
@@ -374,6 +400,7 @@ def evaluate_trimul_support(
 
 
 def _tensor_metadata(tensor: torch.Tensor) -> TensorMetadata:
+    """Describe shape, storage and device without reading tensor contents."""
     return TensorMetadata(
         shape=tuple(tensor.shape),
         dtype=tensor.dtype,
@@ -500,8 +527,13 @@ def check_trimul_support(
     z: torch.Tensor,
     mask: torch.Tensor | None = None,
 ) -> SupportResult:
-    """Inspect a live invocation without importing or building the extension."""
+    """Collect live metadata, then use the shared support evaluator.
 
+    CUDA device properties are queried here, but the extension is neither
+    imported nor built and tensor contents are never read.
+    """
+
+    # Reject malformed objects before accessing their module/tensor properties.
     if not isinstance(z, torch.Tensor):
         return _rejected("z_type", "z must be a torch.Tensor")
     if z.device.type != "cuda":
@@ -528,6 +560,8 @@ def check_trimul_support(
             ),
         )
 
+    # Collect the unfused six-linear/two-LayerNorm module layout. The evaluator
+    # below owns parameter shape, dtype, device and numerical-policy checks.
     weights: list[NamedTensorMetadata] = []
     bias_states: list[tuple[str, bool]] = []
     for name in _LINEAR_NAMES:
@@ -569,6 +603,7 @@ def check_trimul_support(
             )
         eps_values.append((name, float(eps)))
 
+    # Query the device only after the module structure is known to be usable.
     try:
         capability = tuple(torch.cuda.get_device_capability(z.device))
         device_name = torch.cuda.get_device_name(z.device)

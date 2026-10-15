@@ -1,6 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""TurboPairFormer dK/dV with key-block ownership and runtime H/D/N."""
+"""Load and call the split TurboPairFormer dK/dV CUDA kernels.
+
+The sibling ``turbopairformer_triangle_dkdv.cu`` owns each key block's gradients
+and can also emit a recomputed ``delta_true`` row scalar. This module prepares
+output buffers and optional row-scalar workspace for direct callers. The public
+attention facade uses the separate single-reconstruction backward route in
+``turbopairformer_triangle_dq_dbias.py``.
+
+The binary is installed under ``turbopairformer._ext.*``;
+``_aot_runtime`` owns its module name, required exports, and loading policy.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +19,16 @@ from typing import Any
 
 import torch
 
+# Load on first use, then reuse the successfully loaded extension module.
 _EXTENSION: Any = None
 
 
 def source_sha256() -> dict[str, str]:
+    """Return ``{source filename: SHA256}`` without loading the extension.
+
+    See ``_aot_runtime.source_sha256_for`` for manifest precedence, local-file
+    fallback, and errors. A recorded hash need not match the current source.
+    """
     from turbopairformer._aot_runtime import source_sha256_for
 
     source = Path(__file__).with_suffix(".cu")
@@ -20,30 +36,43 @@ def source_sha256() -> dict[str, str]:
 
 
 def load_extension(*, verbose: bool | None = None) -> Any:
+    """Load once using the shared AOT/JIT policy; return the cached module.
+
+    See ``_aot_runtime.load_extension_module`` for validation and fallback.
+    ``verbose`` controls JIT logging; ``None`` means ``False``.
+    """
     global _EXTENSION
     if _EXTENSION is None:
-        from turbopairformer._aot_runtime import load_extension_module
+        from turbopairformer._aot_runtime import (
+            _PRODUCTION_MODULE_CONTRACT,
+            load_extension_module,
+        )
 
+        module_key = "turbopairformer_dkdv"
+        aot_module, expected_symbols = _PRODUCTION_MODULE_CONTRACT[module_key]
         _EXTENSION = load_extension_module(
-            module_key="turbopairformer_dkdv",
-            aot_module="turbopairformer._ext._turbopairformer_dkdv_sm90a",
+            module_key=module_key,
+            aot_module=aot_module,
             source=Path(__file__).with_suffix(".cu"),
-            expected_symbols=(
-                "turbopairformer_triangle_dkdv_out",
-                "turbopairformer_triangle_dkdv_delta_true_out",
-            ),
+            expected_symbols=expected_symbols,
             verbose=bool(verbose),
         )
     return _EXTENSION
 
 
-_KEY_BLOCK = 64
+_KEY_BLOCK = 64  # Keys owned by one CUDA block; matches kKeyBlock in the source.
 
 
 def delta_true_partial_elements(
     sequence: int, heads: int, batch: int, outer: int | None = None
 ) -> int:
-    """FP32 element count of the [rows, key_blocks] T-partial workspace."""
+    """Count FP32 elements for the optional ``delta_true`` partial workspace.
+
+    There is one partial for every query row and 64-key block, so the count is
+    ``batch * outer * heads * sequence * ceil(sequence / 64)``. Physical order
+    is ``[batch, outer, heads, key_blocks, sequence]``. ``outer=None`` uses the
+    historical square case ``outer=sequence``; explicit outer counts may differ.
+    """
 
     if outer is None:
         outer = sequence
@@ -69,14 +98,20 @@ def turbopairformer_triangle_dkdv(
 ) -> (
     tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 ):
-    """dK/dV; optionally also the recomputed delta_true row scalar.
+    """Compute dK/dV, optionally returning a recomputed ``delta_true`` as well.
 
-    With ``emit_delta_true`` the kernel additionally folds the row scalars
-    ``T = sum_k w dP`` per key block (fixed order, single writer, zero
-    atomics), and a follow-up reduce produces ``delta_true = T`` in the
-    lse/delta row layout. The normalization divide is intentionally omitted:
-    the recomputed ``sum(w)`` was measured within 1.3e-6 of one. dK/dV bits
-    are identical in both modes.
+    Q/K/V and dK/dV use ``[B, O, H, N, D]`` BF16; ``d_output`` uses
+    ``[B, O, N, H, D]`` BF16. ``logsumexp`` from forward and ``delta`` from
+    backward are FP32 row statistics, flattened for the native call. Mask and
+    pair bias use ``[B, O, 1, 1, N]`` FP32 and ``[B, 1, H, N, N]`` BF16.
+    Missing output buffers are allocated; supplied buffers are passed through.
+
+    Both modes form ``dS = P * (dP - delta)`` using the supplied ``delta``.
+    With ``emit_delta_true=True``, the kernel also sums FP32 ``P * dP`` within
+    each key block. A fixed-order reduction combines those partials into an
+    additional FP32 result in the logsumexp row layout. It does not divide by
+    the recomputed ``sum(P)`` or replace the delta used for these dK/dV results.
+    The return tuple has two tensors normally, or three when emitting delta_true.
     """
 
     if out_dk is None:
@@ -84,6 +119,7 @@ def turbopairformer_triangle_dkdv(
     if out_dv is None:
         out_dv = torch.empty_like(q)
     if not emit_delta_true:
+        # Plain mode needs no row-scalar workspace or follow-up reduction.
         with torch.cuda.device(q.device), torch.no_grad():
             load_extension().turbopairformer_triangle_dkdv_out(
                 q,
@@ -98,17 +134,20 @@ def turbopairformer_triangle_dkdv(
                 out_dv,
             )
         return out_dk, out_dv
+    # Optional mode owns one FP32 partial per query row and key block.
     batch, outer, heads = int(q.shape[0]), int(q.shape[1]), int(q.shape[2])
     sequence = int(q.shape[3])
-    required = delta_true_partial_elements(sequence, heads, batch, outer=outer)
+    required_partial_elements = delta_true_partial_elements(
+        sequence, heads, batch, outer=outer
+    )
     if delta_true_partials is None:
         delta_true_partials = torch.empty(
-            required, device=q.device, dtype=torch.float32
+            required_partial_elements, device=q.device, dtype=torch.float32
         )
-    elif delta_true_partials.numel() < required:
+    elif delta_true_partials.numel() < required_partial_elements:
         raise ValueError(
             f"delta_true_partials has {delta_true_partials.numel()} elements, "
-            f"but this shape requires {required}"
+            f"but this shape requires {required_partial_elements}"
         )
     if out_delta_true is None:
         out_delta_true = torch.empty_like(logsumexp)

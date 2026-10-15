@@ -254,21 +254,22 @@ wheel as the Python package.
 ## Current source synchronization
 
 The package CUDA sources are byte-identical to the mapped files in
-`openfold3/core/kernels/cuda/` at main commit
-`98eff406e039c4c6975e659d55cc3e8d5c251085`. This includes the SR register-lifetime
-change from `c35e7d14` and the mandatory-SR public policy from `ba65b02c`.
+`openfold3/core/kernels/turbopairformer/` at main commit
+`2842a19e41cbdbc7bc4c4ea2313c64e68e92f0c2`. This includes the shared CUDA and
+Python readability changes and the host kernel-package rename. Computation,
+operation order, synchronization, and the public numerical policy are preserved.
 The Python facade retains the standalone optional-mask API, canonical environment
-names, legacy aliases and AOT loader. Version 0.1.3 is being prepared from this
-source. Its wheel has not yet been built or validated; published wheels and
-historical validation receipts remain unchanged.
+names, legacy aliases and AOT loader. The published 0.1.3 wheels predate this
+readability synchronization and remain unchanged. A new build must be validated
+for its exact source commit and wheel digest; historical receipts do not certify it.
 
 | Package CUDA file | Main CUDA file | SHA256 |
 | --- | --- | --- |
-| `triangle_forward.cu` | `turbopairformer_triangle_forward.cu` | `d1411d5cbb265bb92b393fcfd42bc13a34c6195feabcdfab27085b27b8aff2c5` |
-| `triangle_delta.cu` | `turbopairformer_triangle_delta.cu` | `3f4efadfb03763bfae402005632a13774d086ee835a4c8f685e93d884b46906c` |
-| `triangle_dkdv.cu` | `turbopairformer_triangle_dkdv.cu` | `0856da58092f29e3336bd8c835794c9b68e43394edc4658346c1f99d6007fd2d` |
-| `triangle_dq_dbias.cu` | `turbopairformer_triangle_dq_dbias.cu` | `60b5545513bdd1408f1b5f8244f0aa99688753ef03d5a1790d29168bb3c8dde1` |
-| `trimul_cuda.cu` | `turbopairformer_trimul_cuda.cu` | `8962ca3513538070e5fb21259bd57a38a586641123aadfda40c62c44f9c9aa03` |
+| `triangle_forward.cu` | `turbopairformer_triangle_forward.cu` | `1dd3881e4ee05b451eb44e0bade615f1208f9bda72713f91dcb6ff34265f7965` |
+| `triangle_delta.cu` | `turbopairformer_triangle_delta.cu` | `657d3ec441d6c0906365b7c991356772af567e46964027b1a2b7d3e52220bb69` |
+| `triangle_dkdv.cu` | `turbopairformer_triangle_dkdv.cu` | `1e45df69f35a35debc85d64d9ef9fbdcb526b5032a563eee82276c362aea0f1c` |
+| `triangle_dq_dbias.cu` | `turbopairformer_triangle_dq_dbias.cu` | `94a621875e72833592e2990635725d01ccf334ca766980f4491ef2f759bf6db9` |
+| `trimul_cuda.cu` | `turbopairformer_trimul_cuda.cu` | `3f9eb2165f3603d3a9569225b28cc7715a0f714499eb19845b2e5d7c6e543056` |
 
 The retained low-level split-backward functions support reference tests; the
 public attention facade cannot select them. New builds require their own CUDA

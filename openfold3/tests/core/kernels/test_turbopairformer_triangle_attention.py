@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from openfold3.core.kernels.cuda.turbopairformer_triangle_attention import (
+from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_attention import (
     is_turbopairformer_supported,
 )
 

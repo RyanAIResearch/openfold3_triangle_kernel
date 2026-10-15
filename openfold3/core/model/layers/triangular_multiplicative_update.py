@@ -55,7 +55,7 @@ _TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
 
 def _route_stable_trimul(module, z, mask):
     """Return ``(selected, output)`` without swallowing fast-path failures."""
-    from openfold3.core.kernels.cuda.provider import (
+    from openfold3.core.kernels.turbopairformer.provider import (
         strict_fallback_enabled,
         trimul_runner,
         trimul_support_check,

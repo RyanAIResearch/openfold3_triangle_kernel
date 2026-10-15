@@ -98,7 +98,7 @@ _ZERO_PAIR_BIAS_CACHE: dict = {}
 def _raise_if_strict_turbopairformer_fallback(
     reason: str, shape: tuple[int, ...]
 ) -> None:
-    from openfold3.core.kernels.cuda.provider import strict_fallback_enabled
+    from openfold3.core.kernels.turbopairformer.provider import strict_fallback_enabled
 
     if strict_fallback_enabled():
         raise RuntimeError(
@@ -437,7 +437,7 @@ class Attention(nn.Module):
         # deployment) is simply ignored here rather than treated as a
         # conflict. Genuinely incompatible modes still raise.
         if use_stable_triangle_attention:
-            from openfold3.core.kernels.cuda.provider import validate_attention_policy
+            from openfold3.core.kernels.turbopairformer.provider import validate_attention_policy
 
             validate_attention_policy()
             use_cueq_triangle_kernels = False
@@ -562,7 +562,7 @@ class Attention(nn.Module):
             # build, support, launch, and backward failures propagate unchanged.
             # The facade validates (memoized) and raises on unsupported cases,
             # so no separate pre-check runs on this hot path.
-            from openfold3.core.kernels.cuda.provider import triangle_attention_facade
+            from openfold3.core.kernels.turbopairformer.provider import triangle_attention_facade
 
             is_turbopairformer_supported, turbopairformer_triangle_attention = (
                 triangle_attention_facade()

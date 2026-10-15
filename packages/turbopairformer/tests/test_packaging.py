@@ -112,6 +112,46 @@ def test_loader_contract_matches_setup_symbols():
         assert f"turbopairformer._ext.{module}" in setup
 
 
+@pytest.mark.parametrize(
+    ("loader", "module_key"),
+    (
+        ("triangle_forward", "turbopairformer_forward"),
+        ("triangle_delta", "turbopairformer_delta"),
+        ("triangle_dkdv", "turbopairformer_dkdv"),
+        ("triangle_dq_dbias", "turbopairformer_dq_dbias"),
+        ("trimul_cuda", "turbopairformer_trimul"),
+    ),
+)
+def test_loaders_dispatch_the_shared_runtime_contract(loader, module_key, monkeypatch):
+    """The wrapper and distributed preload must use the same module contract."""
+    import importlib
+
+    from turbopairformer import _aot_runtime
+
+    wrapper = importlib.import_module(f"turbopairformer.{loader}")
+    module_name, symbols = _aot_runtime._PRODUCTION_MODULE_CONTRACT[module_key]
+    calls = []
+    loaded = object()
+
+    def capture_load(**kwargs):
+        calls.append(kwargs)
+        return loaded
+
+    monkeypatch.setattr(wrapper, "_EXTENSION", None)
+    monkeypatch.setattr(_aot_runtime, "load_extension_module", capture_load)
+    assert wrapper.load_extension(verbose=True) is loaded
+    assert wrapper.load_extension() is loaded
+    assert calls == [
+        {
+            "module_key": module_key,
+            "aot_module": module_name,
+            "source": Path(wrapper.__file__).with_suffix(".cu"),
+            "expected_symbols": symbols,
+            "verbose": True,
+        }
+    ]
+
+
 def test_pyproject_ships_sources_and_manifest_as_package_data():
     project = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
     assert project["project"]["name"] == "turbopairformer"

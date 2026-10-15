@@ -237,7 +237,7 @@ def _kernel_record(rank: int) -> dict:
 @pytest.fixture
 def collect_mocked_kernel_record(monkeypatch):
     """Exercise the actual per-rank gate without CUDA or a process group."""
-    from openfold3.core.kernels.cuda import _aot_runtime
+    from openfold3.core.kernels.turbopairformer import _aot_runtime
 
     monkeypatch.setattr(distributed_contract.dist, "get_rank", lambda: 0)
     monkeypatch.setattr(distributed_contract.dist, "get_world_size", lambda: 2)
@@ -529,7 +529,7 @@ def test_training_runner_keeps_aqlab_ddp_and_adds_only_kernel_callback(
 @pytest.fixture
 def local_hopper_record(monkeypatch):
     """Exercise the actual hardware guard using synthetic rank/device metadata."""
-    import openfold3.core.kernels.cuda._aot_runtime as aot_runtime
+    import openfold3.core.kernels.turbopairformer._aot_runtime as aot_runtime
     import openfold3.core.utils.distributed_contract as contract
 
     monkeypatch.setattr(contract.dist, "get_rank", lambda: 0)
