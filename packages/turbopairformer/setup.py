@@ -51,7 +51,7 @@ NVCC_FLAGS = [
 EXTENSION_SPECS = {
     "turbopairformer_forward": {
         "module": "turbopairformer._ext._turbopairformer_forward_sm90a",
-        "source": "triangle_forward.cu",
+        "source": "turbopairformer_triangle_forward.cu",
         "symbols": [
             "turbopairformer_triangle_forward_out",
             "turbopairformer_triangle_forward_shadow_out",
@@ -60,7 +60,7 @@ EXTENSION_SPECS = {
     },
     "turbopairformer_delta": {
         "module": "turbopairformer._ext._turbopairformer_delta_sm90a",
-        "source": "triangle_delta.cu",
+        "source": "turbopairformer_triangle_delta.cu",
         "symbols": [
             "turbopairformer_triangle_delta_out",
             "turbopairformer_triangle_delta_shadow_out",
@@ -68,7 +68,7 @@ EXTENSION_SPECS = {
     },
     "turbopairformer_dkdv": {
         "module": "turbopairformer._ext._turbopairformer_dkdv_sm90a",
-        "source": "triangle_dkdv.cu",
+        "source": "turbopairformer_triangle_dkdv.cu",
         "symbols": [
             "turbopairformer_triangle_dkdv_out",
             "turbopairformer_triangle_dkdv_delta_true_out",
@@ -76,7 +76,7 @@ EXTENSION_SPECS = {
     },
     "turbopairformer_dq_dbias": {
         "module": "turbopairformer._ext._turbopairformer_dq_dbias_sm90a",
-        "source": "triangle_dq_dbias.cu",
+        "source": "turbopairformer_triangle_dq_dbias.cu",
         "symbols": [
             "turbopairformer_triangle_dq_dbias_out",
             "turbopairformer_reduce_broadcast_dbias_out",
@@ -85,7 +85,7 @@ EXTENSION_SPECS = {
     },
     "turbopairformer_trimul": {
         "module": "turbopairformer._ext._turbopairformer_trimul_sm90a",
-        "source": "trimul_cuda.cu",
+        "source": "turbopairformer_trimul_cuda.cu",
         "symbols": [
             "trimul_in_fwd",
             "trimul_out_fwd",

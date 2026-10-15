@@ -23,7 +23,7 @@ the output-gate gradient uses the saved gated output as
 ``d_gate = d_out * out * (1 - sigmoid(gate))``.
 
 Backward reverses these stages. Layer-normalization reductions use the CUDA
-kernels in ``trimul_cuda.cu``. The five input weight gradients
+kernels in ``turbopairformer_trimul_cuda.cu``. The five input weight gradients
 share a BF16-input GEMM split into K=16384 row chunks. Each chunk produces an
 FP32 partial; waves cap these partials at 48 MiB, and a fixed FP32 fold visits
 chunks in global ascending order. This cap excludes operands and the final

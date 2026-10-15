@@ -73,7 +73,7 @@ def source_sha256() -> dict[str, str]:
     """
     from turbopairformer._aot_runtime import source_sha256_for
 
-    source = Path(__file__).with_suffix(".cu")
+    source = Path(__file__).with_name("turbopairformer_triangle_dq_dbias.cu")
     return source_sha256_for("turbopairformer_dq_dbias", source)
 
 
@@ -95,7 +95,7 @@ def load_extension(*, verbose: bool | None = None) -> Any:
         _EXTENSION = load_extension_module(
             module_key=module_key,
             aot_module=aot_module,
-            source=Path(__file__).with_suffix(".cu"),
+            source=Path(__file__).with_name("turbopairformer_triangle_dq_dbias.cu"),
             expected_symbols=expected_symbols,
             verbose=bool(verbose),
         )

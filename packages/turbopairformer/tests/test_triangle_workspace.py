@@ -141,7 +141,7 @@ class TurboPairFormerTriangleWorkspaceTest(unittest.TestCase):
 
     def test_cuda_source_owns_a_fixed_non_atomic_left_fold(self):
         source = (
-            Path(__file__).parents[1] / "turbopairformer/triangle_dq_dbias.cu"
+            Path(__file__).parents[1] / "turbopairformer/turbopairformer_triangle_dq_dbias.cu"
         ).read_text()
         start = source.index("__global__ void turbopairformer_dq_dbias_finalize_kernel(")
         finalizer = source[start : source.index("\n}", start)]
@@ -181,7 +181,7 @@ class TurboPairFormerTriangleWorkspaceTest(unittest.TestCase):
 
     def test_sr_query_stripes_preserve_fp32_dkdv_continuation(self):
         source = (
-            Path(__file__).parents[1] / "turbopairformer/triangle_dq_dbias.cu"
+            Path(__file__).parents[1] / "turbopairformer/turbopairformer_triangle_dq_dbias.cu"
         ).read_text()
         self.assertIn("float* __restrict__ dk_continuation", source)
         self.assertIn("float* __restrict__ dv_continuation", source)

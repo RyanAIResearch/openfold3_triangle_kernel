@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -33,6 +34,21 @@ EXPECTED_MODULES = {
     "_turbopairformer_dq_dbias_sm90a",
     "_turbopairformer_trimul_sm90a",
 }
+LOADER_SOURCES = (
+    (
+        "triangle_forward",
+        "turbopairformer_forward",
+        "turbopairformer_triangle_forward.cu",
+    ),
+    ("triangle_delta", "turbopairformer_delta", "turbopairformer_triangle_delta.cu"),
+    ("triangle_dkdv", "turbopairformer_dkdv", "turbopairformer_triangle_dkdv.cu"),
+    (
+        "triangle_dq_dbias",
+        "turbopairformer_dq_dbias",
+        "turbopairformer_triangle_dq_dbias.cu",
+    ),
+    ("trimul_cuda", "turbopairformer_trimul", "turbopairformer_trimul_cuda.cu"),
+)
 
 
 def _top_level_imports(path: Path) -> set[str]:
@@ -112,23 +128,18 @@ def test_loader_contract_matches_setup_symbols():
         assert f"turbopairformer._ext.{module}" in setup
 
 
-@pytest.mark.parametrize(
-    ("loader", "module_key"),
-    (
-        ("triangle_forward", "turbopairformer_forward"),
-        ("triangle_delta", "turbopairformer_delta"),
-        ("triangle_dkdv", "turbopairformer_dkdv"),
-        ("triangle_dq_dbias", "turbopairformer_dq_dbias"),
-        ("trimul_cuda", "turbopairformer_trimul"),
-    ),
-)
-def test_loaders_dispatch_the_shared_runtime_contract(loader, module_key, monkeypatch):
+@pytest.mark.parametrize(("loader", "module_key", "source_name"), LOADER_SOURCES)
+def test_loaders_dispatch_the_shared_runtime_contract(
+    loader, module_key, source_name, monkeypatch
+):
     """The wrapper and distributed preload must use the same module contract."""
     import importlib
 
     from turbopairformer import _aot_runtime
 
     wrapper = importlib.import_module(f"turbopairformer.{loader}")
+    source = Path(wrapper.__file__).with_name(source_name)
+    assert source.is_file()
     module_name, symbols = _aot_runtime._PRODUCTION_MODULE_CONTRACT[module_key]
     calls = []
     loaded = object()
@@ -145,11 +156,108 @@ def test_loaders_dispatch_the_shared_runtime_contract(loader, module_key, monkey
         {
             "module_key": module_key,
             "aot_module": module_name,
-            "source": Path(wrapper.__file__).with_suffix(".cu"),
+            "source": source,
             "expected_symbols": symbols,
             "verbose": True,
         }
     ]
+
+
+def test_setup_and_package_use_the_canonical_cuda_filenames():
+    tree = ast.parse((REPOSITORY / "setup.py").read_text())
+    specifications = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "EXTENSION_SPECS"
+            for target in node.targets
+        )
+    )
+    expected = {key: source for _, key, source in LOADER_SOURCES}
+    assert {key: value["source"] for key, value in specifications.items()} == expected
+    assert {path.name for path in PACKAGE.glob("*.cu")} == set(expected.values())
+
+
+@pytest.mark.parametrize(("loader", "module_key", "source_name"), LOADER_SOURCES)
+@pytest.mark.parametrize(
+    "recorded_path", [None, "basename", "package_path", "old_name"]
+)
+def test_loader_source_hash_resolves_the_canonical_filename(
+    loader, module_key, source_name, recorded_path, monkeypatch
+):
+    import importlib
+
+    from turbopairformer import _aot_runtime
+
+    wrapper = importlib.import_module(f"turbopairformer.{loader}")
+    source = Path(wrapper.__file__).with_name(source_name)
+    local_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    recorded_hash = "a" * 64
+    sources = {}
+    if recorded_path == "old_name":
+        sources[f"turbopairformer/{loader}.cu"] = recorded_hash
+    elif recorded_path is not None:
+        path = (
+            source_name
+            if recorded_path == "basename"
+            else f"turbopairformer/{source_name}"
+        )
+        sources[path] = recorded_hash
+    monkeypatch.setattr(
+        _aot_runtime, "_manifest", lambda: {"schema_version": 1, "sources": sources}
+    )
+    expected = local_hash if recorded_path in (None, "old_name") else recorded_hash
+    assert wrapper.source_sha256() == {source_name: expected}
+
+
+@pytest.mark.parametrize(("loader", "module_key", "source_name"), LOADER_SOURCES)
+def test_explicit_jit_fallback_receives_the_canonical_source(
+    loader, module_key, source_name, monkeypatch
+):
+    import importlib
+    from types import SimpleNamespace
+
+    from torch.utils import cpp_extension
+
+    from turbopairformer import _aot_runtime
+
+    wrapper = importlib.import_module(f"turbopairformer.{loader}")
+    source = Path(wrapper.__file__).with_name(source_name)
+    _, symbols = _aot_runtime._PRODUCTION_MODULE_CONTRACT[module_key]
+    loaded = SimpleNamespace(**dict.fromkeys(symbols))
+    calls = []
+
+    def missing_aot(*args):
+        raise _aot_runtime.AOTExtensionError("AOT unavailable for source-path test")
+
+    def capture_jit(**kwargs):
+        calls.append(kwargs)
+        return loaded
+
+    monkeypatch.setattr(wrapper, "_EXTENSION", None)
+    monkeypatch.setattr(_aot_runtime, "_MODULE_CACHE", {})
+    monkeypatch.setattr(_aot_runtime, "_preflight_aot_artifact", missing_aot)
+    monkeypatch.setattr(_aot_runtime, "_development_jit_enabled", lambda: True)
+    monkeypatch.setattr(_aot_runtime.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(_aot_runtime.torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(
+        _aot_runtime.torch.cuda, "get_device_capability", lambda _: (9, 0)
+    )
+    monkeypatch.setattr(cpp_extension, "load", capture_jit)
+    # Record the original environment before the runtime sets its default.
+    monkeypatch.setenv("TORCH_CUDA_ARCH_LIST", "temporary")
+    monkeypatch.delenv("TORCH_CUDA_ARCH_LIST", raising=False)
+    assert wrapper.load_extension(verbose=True) is loaded
+    assert calls == [
+        {
+            "name": f"turbopairformer_dev_{module_key}_{hashlib.sha256(source.read_bytes()).hexdigest()[:12]}",
+            "sources": [str(source)],
+            "extra_cuda_cflags": ["-O3", "-lineinfo"],
+            "verbose": True,
+        }
+    ]
+    assert os.environ["TORCH_CUDA_ARCH_LIST"] == "9.0a"
 
 
 def test_pyproject_ships_sources_and_manifest_as_package_data():
@@ -198,6 +306,10 @@ def test_candidate_wheel_has_a_completed_validated_receipt():
         allow_dirty=os.environ.get("TURBOPAIRFORMER_ALLOW_DIRTY_BUILD") == "1",
     )
     assert len(result["extensions"]) == 5
+    with zipfile.ZipFile(candidate) as archive:
+        assert {name for name in archive.namelist() if name.endswith(".cu")} == {
+            f"turbopairformer/{source}" for _, _, source in LOADER_SOURCES
+        }
 
 
 def test_source_tree_manifest_is_fail_closed():

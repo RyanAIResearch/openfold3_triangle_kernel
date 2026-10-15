@@ -44,13 +44,13 @@ The package uses the same CUDA sources as the
 - Package directory: `packages/turbopairformer/turbopairformer/`
 - Host directory: `openfold3/core/kernels/turbopairformer/`
 
-| Package file | Host file |
-| --- | --- |
-| `triangle_forward.cu` | `turbopairformer_triangle_forward.cu` |
-| `triangle_delta.cu` | `turbopairformer_triangle_delta.cu` |
-| `triangle_dkdv.cu` | `turbopairformer_triangle_dkdv.cu` |
-| `triangle_dq_dbias.cu` | `turbopairformer_triangle_dq_dbias.cu` |
-| `trimul_cuda.cu` | `turbopairformer_trimul_cuda.cu` |
+Both directories use the same filenames:
+
+- `turbopairformer_triangle_forward.cu`
+- `turbopairformer_triangle_delta.cu`
+- `turbopairformer_triangle_dkdv.cu`
+- `turbopairformer_triangle_dq_dbias.cu`
+- `turbopairformer_trimul_cuda.cu`
 
 The synchronization preserves computation and the standalone Python APIs.
 Published 0.1.3 wheels predate this source update and remain unchanged.

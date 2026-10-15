@@ -316,7 +316,7 @@ def test_cpp_source_pins_device_and_cuda_error_contracts():
         Path(__file__)
         .resolve()
         .parents[1]
-        .joinpath("turbopairformer/trimul_cuda.cu")
+        .joinpath("turbopairformer/turbopairformer_trimul_cuda.cu")
         .read_text()
     )
     assert source.count("CUDAGuard device_guard") == 8
