@@ -1,19 +1,19 @@
-# Integrating TurboPairFormer into upstream OpenFold3
+# Integrating TurboPairFormer 0.1.3 into upstream OpenFold3
 
 The standalone package exposes triangle attention and TriMul without requiring
 OpenFold3. This optional host patch adds model flags and routing to an upstream
 AQLab checkout. The RyanAIResearch fork already has a provider adapter and
 should not apply this patch.
 
-Install a freshly built TurboPairFormer wheel into the same environment as
+Install TurboPairFormer **0.1.3** into the same environment as
 OpenFold3. Match Python, Torch, CUDA runtime and C++ ABI to its build manifest:
 
 ```bash
-python -m pip install /absolute/path/to/turbopairformer-<version>-<tags>.whl
+python -m pip install turbopairformer==0.1.3
 ```
 
-Public index publication is a separate release step. No old checked-in wheel
-is certified for the current package revision.
+For a locally rebuilt 0.1.3 wheel, install its full path instead. Validation
+applies to the exact wheel used, not just its version number.
 
 ## Apply the versioned patch
 

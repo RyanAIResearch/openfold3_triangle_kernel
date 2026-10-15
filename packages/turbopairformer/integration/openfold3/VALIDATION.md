@@ -1,11 +1,14 @@
-# Current TurboPairFormer revision status
+# TurboPairFormer 0.1.3 integration status
+
+The current integration target is TurboPairFormer **0.1.3**. The historical
+results below retain their original package and artifact identities; they do
+not certify 0.1.3 with the patched upstream host.
 
 The host patch was renamed on 2026-09-18 to import `turbopairformer` and
 retains the existing `use_stable_triangle_*` host configuration flags.
 The single-GPU route is retained; distributed training raises at startup
-pending host DDP integration. A fresh TurboPairFormer AOT wheel and GPU
-validation are required. Historical results below keep their original
-package and artifact identities and do not certify this renamed package.
+pending host DDP integration. Validate the selected 0.1.3 wheel with the
+patched upstream host before attributing integration results to it.
 
 Local migration checks: the renamed patch applies cleanly to an archive of
 upstream `e47adbf` (`git apply --check` and `git apply`), and its attention,
