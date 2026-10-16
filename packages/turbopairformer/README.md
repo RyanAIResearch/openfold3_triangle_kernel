@@ -65,7 +65,7 @@ turbopairformer api --all
 
 ### Triangle Attention
 
-`turbo_attention` accelerates the triangle attention mechanism with native autograd support for Q, K, V, and pair bias. Triangle Attention backward uses single reconstruction (SR) automatically; no additional configuration is required.
+`turbo_attention` accelerates triangle attention and integrates with PyTorch autograd to compute gradients for Q, K, V, and pair bias. Its backward pass uses single reconstruction (SR) automatically; no additional configuration is required.
 
 ```python
 import torch
