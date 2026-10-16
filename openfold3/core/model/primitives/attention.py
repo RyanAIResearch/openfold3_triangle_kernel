@@ -25,6 +25,7 @@ import importlib
 import math
 import os
 import warnings
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -842,11 +843,16 @@ def _cueq_triangle_attn(q, k, v, biases, scale):
     return o
 
 
-@torch.compiler.disable
-def _turbopairformer_triangle_attn(q, k, v, biases):
+@torch.compiler.disable  # type: ignore[untyped-decorator]
+def _turbopairformer_triangle_attn(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    biases: list[torch.Tensor],
+) -> torch.Tensor:
     validate_turbopairformer_attention_policy()
     mask_bias, triangle_bias = biases
     if is_triangle_attention_supported(q, k, v, mask_bias, triangle_bias)[0]:
         # The kernel scales q itself and returns [*, Q, H, C_hidden]
-        return turbo_attention(q, k, v, mask_bias, triangle_bias)
+        return cast(torch.Tensor, turbo_attention(q, k, v, mask_bias, triangle_bias))
     return _attention(q * q.shape[-1] ** -0.5, k, v, biases).transpose(-2, -3)

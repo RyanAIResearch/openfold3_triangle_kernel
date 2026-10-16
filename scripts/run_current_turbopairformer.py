@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,8 +36,8 @@ def read_pin(path: Path = PIN) -> dict:
     return pin
 
 
-def source_environment(site: Path, inherited: dict[str, str]) -> dict[str, str]:
-    env = inherited.copy()
+def source_environment(site: Path, inherited: Mapping[str, str]) -> dict[str, str]:
+    env = dict(inherited)
     env["PYTHONPATH"] = os.pathsep.join(
         str(p) for p in (site, env.get("PYTHONPATH", "")) if p
     )

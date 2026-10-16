@@ -23,6 +23,7 @@ and FusedTriangleMultiplicativeUpdate from AF2-Multimer.
 import warnings
 from abc import ABC, abstractmethod
 from functools import partialmethod
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -1134,7 +1135,7 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
                     "is not installed. See documentation for installation instructions."
                 )
             if check_trimul_support(self, z, mask):
-                return turbo_trimul(self, z, mask)
+                return cast(torch.Tensor, turbo_trimul(self, z, mask))
 
         if use_triton_triangle_kernels and not TRITON_AVAILABLE:
             raise RuntimeError(_TRITON_UNAVAILABLE_ERROR)
