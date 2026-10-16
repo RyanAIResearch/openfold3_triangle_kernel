@@ -36,6 +36,11 @@ and multi-GPU training need separate validation.
 Normal use needs no environment switches: SR backward and the saved forward
 rounding residual are enabled, and JIT is disabled.
 
+Triangle Attention backward always uses single reconstruction (SR). An effective
+`TURBOPAIRFORMER_SR_BACKWARD=0` (or legacy `OPENFOLD3_SR_BACKWARD=0`) raises an
+error. The canonical `TURBOPAIRFORMER_*` setting takes precedence over its
+legacy alias.
+
 ## Current source synchronization
 
 The package uses the same CUDA sources as the
