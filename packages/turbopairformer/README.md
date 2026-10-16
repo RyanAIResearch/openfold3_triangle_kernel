@@ -4,7 +4,7 @@ TurboPairFormer provides GPU kernels with PyTorch autograd support for **Triangl
 
 Developed collaboratively by researchers from **Stevens Institute of Technology**, **Lambda**, and **OpenFold Consortium, Open Molecular Software Foundation**.
 
-![Stevens Institute of Technology, Lambda, and OpenFold](https://raw.githubusercontent.com/RyanAIResearch/openfold3_triangle_kernel/main/docs/imgs/turbopairformer-partner-logos.png)
+![Stevens Institute of Technology, Lambda, and OpenFold](https://gist.githubusercontent.com/RyanAIResearch/f1aa78a87e88ae8f96248901aee5f3f9/raw/8882eb11fb98057303284aedbdcbba084dfc173a/turbopairformer-partner-logos.svg)
 
 **Paper:** [TurboPairFormer: Fast and Stable Protein Folding Model Training with an Optimized Triangle Attention Kernel](https://arxiv.org/abs/2610.05854).
 
@@ -27,7 +27,7 @@ conda activate turbopairformer
 export PATH="$CONDA_PREFIX/bin:$PATH"
 hash -r
 
-pip install turbopairformer==0.1.3
+pip install turbopairformer==0.1.3.post1
 ```
 
 ### Versions

@@ -29,7 +29,7 @@ conda activate turbopairformer
 export PATH="$CONDA_PREFIX/bin:$PATH"
 hash -r
 
-pip install turbopairformer==0.1.3
+pip install turbopairformer==0.1.3.post1
 ```
 
 ### Versions
