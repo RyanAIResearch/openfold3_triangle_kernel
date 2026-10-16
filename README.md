@@ -74,7 +74,8 @@ No SR switch is needed. An effective `TURBOPAIRFORMER_SR_BACKWARD=0` (or legacy
 `OPENFOLD3_SR_BACKWARD=0`) raises instead of selecting another backward method.
 The canonical `TURBOPAIRFORMER_*` setting takes precedence over its legacy alias.
 See the [development guide](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/DEVELOPMENT.md#current-source-synchronization)
-for the exact source revision. The 0.1.3 changes do not alter previously published wheels.
+for the current source synchronization. Source readability updates do not modify
+the previously published 0.1.3 wheels.
 
 ```python
 import torch
