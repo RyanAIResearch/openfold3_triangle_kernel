@@ -34,7 +34,8 @@ pip install turbopairformer==0.1.3
 
 ### Versions
 
-- **0.1.3:** Reduces register spilling and improves training speed.
+- **0.1.3.post1 (not yet published):** Updates package documentation and source readability.
+- **[0.1.3](https://pypi.org/project/turbopairformer/0.1.3/):** Reduces register spilling and improves training speed.
 - [0.1.2](https://pypi.org/project/turbopairformer/0.1.2/): supports NVIDIA H100 and H200
 - [0.1.1](https://pypi.org/project/turbopairformer/0.1.1/): updated kernels, functional TriMul, and offline CLI documentation.
 - [0.1.0](https://pypi.org/project/turbopairformer/0.1.0/): initial release.
@@ -74,7 +75,8 @@ No SR switch is needed. An effective `TURBOPAIRFORMER_SR_BACKWARD=0` (or legacy
 `OPENFOLD3_SR_BACKWARD=0`) raises instead of selecting another backward method.
 The canonical `TURBOPAIRFORMER_*` setting takes precedence over its legacy alias.
 See the [development guide](https://github.com/RyanAIResearch/openfold3_triangle_kernel/blob/feat/turbopairformer-pip-package/packages/turbopairformer/DEVELOPMENT.md#current-source-synchronization)
-for the exact source revision. The 0.1.3 changes do not alter previously published wheels.
+for the current source synchronization. Source readability updates do not modify
+the previously published 0.1.3 wheels.
 
 ```python
 import torch

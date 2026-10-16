@@ -24,7 +24,7 @@ Test the resulting wheel using the runtime image created by that build:
 
 ```bash
 bash scripts/turbopairformer/validate_release_gpu.sh \
-  /absolute/path/to/wheel-output/turbopairformer-0.1.3-cp314-cp314-manylinux_2_28_x86_64.whl \
+  /absolute/path/to/wheel-output/turbopairformer-0.1.3.post1-cp314-cp314-manylinux_2_28_x86_64.whl \
   /absolute/path/to/test-results
 ```
 
