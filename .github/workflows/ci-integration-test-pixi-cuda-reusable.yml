@@ -109,7 +109,7 @@ jobs:
         if: >-
           steps.pools.outputs.pool_1_subnet != ''
         continue-on-error: true
-        uses: omsf/start-aws-gha-runner@v1.3.0
+        uses: omsf/start-aws-gha-runner@v1.4.0
         with:
           aws_image_id: ${{ steps.pools.outputs.pool_1_ami }}
           aws_instance_type: ${{ env.AWS_INSTANCE_TYPE }}
@@ -127,7 +127,7 @@ jobs:
           !steps.try1.outputs.instances
           && steps.pools.outputs.pool_2_subnet != ''
         continue-on-error: true
-        uses: omsf/start-aws-gha-runner@v1.3.0
+        uses: omsf/start-aws-gha-runner@v1.4.0
         with:
           aws_image_id: ${{ steps.pools.outputs.pool_2_ami }}
           aws_instance_type: ${{ env.AWS_INSTANCE_TYPE }}
@@ -146,7 +146,7 @@ jobs:
           && !steps.try2.outputs.instances
           && steps.pools.outputs.pool_3_subnet != ''
         continue-on-error: true
-        uses: omsf/start-aws-gha-runner@v1.3.0
+        uses: omsf/start-aws-gha-runner@v1.4.0
         with:
           aws_image_id: ${{ steps.pools.outputs.pool_3_ami }}
           aws_instance_type: ${{ env.AWS_INSTANCE_TYPE }}
@@ -166,7 +166,7 @@ jobs:
           && !steps.try3.outputs.instances
           && steps.pools.outputs.pool_4_subnet != ''
         continue-on-error: true
-        uses: omsf/start-aws-gha-runner@v1.3.0
+        uses: omsf/start-aws-gha-runner@v1.4.0
         with:
           aws_image_id: ${{ steps.pools.outputs.pool_4_ami }}
           aws_instance_type: ${{ env.AWS_INSTANCE_TYPE }}
@@ -187,7 +187,7 @@ jobs:
           && !steps.try4.outputs.instances
           && steps.pools.outputs.pool_5_subnet != ''
         continue-on-error: true
-        uses: omsf/start-aws-gha-runner@v1.3.0
+        uses: omsf/start-aws-gha-runner@v1.4.0
         with:
           aws_image_id: ${{ steps.pools.outputs.pool_5_ami }}
           aws_instance_type: ${{ env.AWS_INSTANCE_TYPE }}
@@ -209,7 +209,7 @@ jobs:
           && !steps.try5.outputs.instances
           && steps.pools.outputs.pool_6_subnet != ''
         continue-on-error: true
-        uses: omsf/start-aws-gha-runner@v1.3.0
+        uses: omsf/start-aws-gha-runner@v1.4.0
         with:
           aws_image_id: ${{ steps.pools.outputs.pool_6_ami }}
           aws_instance_type: ${{ env.AWS_INSTANCE_TYPE }}
@@ -283,7 +283,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push test image
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           file: docker/Dockerfile.pixi
