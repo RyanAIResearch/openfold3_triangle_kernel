@@ -221,7 +221,7 @@ def connected_components_from_edges(
 
 def chain_connected_molecule_iter(
     atom_array: AtomArray,
-) -> Generator[AtomArray, None, None]:
+) -> Generator[AtomArray]:
     """Similar to Biotite molecule_iter, but ensures that chains cannot be disconnected.
 
     Args:
@@ -537,7 +537,7 @@ def assign_mol_symmetry_ids(atom_array: AtomArray) -> AtomArray:
     return atom_array
 
 
-def mol_entity_iter(atom_array: AtomArray) -> Generator[AtomArray, None, None]:
+def mol_entity_iter(atom_array: AtomArray) -> Generator[AtomArray]:
     """Returns atom_array slices corresponding to every mol_entity_id.
 
     WARNING: The order with which the slices are returned may be different from the
@@ -559,7 +559,7 @@ def mol_entity_iter(atom_array: AtomArray) -> Generator[AtomArray, None, None]:
 
 def mol_unique_instance_iter(
     atom_array: AtomArray,
-) -> Generator[AtomArray, None, None]:
+) -> Generator[AtomArray]:
     """Returns atom_array slices corresponding to every (mol_entity_id, mol_sym_id).
 
     Similar in concept to Biotite's molecule_iter, but logic is based on the previously

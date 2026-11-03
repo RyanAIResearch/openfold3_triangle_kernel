@@ -38,6 +38,8 @@
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
+#include <map>
+#include <mutex>
 #include <utility>
 
 using bf16 = __nv_bfloat16;
@@ -446,6 +448,20 @@ __device__ __forceinline__ float warp_sum32(float v) {
   return v;  // butterfly: all lanes hold sum
 }
 
+// Sum of one row's 32 four-channel group partials when eight lanes share the row.
+// group_partials[k] is the partial of group `lane % 8 + 8k`. The additions pair
+// the groups exactly as warp_sum32 pairs one-group-per-lane values: (g, g+16) and
+// (g+8, g+24) first, then those two, then lanes xor 4, 2, 1 inside the row's
+// eight lanes. Floating-point addition is commutative, so the result has the
+// same bits as warp_sum32 over the row.
+__device__ __forceinline__ float row_sum_eight_lanes(const float (&group_partials)[4]) {
+  float v = (group_partials[0] + group_partials[2]) + (group_partials[1] + group_partials[3]);
+#pragma unroll
+  for (int off = 4; off > 0; off >>= 1)
+    v += __shfl_xor_sync(FULL, v, off);
+  return v;  // all eight lanes of the row hold the sum
+}
+
 // A warp computes a 16x8 output tile over 16 channels. Each thread owns
 // four FP32 accumulator values; A/B registers each pack two BF16 operands.
 __device__ __forceinline__ void mma_16816(
@@ -477,9 +493,137 @@ __device__ __forceinline__ void ldmatrix_x4(
                : "r"(addr));
 }
 
+// 1 + exp(-x), the A/B gate sigmoid denominator, computed as __expf(-x) computes the
+// exponential: ex2.approx(x * -log2(e)). The .ftz form skips __expf's rescaling of
+// arguments below -126; those give exponentials below 2^-126, and 1 + such a value
+// rounds to exactly 1 with or without the rescaling, so the result has the same bits.
+__device__ __forceinline__ float sigmoid_denominator(float x) {
+  const float exponent = __fmul_rn(x, -1.44269502f);
+  float exponential;
+  asm("ex2.approx.ftz.f32 %0, %1;\n" : "=f"(exponential) : "f"(exponent));
+  return __fadd_rn(1.f, exponential);
+}
+
+// stmatrix (sm_90) stores four 8x8 BF16 matrices held in the mma fragment layout:
+// thread t holds row t/4, columns 2*(t%4) and 2*(t%4)+1 of each matrix, packed as
+// one BF16 pair (lower half = lower column). Lanes 8m .. 8m+7 give the shared
+// addresses of the eight 16-byte memory rows of matrix m. Without .trans memory
+// row r receives matrix row r; with .trans it receives matrix column r, which
+// writes the matrix transposed.
+__device__ __forceinline__ void stmatrix_x4(
+    const bf16* memory_row,
+    unsigned matrix0,
+    unsigned matrix1,
+    unsigned matrix2,
+    unsigned matrix3) {
+  unsigned address = (unsigned)__cvta_generic_to_shared(memory_row);
+  asm volatile("stmatrix.sync.aligned.m8n8.x4.shared.b16 [%0], {%1, %2, %3, %4};\n" ::"r"(address),
+               "r"(matrix0), "r"(matrix1), "r"(matrix2), "r"(matrix3)
+               : "memory");
+}
+
+__device__ __forceinline__ void stmatrix_x4_trans(
+    const bf16* memory_row,
+    unsigned matrix0,
+    unsigned matrix1,
+    unsigned matrix2,
+    unsigned matrix3) {
+  unsigned address = (unsigned)__cvta_generic_to_shared(memory_row);
+  asm volatile(
+      "stmatrix.sync.aligned.m8n8.x4.trans.shared.b16 [%0], {%1, %2, %3, %4};\n" ::"r"(address),
+      "r"(matrix0), "r"(matrix1), "r"(matrix2), "r"(matrix3)
+      : "memory");
+}
+
+// Thread-block cluster helpers (sm_90). The CTAs of a cluster can address each
+// other's shared memory: mapa turns a local shared address into the same offset
+// inside the shared memory of another CTA in the cluster.
+__device__ __forceinline__ unsigned shared_address_in_cluster_rank(
+    const void* local_pointer,
+    unsigned cluster_rank) {
+  unsigned local_address = (unsigned)__cvta_generic_to_shared(local_pointer);
+  unsigned cluster_address;
+  asm volatile("mapa.shared::cluster.u32 %0, %1, %2;\n"
+               : "=r"(cluster_address)
+               : "r"(local_address), "r"(cluster_rank));
+  return cluster_address;
+}
+
+// Shared-memory barrier objects (mbarrier) let cluster blocks hand data to each
+// other without a cluster-wide barrier or memory fence. A barrier phase completes
+// when its expected arrivals have arrived and its transaction count (bytes still
+// expected from st.async) has reached zero; waiters test the phase parity.
+__device__ __forceinline__ void mbarrier_init(uint64_t* barrier, unsigned arrival_count) {
+  unsigned address = (unsigned)__cvta_generic_to_shared(barrier);
+  asm volatile("mbarrier.init.shared::cta.b64 [%0], %1;\n" ::"r"(address), "r"(arrival_count)
+               : "memory");
+}
+
+// Makes barrier initialization visible to the other blocks of the cluster.
+__device__ __forceinline__ void fence_mbarrier_init_for_cluster() {
+  asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+}
+
+// Arrive on this block's barrier and add `bytes` to the bytes its current phase waits for.
+__device__ __forceinline__ void mbarrier_arrive_expect_bytes(uint64_t* barrier, unsigned bytes) {
+  unsigned address = (unsigned)__cvta_generic_to_shared(barrier);
+  asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;\n" ::"r"(address),
+               "r"(bytes)
+               : "memory");
+}
+
+// Arrive on a barrier in another block of the cluster (address from mapa).
+__device__ __forceinline__ void mbarrier_arrive_in_cluster(unsigned cluster_barrier_address) {
+  asm volatile("mbarrier.arrive.shared::cluster.b64 _, [%0];\n" ::"r"(cluster_barrier_address)
+               : "memory");
+}
+
+__device__ __forceinline__ void mbarrier_wait_parity(uint64_t* barrier, unsigned parity) {
+  unsigned address = (unsigned)__cvta_generic_to_shared(barrier);
+  asm volatile(
+      "{\n"
+      ".reg .pred phase_complete;\n"
+      "wait_for_phase:\n"
+      "mbarrier.try_wait.parity.shared::cta.b64 phase_complete, [%0], %1;\n"
+      "@!phase_complete bra wait_for_phase;\n"
+      "}\n" ::"r"(address),
+      "r"(parity)
+      : "memory");
+}
+
+// Write 8 bytes into another cluster block's shared memory; the write counts its
+// bytes on that block's barrier (cluster_barrier_address is in the same block).
+__device__ __forceinline__ void store_async_cluster_u32x2(
+    unsigned cluster_address,
+    uint2 value,
+    unsigned cluster_barrier_address) {
+  asm volatile(
+      "st.async.shared::cluster.mbarrier::complete_tx::bytes.v2.b32 [%0], {%1, %2}, [%3];\n" ::"r"(
+          cluster_address),
+      "r"(value.x), "r"(value.y), "r"(cluster_barrier_address)
+      : "memory");
+}
+
+// Whole-cluster rendezvous, used only at kernel start (after barrier setup) and exit.
+__device__ __forceinline__ void cluster_sync() {
+  asm volatile(
+      "barrier.cluster.arrive.relaxed.aligned;\n"
+      "barrier.cluster.wait.aligned;\n" ::
+          : "memory");
+}
+
 // ---------------------------------------------------------------------------
 // Input forward: LayerNorm + five projections + masked A/B gates.
 // One block owns a 32-channel slice and repeatedly processes 128 pair rows.
+// The H/32 blocks that share a row tile form one thread-block cluster
+// (cluster rank = blockIdx.x = channel slice), so each pair row is loaded and
+// normalized once per cluster instead of once per slice: every warp of the
+// cluster normalizes its own rows of the tile and writes the BF16 result into
+// the normalized-Z buffer of every block in the cluster. Two mbarriers per block
+// order the hand-off: `normalized_tile_full` completes when the rows written by
+// the other blocks (st.async) have landed here; `normalized_tile_free` completes
+// when every warp of the other blocks has finished reading the previous tile,
+// so this block may overwrite their copies.
 // The five raw FP32 [H,C] weights are staged once as a permuted BF16 slice:
 //   column = half*80 + projection*16 + channel_in_half,
 //   projection order = ap, ag, bp, bg, final-gate logits.
@@ -487,6 +631,7 @@ __device__ __forceinline__ void ldmatrix_x4(
 // indexes [16-row half][8-column fragment][four values owned by this thread].
 // A/B are stored channel-major; final gate logits retain the row-major layout.
 // ---------------------------------------------------------------------------
+template <int kChannelSlices>
 __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
     const bf16* __restrict__ z,
     const float* __restrict__ w_ap,
@@ -509,6 +654,8 @@ __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
     bf16* __restrict__ zln_out) {
   // Shared layout: resident weights | normalized Z | A stage | B stage | gate.
   // A/B staging transposes the register results for channel-major stores.
+  // Static shared memory (declared below) holds the LayerNorm gamma/beta and the
+  // two mbarriers of the cluster hand-off.
   extern __shared__ bf16 shared_storage[];
   const int input_row_stride = C + 8;     // padded k stride
   bf16* shared_weights = shared_storage;  // [160, input_row_stride]
@@ -541,77 +688,178 @@ __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
       *reinterpret_cast<uint4*>(shared_weights + col * input_row_stride + q * 8) = packed_weights.u;
     }
   }
-  const int lane_channel_start = lane_id * 4;
-  const bool has_channels = lane_channel_start < C;
   const float inverse_channels = 1.0f / (float)C;
 
-  // ---- persistent tile loop ----
-  for (long tile = blockIdx.y; tile * 128 < rows; tile += gridDim.y) {
-    const long row0 = tile * 128;
+  // Row ownership inside a 128-row tile: warp w of cluster rank s owns rows
+  // s*8 + w + i*(8*kChannelSlices) for i = 0, 1, ... below 128.
+  // LayerNorm lane layout: a warp normalizes four owned rows per pass, eight lanes
+  // per row. Lane (row_slot = lane/8, column_lane = lane%8) holds the 4-channel
+  // groups column_lane + 8k (k = 0..3), i.e. channels 4*(column_lane + 8k) .. +3,
+  // of owned row i = pass*4 + row_slot.
+  constexpr int kTileRows = 128;
+  constexpr int kClusterWarps = 8 * kChannelSlices;
+  constexpr int kOwnedRowsPerWarp = (kTileRows + kClusterWarps - 1) / kClusterWarps;
+  constexpr int kRowsPerPass = 4;
+  constexpr int kPasses = (kOwnedRowsPerWarp + kRowsPerPass - 1) / kRowsPerPass;
+  const int cluster_warp = channel_slice * 8 + warp_id;
+  const int row_slot = lane_id >> 3, column_lane = lane_id & 7;
+  // Tile row of this lane in a pass, or -1 when the pass slot owns no row.
+  auto owned_tile_row = [&](int pass) {
+    const int owned_index = pass * kRowsPerPass + row_slot;
+    const int r = cluster_warp + owned_index * kClusterWarps;
+    return (owned_index < kOwnedRowsPerWarp && r < kTileRows) ? r : -1;
+  };
+  // LayerNorm gamma/beta, read per channel group inside step B.
+  __shared__ alignas(16) float shared_ln_gamma[128];
+  __shared__ alignas(16) float shared_ln_beta[128];
+  for (int c = thread_id; c < C; c += 256) {
+    shared_ln_gamma[c] = ln_gamma[c];
+    shared_ln_beta[c] = ln_beta[c];
+  }
+  __syncthreads();  // gamma/beta are read by other warps in the first step B
+  __shared__ alignas(8) uint64_t normalized_tile_full;
+  __shared__ alignas(8) uint64_t normalized_tile_free;
+  // Bytes the other blocks write into this block per tile: 2*C bytes for each
+  // tile row they own (the lanes with channels each write 8 bytes).
+  unsigned remote_bytes_per_tile = 0;
+  if constexpr (kChannelSlices > 1) {
+    if (thread_id == 0) {
+      for (int r = 0; r < kTileRows; ++r)
+        if ((r % kClusterWarps) / 8 != channel_slice)
+          remote_bytes_per_tile += 2u * (unsigned)C;
+      mbarrier_init(&normalized_tile_full, 1);  // this block's own expect-bytes arrive
+      mbarrier_init(&normalized_tile_free, 8 * (kChannelSlices - 1));  // one per peer warp
+      fence_mbarrier_init_for_cluster();
+    }
+    cluster_sync();  // peers signal these barriers only after they are initialized
+  }
 
-    // B. Load this warp's rows, compute FP32 LayerNorm statistics, and stage
-    // normalized BF16 Z. Only channel slice 0 writes the optional saved Z.
-    {
-      float gamma_values[4] = {0.f, 0.f, 0.f, 0.f}, beta_values[4] = {0.f, 0.f, 0.f, 0.f};
-      if (has_channels) {
-        float4 gv = *reinterpret_cast<const float4*>(ln_gamma + lane_channel_start);
-        float4 bv = *reinterpret_cast<const float4*>(ln_beta + lane_channel_start);
-        gamma_values[0] = gv.x;
-        gamma_values[1] = gv.y;
-        gamma_values[2] = gv.z;
-        gamma_values[3] = gv.w;
-        beta_values[0] = bv.x;
-        beta_values[1] = bv.y;
-        beta_values[2] = bv.z;
-        beta_values[3] = bv.w;
-      }
-      // Load all 16 rows before normalizing them so their memory waits can
-      // overlap; preserve this batched-load schedule when editing the loop.
-      uint2 raw[16];
+  // Raw BF16 Z of this lane's groups of its owned rows (four BF16 per group).
+  // Rows past the tile or the tensor, and groups past C, read as zero. All loads
+  // are issued before any of them is used, so their memory waits overlap.
+  auto load_owned_rows = [&](long tile_row0, uint2 (&owned_rows)[kPasses][4]) {
 #pragma unroll
-      for (int it = 0; it < 16; ++it) {
-        long row = row0 + warp_id * 16 + it;
-        raw[it] = (row < rows && has_channels)
-                      ? *reinterpret_cast<const uint2*>(z + row * (long)C + lane_channel_start)
-                      : make_uint2(0, 0);
-      }
+    for (int pass = 0; pass < kPasses; ++pass) {
+      const int r = owned_tile_row(pass);
+      const long row = tile_row0 + r;
 #pragma unroll
-      for (int it = 0; it < 16; ++it) {
-        int r = warp_id * 16 + it;
-        long row = row0 + r;
-        float v[4];
-        const bf16* pv = reinterpret_cast<const bf16*>(&raw[it]);
-#pragma unroll
-        for (int t = 0; t < 4; ++t)
-          v[t] = __bfloat162float(pv[t]);
-        float sum = warp_sum32(v[0] + v[1] + v[2] + v[3]);
-        float sq = warp_sum32(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
-        float mean = sum * inverse_channels;
-        float rstd = rsqrtf(sq * inverse_channels - mean * mean + 1e-5f);
-        if (lane_id == 0 && channel_slice == 0 && row < rows) {
-          save_mean[row] = mean;
-          save_rstd[row] = rstd;
-        }
-        if (has_channels) {
-          bool live = row < rows;
-          __nv_bfloat162 p0 = __floats2bfloat162_rn(
-              live ? (v[0] - mean) * rstd * gamma_values[0] + beta_values[0] : 0.f,
-              live ? (v[1] - mean) * rstd * gamma_values[1] + beta_values[1] : 0.f);
-          __nv_bfloat162 p1 = __floats2bfloat162_rn(
-              live ? (v[2] - mean) * rstd * gamma_values[2] + beta_values[2] : 0.f,
-              live ? (v[3] - mean) * rstd * gamma_values[3] + beta_values[3] : 0.f);
-          uint2 packed;
-          packed.x = *reinterpret_cast<unsigned*>(&p0);
-          packed.y = *reinterpret_cast<unsigned*>(&p1);
-          *reinterpret_cast<uint2*>(
-              shared_normalized_input + r * input_row_stride + lane_channel_start) = packed;
-          if (zln_out != nullptr && channel_slice == 0 && live) {
-            *reinterpret_cast<uint2*>(zln_out + row * (long)C + lane_channel_start) = packed;
-          }
-        }
+      for (int k = 0; k < 4; ++k) {
+        const int channel = 4 * (column_lane + 8 * k);
+        owned_rows[pass][k] = (r >= 0 && row < rows && channel < C)
+                                  ? *reinterpret_cast<const uint2*>(z + row * (long)C + channel)
+                                  : make_uint2(0, 0);
       }
     }
-    __syncthreads();  // S1: normalized Z and the resident weight slice are ready.
+  };
+
+  // The first tile's rows are loaded before the loop; each later tile's rows are
+  // loaded during the previous tile's projections (step C below).
+  uint2 owned_rows[kPasses][4];
+  if ((long)blockIdx.y * kTileRows < rows)
+    load_owned_rows((long)blockIdx.y * kTileRows, owned_rows);
+
+  // ---- persistent tile loop; all blocks of a cluster visit the same tiles ----
+  unsigned tile_iteration = 0;  // barrier phase parity = tile_iteration & 1
+  for (long tile = blockIdx.y; tile * 128 < rows; tile += gridDim.y, ++tile_iteration) {
+    const long row0 = tile * 128;
+    const bool has_next_tile = row0 + (long)gridDim.y * kTileRows < rows;
+
+    // B. Compute FP32 LayerNorm statistics of the owned rows and write the
+    // normalized BF16 rows into every cluster block's normalized-Z buffer.
+    // The owner of a row also writes its saved statistics and optional saved Z.
+    // Before overwriting the other blocks' copies, wait until all their warps
+    // have finished reading the previous tile (their arrives after step C). This
+    // block's own warps finished reading at the previous iteration's S2.
+    if constexpr (kChannelSlices > 1) {
+      if (tile_iteration > 0)
+        mbarrier_wait_parity(&normalized_tile_free, (tile_iteration - 1) & 1);
+      if (thread_id == 0)
+        mbarrier_arrive_expect_bytes(&normalized_tile_full, remote_bytes_per_tile);
+    }
+#pragma unroll
+    for (int pass = 0; pass < kPasses; ++pass) {
+      const int r = owned_tile_row(pass);
+      const long row = row0 + r;
+      const bool live = r >= 0 && row < rows;
+      // v[k][t] is channel 4*(column_lane + 8k) + t of this lane's row.
+      float v[4][4];
+#pragma unroll
+      for (int k = 0; k < 4; ++k) {
+        const bf16* pv = reinterpret_cast<const bf16*>(&owned_rows[pass][k]);
+#pragma unroll
+        for (int t = 0; t < 4; ++t)
+          v[k][t] = __bfloat162float(pv[t]);
+      }
+      // Every rounding step of the statistics and the normalization is written
+      // with an explicit intrinsic, so the compiler cannot fuse a multiply into
+      // a later add differently in different unrolled rows or template
+      // instances. The steps are the ones the previous build executed:
+      //   group square sum = fma(v3,v3, fma(v2,v2, fma(v0,v0, v1*v1))),
+      //   mean = sum/C and mean^2 rounded, variance = fma(sq, 1/C, -mean^2),
+      //   centered = (v - mean) * rstd, output = fma(centered, gamma, beta).
+      // The previous build fused sum/C into the centering subtraction for a few
+      // unrolled rows; for C = 32, 64, 128, 1/C is a power of two, so sum/C is
+      // exact and both forms give identical bits.
+      float group_sums[4], group_square_sums[4];
+#pragma unroll
+      for (int k = 0; k < 4; ++k) {
+        group_sums[k] = __fadd_rn(__fadd_rn(__fadd_rn(v[k][0], v[k][1]), v[k][2]), v[k][3]);
+        group_square_sums[k] = __fmaf_rn(
+            v[k][3], v[k][3],
+            __fmaf_rn(v[k][2], v[k][2], __fmaf_rn(v[k][0], v[k][0], __fmul_rn(v[k][1], v[k][1]))));
+      }
+      const float sum = row_sum_eight_lanes(group_sums);
+      const float sq = row_sum_eight_lanes(group_square_sums);
+      const float mean = __fmul_rn(sum, inverse_channels);
+      const float variance = __fmaf_rn(sq, inverse_channels, -__fmul_rn(mean, mean));
+      const float rstd = rsqrtf(__fadd_rn(variance, 1e-5f));
+      if (column_lane == 0 && live) {
+        save_mean[row] = mean;
+        save_rstd[row] = rstd;
+      }
+#pragma unroll
+      for (int k = 0; k < 4; ++k) {
+        const int channel = 4 * (column_lane + 8 * k);
+        if (r < 0 || channel >= C)
+          continue;
+        const float4 gamma4 = *reinterpret_cast<const float4*>(shared_ln_gamma + channel);
+        const float4 beta4 = *reinterpret_cast<const float4*>(shared_ln_beta + channel);
+        const float gamma_values[4] = {gamma4.x, gamma4.y, gamma4.z, gamma4.w};
+        const float beta_values[4] = {beta4.x, beta4.y, beta4.z, beta4.w};
+        float normalized[4];
+#pragma unroll
+        for (int t = 0; t < 4; ++t) {
+          const float centered = __fmul_rn(__fsub_rn(v[k][t], mean), rstd);
+          normalized[t] = live ? __fmaf_rn(centered, gamma_values[t], beta_values[t]) : 0.f;
+        }
+        __nv_bfloat162 p0 = __floats2bfloat162_rn(normalized[0], normalized[1]);
+        __nv_bfloat162 p1 = __floats2bfloat162_rn(normalized[2], normalized[3]);
+        uint2 packed;
+        packed.x = *reinterpret_cast<unsigned*>(&p0);
+        packed.y = *reinterpret_cast<unsigned*>(&p1);
+        const unsigned byte_offset = (unsigned)((r * input_row_stride + channel) * sizeof(bf16));
+        *reinterpret_cast<uint2*>(shared_normalized_input + r * input_row_stride + channel) =
+            packed;
+#pragma unroll
+        for (int rank = 0; rank < kChannelSlices; ++rank)
+          if (rank != channel_slice)
+            store_async_cluster_u32x2(
+                shared_address_in_cluster_rank(shared_normalized_input, (unsigned)rank)
+                    + byte_offset,
+                packed, shared_address_in_cluster_rank(&normalized_tile_full, (unsigned)rank));
+        if (zln_out != nullptr && live)
+          *reinterpret_cast<uint2*>(zln_out + row * (long)C + channel) = packed;
+      }
+    }
+    // S1: this block's own rows and the resident weight slice are visible to all
+    // warps; then wait until the rows from the other cluster blocks have landed.
+    __syncthreads();
+    if constexpr (kChannelSlices > 1)
+      mbarrier_wait_parity(&normalized_tile_full, tile_iteration & 1);
+
+    // Prefetch the next tile's owned rows; the loads complete during step C.
+    if (has_next_tile)
+      load_owned_rows(row0 + (long)gridDim.y * kTileRows, owned_rows);
 
     // C. Multiply normalized Z by the five weights, accumulating in FP32.
     const int warp_row_group = warp_id & 3, warp_column_group = warp_id >> 2;
@@ -666,45 +914,74 @@ __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
       for (int k0 = 0; k0 < C; k0 += 16)
         gemm_step(k0);
     }
-    // S2 below finishes all normalized-Z reads before the next iteration
-    // can replace Z. S1 already finished the previous output-stage readers.
+    // This warp no longer reads the normalized tile: let every other cluster
+    // block overwrite its rows here for the next tile. This block's own writers
+    // are ordered by S2 below; S1 already finished the previous output-stage readers.
+    if constexpr (kChannelSlices > 1) {
+      __syncwarp();
+      if (lane_id == 0 && has_next_tile) {
+#pragma unroll
+        for (int rank = 0; rank < kChannelSlices; ++rank)
+          if (rank != channel_slice)
+            mbarrier_arrive_in_cluster(
+                shared_address_in_cluster_rank(&normalized_tile_free, (unsigned)rank));
+      }
+    }
 
     // D. Form A = ap*sigmoid(ag)*mask and B = bp*sigmoid(bg)*mask.
-    // Round A/B and the raw final-gate logits to BF16 in shared staging.
-    const int n0 = (lane_id & 3) * 2;
+    // Round A/B and the raw final-gate logits to BF16 in shared staging. A thread
+    // packs its two adjacent channels of each fragment row into one BF16 pair;
+    // stmatrix then writes the warp's 16-row x 16-channel tiles: A and B
+    // transposed (channel-major), gate logits row-major.
+    // stmatrix addresses: lane l gives memory row l%8 of matrix l/8. Matrix m is
+    // rows +8*(m&1) and channels +8*(m>>1) of the 16x16 tile, i.e. in order
+    // (fragment jp 0, rows 0-7), (jp 0, rows 8-15), (jp 1, rows 0-7), (jp 1, rows 8-15).
+    const int stmatrix_row = lane_id & 7;
+    const int stmatrix_row_offset = ((lane_id >> 3) & 1) * 8;
+    const int stmatrix_channel_offset = (lane_id >> 4) * 8;
+    const int warp_channel_start = warp_column_group * 16;
+    auto pack_bf16_pair = [](float lower_channel, float upper_channel) {
+      __nv_bfloat162 pair = __floats2bfloat162_rn(lower_channel, upper_channel);
+      return *reinterpret_cast<unsigned*>(&pair);
+    };
 #pragma unroll
     for (int i = 0; i < 2; ++i) {
-      int r_lo = warp_row_start + i * 16 + (lane_id >> 2);
-      long row_lo = row0 + r_lo, row_hi = row_lo + 8;
-      float m_lo = row_lo < rows ? mask[row_lo] : 0.f;
-      float m_hi = row_hi < rows ? mask[row_hi] : 0.f;
+      const int tile_row_start = warp_row_start + i * 16;
+      const long row_lo = row0 + tile_row_start + (lane_id >> 2), row_hi = row_lo + 8;
+      const float row_mask[2] = {row_lo < rows ? mask[row_lo] : 0.f,
+                                 row_hi < rows ? mask[row_hi] : 0.f};
+      // [jp][half]: channels n0, n0+1 of fragment jp in row lo (half 0) or hi (half 1).
+      unsigned a_pairs[2][2], b_pairs[2][2], gate_pairs[2][2];
 #pragma unroll
       for (int jp = 0; jp < 2; ++jp) {
 #pragma unroll
-        for (int q = 0; q < 2; ++q) {
-          int channel_in_slice = warp_column_group * 16 + jp * 8 + n0 + q;
-          float ap0 = projection_accumulators[i][jp][q],
-                ag0 = projection_accumulators[i][2 + jp][q];
-          float bp0 = projection_accumulators[i][4 + jp][q],
-                bg0 = projection_accumulators[i][6 + jp][q];
-          float g0 = projection_accumulators[i][8 + jp][q];
-          float ap1 = projection_accumulators[i][jp][2 + q],
-                ag1 = projection_accumulators[i][2 + jp][2 + q];
-          float bp1 = projection_accumulators[i][4 + jp][2 + q],
-                bg1 = projection_accumulators[i][6 + jp][2 + q];
-          float g1 = projection_accumulators[i][8 + jp][2 + q];
-          shared_a_tile[channel_in_slice * 136 + r_lo] =
-              __float2bfloat16(__fdividef(ap0, 1.f + __expf(-ag0)) * m_lo);
-          shared_b_tile[channel_in_slice * 136 + r_lo] =
-              __float2bfloat16(__fdividef(bp0, 1.f + __expf(-bg0)) * m_lo);
-          shared_gate_logits[r_lo * 40 + channel_in_slice] = __float2bfloat16(g0);
-          shared_a_tile[channel_in_slice * 136 + r_lo + 8] =
-              __float2bfloat16(__fdividef(ap1, 1.f + __expf(-ag1)) * m_hi);
-          shared_b_tile[channel_in_slice * 136 + r_lo + 8] =
-              __float2bfloat16(__fdividef(bp1, 1.f + __expf(-bg1)) * m_hi);
-          shared_gate_logits[(r_lo + 8) * 40 + channel_in_slice] = __float2bfloat16(g1);
+        for (int half = 0; half < 2; ++half) {
+          float a_values[2], b_values[2], gate_values[2];
+#pragma unroll
+          for (int q = 0; q < 2; ++q) {
+            const int value = half * 2 + q;
+            const float ap = projection_accumulators[i][jp][value];
+            const float ag = projection_accumulators[i][2 + jp][value];
+            const float bp = projection_accumulators[i][4 + jp][value];
+            const float bg = projection_accumulators[i][6 + jp][value];
+            a_values[q] = __fdividef(ap, sigmoid_denominator(ag)) * row_mask[half];
+            b_values[q] = __fdividef(bp, sigmoid_denominator(bg)) * row_mask[half];
+            gate_values[q] = projection_accumulators[i][8 + jp][value];
+          }
+          a_pairs[jp][half] = pack_bf16_pair(a_values[0], a_values[1]);
+          b_pairs[jp][half] = pack_bf16_pair(b_values[0], b_values[1]);
+          gate_pairs[jp][half] = pack_bf16_pair(gate_values[0], gate_values[1]);
         }
       }
+      const int staged_channel = warp_channel_start + stmatrix_channel_offset + stmatrix_row;
+      const int staged_row = tile_row_start + stmatrix_row_offset;
+      stmatrix_x4_trans(shared_a_tile + staged_channel * 136 + staged_row, a_pairs[0][0],
+                        a_pairs[0][1], a_pairs[1][0], a_pairs[1][1]);
+      stmatrix_x4_trans(shared_b_tile + staged_channel * 136 + staged_row, b_pairs[0][0],
+                        b_pairs[0][1], b_pairs[1][0], b_pairs[1][1]);
+      stmatrix_x4(shared_gate_logits + (tile_row_start + stmatrix_row_offset + stmatrix_row) * 40
+                      + warp_channel_start + stmatrix_channel_offset,
+                  gate_pairs[0][0], gate_pairs[0][1], gate_pairs[1][0], gate_pairs[1][1]);
     }
 
     __syncthreads();  // S2: all staged outputs are ready for cooperative stores.
@@ -715,19 +992,23 @@ __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
     // scalar stores handle short tails and any intervening batch boundaries.
     // Derive the tile's batch/position once, then advance at NN boundaries
     // instead of repeating a 64-bit division for each group of stores.
+    // A thread stores the same 8-row chunk r for channels c and c + 16, so the
+    // chunk's batch and position are derived once per tile.
     const long tile_batch_start = row0 / NN;
     const long tile_position_start = row0 - tile_batch_start * NN;
+    const int r = (thread_id & 15) * 8;
+    long pos = tile_position_start + r;
+    long bidx = tile_batch_start;
+    while (pos >= NN) {
+      pos -= NN;
+      ++bidx;
+    }
+    const bool chunk_in_one_plane = (row0 + r + 7 < rows) && (pos + 7 < NN);
     for (int id = thread_id; id < 32 * 16; id += 256) {
-      int channel_in_slice = id >> 4, r = (id & 15) * 8;
+      int channel_in_slice = id >> 4;
       int h = channel_slice * 32 + channel_in_slice;
-      long pos = tile_position_start + r;
-      long bidx = tile_batch_start;
-      while (pos >= NN) {
-        pos -= NN;
-        ++bidx;
-      }
       long addr = (bidx * H + h) * NN + pos;
-      bool fast = (row0 + r + 7 < rows) && (pos + 7 < NN) && ((addr & 7) == 0);
+      bool fast = chunk_in_one_plane && ((addr & 7) == 0);
       if (fast) {
         *reinterpret_cast<uint4*>(a_out + addr) =
             *reinterpret_cast<const uint4*>(shared_a_tile + channel_in_slice * 136 + r);
@@ -760,6 +1041,9 @@ __global__ void __launch_bounds__(256, 2) trimul_in_fwd_kernel(
     // The next iteration's S1 finishes these output-stage reads before its
     // epilogue overwrites the same staging buffers; no tail barrier is needed.
   }
+  // No block exits while a cluster peer may still write to or signal its shared memory.
+  if constexpr (kChannelSlices > 1)
+    cluster_sync();
 }
 
 std::vector<torch::Tensor> trimul_in_fwd(
@@ -822,22 +1106,61 @@ std::vector<torch::Tensor> trimul_in_fwd(
       * sizeof(bf16);
   int device = z.get_device();
   check_dynamic_shared_memory_limit(kTrimulInMaxDynamicSharedBytes, device, op);
-  C10_CUDA_CHECK(cudaFuncSetAttribute(
-      trimul_in_fwd_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
-      kTrimulInMaxDynamicSharedBytes));
-  int sm_count = 0;
-  C10_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
-  TORCH_CHECK(sm_count > 0, op, ": device reports no streaming multiprocessors");
-  int S = H / 32;
-  long y = std::max(1L, std::min(tiles, (long)(2 * sm_count) / S));
-  TORCH_CHECK(y <= kMaxGridYZ, "trimul_in: grid.y overflow");
-  dim3 grid((unsigned)S, (unsigned)y);
-  trimul_in_fwd_kernel<<<grid, dim3(256), shared_bytes, stream>>>(
-      (const bf16*)z.data_ptr(), w_ap.data_ptr<float>(), w_ag.data_ptr<float>(),
-      w_bp.data_ptr<float>(), w_bg.data_ptr<float>(), w_g.data_ptr<float>(), mask.data_ptr<float>(),
-      gamma.data_ptr<float>(), beta.data_ptr<float>(), rows, NN, C, H, (bf16*)a.data_ptr(),
-      (bf16*)b.data_ptr(), (bf16*)gate.data_ptr(), mean.data_ptr<float>(), rstd.data_ptr<float>(),
-      save_zln ? (bf16*)zln.data_ptr() : nullptr);
+  // grid.x = channel slices = cluster size; grid.y = persistent clusters, at most
+  // as many as can be resident at once and never more than the number of tiles.
+  const int S = H / 32;
+  auto launch = [&](auto kernel) {
+    C10_CUDA_CHECK(cudaFuncSetAttribute(
+        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kTrimulInMaxDynamicSharedBytes));
+    cudaLaunchAttribute cluster_attribute;
+    cluster_attribute.id = cudaLaunchAttributeClusterDimension;
+    cluster_attribute.val.clusterDim.x = (unsigned)S;
+    cluster_attribute.val.clusterDim.y = 1;
+    cluster_attribute.val.clusterDim.z = 1;
+    cudaLaunchConfig_t config = {};
+    config.gridDim = dim3((unsigned)S, 1);
+    config.blockDim = dim3(256);
+    config.dynamicSmemBytes = shared_bytes;
+    config.stream = stream;
+    config.attrs = &cluster_attribute;
+    config.numAttrs = 1;
+    // The resident-cluster count depends only on the device and the kernel
+    // instance, so the host-side occupancy query runs once per (device, S).
+    static std::mutex resident_clusters_mutex;
+    static std::map<std::pair<int, int>, int> resident_clusters_by_device_and_slices;
+    int resident_clusters = 0;
+    {
+      std::lock_guard<std::mutex> lock(resident_clusters_mutex);
+      auto cached = resident_clusters_by_device_and_slices.find({device, S});
+      if (cached != resident_clusters_by_device_and_slices.end())
+        resident_clusters = cached->second;
+    }
+    if (resident_clusters == 0) {
+      C10_CUDA_CHECK(cudaOccupancyMaxActiveClusters(&resident_clusters, kernel, &config));
+      TORCH_CHECK(
+          resident_clusters > 0, op, ": no thread-block cluster of size ", S,
+          " fits on the device");
+      std::lock_guard<std::mutex> lock(resident_clusters_mutex);
+      resident_clusters_by_device_and_slices[{device, S}] = resident_clusters;
+    }
+    long y = std::max(1L, std::min(tiles, (long)resident_clusters));
+    TORCH_CHECK(y <= kMaxGridYZ, "trimul_in: grid.y overflow");
+    config.gridDim = dim3((unsigned)S, (unsigned)y);
+    C10_CUDA_CHECK(cudaLaunchKernelEx(
+        &config, kernel, (const bf16*)z.data_ptr(), (const float*)w_ap.data_ptr<float>(),
+        (const float*)w_ag.data_ptr<float>(), (const float*)w_bp.data_ptr<float>(),
+        (const float*)w_bg.data_ptr<float>(), (const float*)w_g.data_ptr<float>(),
+        (const float*)mask.data_ptr<float>(), (const float*)gamma.data_ptr<float>(),
+        (const float*)beta.data_ptr<float>(), (long)rows, NN, C, H, (bf16*)a.data_ptr(),
+        (bf16*)b.data_ptr(), (bf16*)gate.data_ptr(), mean.data_ptr<float>(), rstd.data_ptr<float>(),
+        save_zln ? (bf16*)zln.data_ptr() : (bf16*)nullptr));
+  };
+  switch (S) {
+    case 1: launch(trimul_in_fwd_kernel<1>); break;
+    case 2: launch(trimul_in_fwd_kernel<2>); break;
+    case 3: launch(trimul_in_fwd_kernel<3>); break;
+    default: launch(trimul_in_fwd_kernel<4>); break;
+  }
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {a, b, gate, mean, rstd, zln};
 }
@@ -895,8 +1218,11 @@ __global__ void __launch_bounds__(256, 2) trimul_out_fwd_kernel(
   const int weight_row_stride = H + 8;  // H channels plus padding
   // Two [H, position_stride] input tiles, then weights [C, weight_row_stride]
   // and FP32 LayerNorm parameters. Normalize each input tile in place.
-  bf16* shared_input_buffers[2] = {shared_storage, shared_storage + (long)H * position_stride};
-  bf16* shared_weights = shared_storage + 2 * (long)H * position_stride;
+  // Input buffer b starts at shared_storage + b * input_buffer_elements. Keep
+  // this arithmetic form: a runtime-indexed array of buffer pointers is placed
+  // in local memory, and the LayerNorm accesses then become generic loads.
+  const int input_buffer_elements = H * position_stride;
+  bf16* shared_weights = shared_storage + 2 * input_buffer_elements;
   float* shared_ln_parameters =
       reinterpret_cast<float*>(shared_weights + (long)C * weight_row_stride);  // gamma|beta [2H]
 
@@ -932,7 +1258,7 @@ __global__ void __launch_bounds__(256, 2) trimul_out_fwd_kernel(
     const long row0 = tile * 128;
     const long tile_batch_start = row0 / NN;
     const long tile_position_start = row0 - tile_batch_start * NN;
-    bf16* shared_input_tile = shared_input_buffers[buf];
+    bf16* shared_input_tile = shared_storage + buf * input_buffer_elements;
     for (int id = thread_id; id < H * 16; id += 256) {
       int h = id >> 4, r8 = (id & 15) * 8;
       long pos = tile_position_start + r8;
@@ -962,13 +1288,47 @@ __global__ void __launch_bounds__(256, 2) trimul_out_fwd_kernel(
     cp_async_commit();
   };
 
+  // Output ownership, fixed for every tile. A warp owns 32 rows by C/2
+  // channels: 2 row groups (i) of 16 rows, each split into the halves p_lo and
+  // p_lo + 8, times output_fragments 8-channel MMA fragments (j).
+  const int warp_row_group = warp_id & 3, warp_column_half = warp_id >> 2;
+  const int warp_row_start = warp_row_group * 32;
+  const int columns_per_warp_group = C >> 1;
+  const int warp_column_start = warp_column_half * columns_per_warp_group;
+  const int n0 = (lane_id & 3) * 2;
+  const int output_fragments = columns_per_warp_group >> 3;  // at most eight, for C = 128
+
+  // Read this thread's gate-logit pairs for row group i of a tile into
+  // registers: gate_pairs[half][j] holds channels c and c + 1 of one row.
+  // Rows past the end are never read and their entries are never used.
+  auto load_gate_pairs = [&](long row0, int i, unsigned (&gate_pairs)[2][8]) {
+    const int p_lo = warp_row_start + i * 16 + (lane_id >> 2);
+#pragma unroll
+    for (int half = 0; half < 2; ++half) {
+      const long row = row0 + p_lo + half * 8;
+#pragma unroll
+      for (int j = 0; j < 8; ++j) {
+        gate_pairs[half][j] = 0u;
+        if (row < rows && j < output_fragments)
+          gate_pairs[half][j] = *reinterpret_cast<const unsigned*>(
+              gate + row * (long)C + warp_column_start + j * 8 + n0);
+      }
+    }
+  };
+
   // B. Start the first tile, then alternate the two shared input buffers.
   int current_buffer = 0;
   if (blockIdx.x * 128 < rows)
     stage_input_tile(blockIdx.x, current_buffer);
   for (long tile = blockIdx.x; tile * 128 < rows; tile += gridDim.x) {
     const long row0 = tile * 128;
-    bf16* shared_input_tile = shared_input_buffers[current_buffer];
+    bf16* shared_input_tile = shared_storage + current_buffer * input_buffer_elements;
+    // The epilogue needs the gate logits only after LayerNorm and the MMA.
+    // Row group 0 is requested now, while no accumulator registers are live,
+    // so its latency overlaps the wait below, LayerNorm and the MMA. Row
+    // group 1 is requested right after the MMA, before row group 0 is used.
+    unsigned gate_pairs[2][2][8];
+    load_gate_pairs(row0, 0, gate_pairs[0]);
     cp_async_wait0();
     // Every warp sees the completed loads. On later iterations this also
     // finishes all reads of the previous tile before that buffer is reused.
@@ -1023,82 +1383,79 @@ __global__ void __launch_bounds__(256, 2) trimul_out_fwd_kernel(
       }
     }
 
-    // E. Compute the ungated output projection. A warp owns 32 rows by C/2
-    // channels. Each thread keeps four FP32 values per 16x8 MMA fragment.
-    const int warp_row_group = warp_id & 3, warp_column_half = warp_id >> 2;
-    const int warp_row_start = warp_row_group * 32;
-    const int columns_per_warp_group = C >> 1;
-    const int warp_column_start = warp_column_half * columns_per_warp_group;
-    float projection_accumulators[2][8][4];
-#pragma unroll
-    for (int i = 0; i < 2; ++i)
-#pragma unroll
-      for (int j = 0; j < 8; ++j)
-        projection_accumulators[i][j][0] = projection_accumulators[i][j][1] =
-            projection_accumulators[i][j][2] = projection_accumulators[i][j][3] = 0.f;
-
+    // E. Project one 16-row group (i) of this warp's rows: acc[j] is the 16x8
+    // fragment j, and each thread keeps four FP32 values per fragment. ksteps =
+    // H/16 and fragment_pairs = C/32 (at most four). Every accumulator index is
+    // a compile-time constant, so the accumulators stay in registers.
     // Transposed ldmatrix reads [channel, position] input as the MMA A operand.
     // Weight rows are output channels, with input channels contiguous.
     const bf16* xa0 = shared_input_tile + ((lane_id & 7) + ((lane_id >> 4) << 3)) * position_stride
                       + warp_row_start + (((lane_id >> 3) & 1) << 3);
-    const bf16* xa1 = xa0 + 16;
     const bf16* wb0 = shared_weights
                       + (warp_column_start + (lane_id >> 4) * 8 + (lane_id & 7)) * weight_row_stride
                       + 8 * ((lane_id >> 3) & 1);
-    auto gemm_all = [&](int ksteps, int ntp) {
+    auto project_row_group = [&](int i, int ksteps, int fragment_pairs, float (&acc)[8][4]) {
+      const bf16* group_input = xa0 + i * 16;
       for (int ks = 0; ks < ksteps; ++ks) {
         int k0 = ks * 16;
-        unsigned input_fragments[2][4];
+        unsigned input_fragments[4];
         ldmatrix_x4_trans(
-            input_fragments[0][0], input_fragments[0][1], input_fragments[0][2],
-            input_fragments[0][3], xa0 + k0 * position_stride);
-        ldmatrix_x4_trans(
-            input_fragments[1][0], input_fragments[1][1], input_fragments[1][2],
-            input_fragments[1][3], xa1 + k0 * position_stride);
-        for (int jp = 0; jp < ntp; ++jp) {
-          unsigned b00, b01, b10, b11;
-          ldmatrix_x4(b00, b01, b10, b11, wb0 + jp * 16 * weight_row_stride + k0);
+            input_fragments[0], input_fragments[1], input_fragments[2], input_fragments[3],
+            group_input + k0 * position_stride);
 #pragma unroll
-          for (int i = 0; i < 2; ++i) {
+        for (int jp = 0; jp < 4; ++jp) {
+          if (jp < fragment_pairs) {
+            unsigned b00, b01, b10, b11;
+            ldmatrix_x4(b00, b01, b10, b11, wb0 + jp * 16 * weight_row_stride + k0);
             mma_16816(
-                projection_accumulators[i][jp * 2][0], projection_accumulators[i][jp * 2][1],
-                projection_accumulators[i][jp * 2][2], projection_accumulators[i][jp * 2][3],
-                input_fragments[i][0], input_fragments[i][1], input_fragments[i][2],
-                input_fragments[i][3], b00, b01);
+                acc[jp * 2][0], acc[jp * 2][1], acc[jp * 2][2], acc[jp * 2][3],
+                input_fragments[0], input_fragments[1], input_fragments[2], input_fragments[3],
+                b00, b01);
             mma_16816(
-                projection_accumulators[i][jp * 2 + 1][0],
-                projection_accumulators[i][jp * 2 + 1][1],
-                projection_accumulators[i][jp * 2 + 1][2],
-                projection_accumulators[i][jp * 2 + 1][3], input_fragments[i][0],
-                input_fragments[i][1], input_fragments[i][2], input_fragments[i][3], b10, b11);
+                acc[jp * 2 + 1][0], acc[jp * 2 + 1][1], acc[jp * 2 + 1][2], acc[jp * 2 + 1][3],
+                input_fragments[0], input_fragments[1], input_fragments[2], input_fragments[3],
+                b10, b11);
           }
         }
       }
     };
-    if (C == 128 && H == 128)
-      gemm_all(8, 4);
-    else
-      gemm_all(H >> 4, C >> 5);
 
-    // F. Apply sigmoid(gate) to FP32 projection values, then round each pair
-    // to BF16 for the final row-major output. No shared output tile is needed.
-    const int n0 = (lane_id & 3) * 2;
+    // E/F. The two row groups run one after the other: project, then gate and
+    // store. Each output element still accumulates the same H/16 MMA steps in
+    // ascending K order as when both groups shared one K loop, so this order
+    // changes no value. It halves the live accumulators, which leaves registers
+    // for the gate logits (row group 1 is requested after row group 0's MMA).
 #pragma unroll
     for (int i = 0; i < 2; ++i) {
+      float projection_accumulators[8][4];
+#pragma unroll
+      for (int j = 0; j < 8; ++j)
+        projection_accumulators[j][0] = projection_accumulators[j][1] =
+            projection_accumulators[j][2] = projection_accumulators[j][3] = 0.f;
+      if (C == 128 && H == 128)
+        project_row_group(i, 8, 4, projection_accumulators);
+      else
+        project_row_group(i, H >> 4, C >> 5, projection_accumulators);
+      if (i == 0)
+        load_gate_pairs(row0, 1, gate_pairs[1]);
+
+      // F. Apply sigmoid(gate) to FP32 projection values, then round each pair
+      // to BF16 for the final row-major output. No shared output tile is needed.
       int p_lo = warp_row_start + i * 16 + (lane_id >> 2);
-#pragma unroll 2
+#pragma unroll
       for (int half = 0; half < 2; ++half) {  // p_lo and p_lo + 8
         long row = row0 + p_lo + half * 8;
         if (row >= rows)
           continue;
         const int fragment_pair_start = half * 2;  // Two adjacent output channels.
+#pragma unroll
         for (int j = 0; j < 8; ++j) {
-          int c = warp_column_start + j * 8 + n0;
-          if (c >= warp_column_start + columns_per_warp_group)
+          if (j >= output_fragments)
             break;
-          float r0 = projection_accumulators[i][j][fragment_pair_start],
-                r1 = projection_accumulators[i][j][fragment_pair_start + 1];
-          unsigned packed_gate_pair = *reinterpret_cast<const unsigned*>(gate + row * (long)C + c);
+          int c = warp_column_start + j * 8 + n0;
+          float r0 = projection_accumulators[j][fragment_pair_start],
+                r1 = projection_accumulators[j][fragment_pair_start + 1];
+          const unsigned packed_gate_pair = gate_pairs[i][half][j];
           const bf16* gate_pair = reinterpret_cast<const bf16*>(&packed_gate_pair);
           float g0 = __bfloat162float(gate_pair[0]), g1 = __bfloat162float(gate_pair[1]);
           float s0 = __fdividef(r0, 1.f + __expf(-g0));

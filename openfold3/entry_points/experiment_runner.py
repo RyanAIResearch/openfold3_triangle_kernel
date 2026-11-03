@@ -460,7 +460,9 @@ class TrainingExperimentRunner(ExperimentRunner):
         # Currently used to sync the number of recycles across ranks
         self.model_config.update({"architecture": {"shared": {"sync_seed": self.seed}}})
 
-        turbopairformer_modules = turbopairformer_aot_modules_from_config(self.model_config)
+        turbopairformer_modules = turbopairformer_aot_modules_from_config(
+            self.model_config
+        )
         if (
             self.is_distributed
             and turbopairformer_modules
@@ -609,7 +611,9 @@ class TrainingExperimentRunner(ExperimentRunner):
 
         _callbacks.append(RankSpecificSeedCallback(base_seed=self.seed))
 
-        turbopairformer_modules = turbopairformer_aot_modules_from_config(self.model_config)
+        turbopairformer_modules = turbopairformer_aot_modules_from_config(
+            self.model_config
+        )
         if self.is_distributed and turbopairformer_modules:
             _callbacks.append(
                 TurboPairFormerKernelDDPCallback(

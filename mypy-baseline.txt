@@ -278,31 +278,12 @@ openfold3/core/data/io/structure/pdb.py:0: note: def get_structure(pdb_file: PDB
 openfold3/core/data/io/structure/pdb.py:0: note: def get_structure(pdb_file: PDBFile, model: int, altloc: Literal['first', 'occupancy', 'all'] = ..., extra_fields: Iterable[str] = ..., include_bonds: bool = ...) -> AtomArray[Any]
 openfold3/core/data/io/structure/pdb.py:0: note: def get_structure(self, model: None = ..., altloc: Literal['first', 'occupancy', 'all'] = ..., extra_fields: Iterable[str] | None = ..., include_bonds: bool = ...) -> AtomArrayStack[Any, Any]
 openfold3/core/data/io/structure/pdb.py:0: note: def get_structure(self, model: int, altloc: Literal['first', 'occupancy', 'all'] = ..., extra_fields: Iterable[str] | None = ..., include_bonds: bool = ...) -> AtomArray[Any]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Argument 1 to "append" of "list" has incompatible type "list[tuple[Any, Any, Any]]"; expected "Tensor"  [arg-type]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Argument 1 to "centre_random_augmentation" has incompatible type "list[tuple[Any, Any, Any]]"; expected "Tensor"  [arg-type]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Argument 1 to "concat" has incompatible type "list[list[int]]"; expected "tuple[Tensor, ...] | list[Tensor]"  [arg-type]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Argument 1 to "isnan" has incompatible type "tuple[Any, Any, Any]"; expected "Tensor"  [arg-type]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Argument 2 to "centre_random_augmentation" has incompatible type "list[int]"; expected "Tensor"  [arg-type]
 openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible return value type (got "dict[str, object]", expected "dict[str, Tensor | dict[str, Tensor]]")  [return-value]
 openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[Any]")  [assignment]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[Tensor]")  [assignment]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[int]")  [assignment]
 openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[int]")  [assignment]
 openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[int]")  [assignment]
 openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[list[int]]")  [assignment]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[list[int]]")  [assignment]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[tuple[Any, Any, Any]]")  [assignment]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: No overload variant of "__setitem__" of "list" matches argument types "bool", "float"  [call-overload]
-openfold3/core/data/pipelines/featurization/conformer.py:0: error: No overload variant of "any" matches argument type "list[int]"  [call-overload]
 openfold3/core/data/pipelines/featurization/conformer.py:0: error: callable? not callable  [misc]
-openfold3/core/data/pipelines/featurization/conformer.py:0: note: Possible overload variants:
-openfold3/core/data/pipelines/featurization/conformer.py:0: note: Possible overload variants:
-openfold3/core/data/pipelines/featurization/conformer.py:0: note: def __setitem__(self, SupportsIndex, tuple[Any, Any, Any], /) -> None
-openfold3/core/data/pipelines/featurization/conformer.py:0: note: def __setitem__(self, slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None], Iterable[tuple[Any, Any, Any]], /) -> None
-openfold3/core/data/pipelines/featurization/conformer.py:0: note: def any(input: Tensor, *, out: Tensor | None = ...) -> Tensor
-openfold3/core/data/pipelines/featurization/conformer.py:0: note: def any(input: Tensor, dim: Size | list[int] | tuple[int, ...] | None = ..., keepdim: bool = ..., *, out: Tensor | None = ...) -> Tensor
-openfold3/core/data/pipelines/featurization/conformer.py:0: note: def any(input: Tensor, dim: int, keepdim: bool = ..., *, out: Tensor | None = ...) -> Tensor
-openfold3/core/data/pipelines/featurization/conformer.py:0: note: def any(input: Tensor, dim: str | EllipsisType | None, keepdim: bool = ..., *, out: Tensor | None = ...) -> Tensor
 openfold3/core/data/pipelines/featurization/msa.py:0: error: Argument 1 to "create_features" of "MsaFeaturizerOF3" has incompatible type "dict[str, Tensor]"; expected "MsaFeaturePrecursorOF3"  [arg-type]
 openfold3/core/data/pipelines/featurization/msa.py:0: error: callable? not callable  [misc]
 openfold3/core/data/pipelines/featurization/pocket_constraints.py:0: error: "AtomArray[Any]" has no attribute "molecule_type_id"  [attr-defined]
@@ -1695,7 +1676,6 @@ openfold3/core/model/latent/base_blocks.py:0: error: Incompatible types in assig
 openfold3/core/model/latent/base_blocks.py:0: error: Incompatible types in assignment (expression has type "SwiGLUTransition", variable has type "ReLUTransition")  [assignment]
 openfold3/core/model/latent/base_blocks.py:0: error: Unsupported target for indexed assignment ("Sequence[Tensor]")  [index]
 openfold3/core/model/latent/base_blocks.py:0: error: Unsupported target for indexed assignment ("Sequence[Tensor]")  [index]
-openfold3/core/model/latent/base_stacks.py:0: error: Argument "args" to "tune_chunk_size" of "ChunkSizeTuner" has incompatible type "tuple[Tensor, Tensor]"; expected "tuple[Any]"  [arg-type]
 openfold3/core/model/latent/base_stacks.py:0: error: Unsupported target for indexed assignment ("Sequence[Tensor]")  [index]
 openfold3/core/model/latent/base_stacks.py:0: error: Unsupported target for indexed assignment ("Sequence[Tensor]")  [index]
 openfold3/core/model/latent/evoformer.py:0: error: "None" object is not iterable  [misc]
@@ -1746,7 +1726,6 @@ openfold3/core/model/latent/msa_module.py:0: error: Value of type "Sequence[Tens
 openfold3/core/model/latent/msa_module.py:0: error: Value of type "Sequence[Tensor] | None" is not indexable  [index]
 openfold3/core/model/latent/msa_module.py:0: error: Value of type "Sequence[Tensor] | None" is not indexable  [index]
 openfold3/core/model/latent/msa_module.py:0: error: Value of type "Sequence[Tensor] | None" is not indexable  [index]
-openfold3/core/model/latent/pairformer.py:0: error: Argument "args" to "tune_chunk_size" of "ChunkSizeTuner" has incompatible type "tuple[Tensor, Tensor]"; expected "tuple[Any]"  [arg-type]
 openfold3/core/model/layers/attention_pair_bias.py:0: error: Argument "n_key" to "convert_single_rep_to_blocks" has incompatible type "int | None"; expected "int"  [arg-type]
 openfold3/core/model/layers/attention_pair_bias.py:0: error: Argument "n_key" to "convert_single_rep_to_blocks" has incompatible type "int | None"; expected "int"  [arg-type]
 openfold3/core/model/layers/attention_pair_bias.py:0: error: Argument "n_query" to "convert_single_rep_to_blocks" has incompatible type "int | None"; expected "int"  [arg-type]
@@ -1764,7 +1743,6 @@ openfold3/core/model/layers/attention_pair_bias.py:0: error: Item "None" of "Any
 openfold3/core/model/layers/attention_pair_bias.py:0: error: Item "None" of "Any | None" has no attribute "mha"  [union-attr]
 openfold3/core/model/layers/attention_pair_bias.py:0: error: Item "None" of "Any | None" has no attribute "mha"  [union-attr]
 openfold3/core/model/layers/attention_pair_bias.py:0: error: Item "None" of "Any | None" has no attribute "mha"  [union-attr]
-openfold3/core/model/layers/diffusion_conditioning.py:0: error: Argument "args" to "tune_chunk_size" of "ChunkSizeTuner" has incompatible type "tuple[Tensor, Tensor, Tensor]"; expected "tuple[Any]"  [arg-type]
 openfold3/core/model/layers/diffusion_transformer.py:0: error: Incompatible types in assignment (expression has type "CrossAttentionPairBias", variable has type "DiffusionAttentionPairBias")  [assignment]
 openfold3/core/model/layers/msa.py:0: error: Argument "z" to "_prep_inputs" of "MSAPairWeightedAveraging" has incompatible type "Tensor | None"; expected "Tensor"  [arg-type]
 openfold3/core/model/layers/msa.py:0: error: Argument 2 to "permute_final_dims" has incompatible type "tuple[int, int, int]"; expected "list[int]"  [arg-type]
@@ -1791,16 +1769,6 @@ openfold3/core/model/layers/triangular_multiplicative_update.py:0: error: Argume
 openfold3/core/model/layers/triangular_multiplicative_update.py:0: error: Argument 2 to "permute_final_dims" has incompatible type "tuple[int, int, int]"; expected "list[int]"  [arg-type]
 openfold3/core/model/layers/triangular_multiplicative_update.py:0: error: Argument 2 to "permute_final_dims" has incompatible type "tuple[int, int, int]"; expected "list[int]"  [arg-type]
 openfold3/core/model/layers/triangular_multiplicative_update.py:0: error: Argument 2 to "permute_final_dims" has incompatible type "tuple[int, int, int]"; expected "list[int]"  [arg-type]
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: error: Signature of "forward" incompatible with supertype "BaseTriangleMultiplicativeUpdate"  [override]
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: error: Signature of "forward" incompatible with supertype "BaseTriangleMultiplicativeUpdate"  [override]
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: note: Subclass:
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: note: Subclass:
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: note: Superclass:
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: note: Superclass:
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: note: def forward(self, z: Tensor, mask: Tensor | None = ..., inplace_safe: bool = ..., _add_with_inplace: bool = ...) -> Tensor
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: note: def forward(self, z: Tensor, mask: Tensor | None = ..., inplace_safe: bool = ..., _add_with_inplace: bool = ...) -> Tensor
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: note: def forward(self, z: Tensor, mask: Tensor | None = ..., inplace_safe: bool = ..., use_cueq_triangle_kernels: bool = ..., use_triton_triangle_kernels: bool = ..., _add_with_inplace: bool = ..., _inplace_chunk_size: int | None = ...) -> Tensor
-openfold3/core/model/layers/triangular_multiplicative_update.py:0: note: def forward(self, z: Tensor, mask: Tensor | None = ..., inplace_safe: bool = ..., use_cueq_triangle_kernels: bool = ..., use_triton_triangle_kernels: bool = ..., _add_with_inplace: bool = ..., _inplace_chunk_size: int | None = ...) -> Tensor
 openfold3/core/model/primitives/attention.py:0: error: "None" not callable  [misc]
 openfold3/core/model/primitives/attention.py:0: error: Incompatible types in assignment (expression has type "None", variable has type "Callable[[Any, Any, Any, Any, Any, Any], Any]")  [assignment]
 openfold3/core/runners/writer.py:0: error: Argument 1 to "write_text" of "Path" has incompatible type "list[str]"; expected "str"  [arg-type]
@@ -1931,16 +1899,12 @@ openfold3/core/utils/permutation_alignment.py:0: note: def split_feats_by_id(fea
 openfold3/core/utils/rigid_utils.py:0: error: Argument "rot_mats" to "Rotation" has incompatible type "list[Tensor]"; expected "Tensor | None"  [arg-type]
 openfold3/core/utils/rigid_utils.py:0: error: Argument 1 to "Rigid" has incompatible type "Rigid"; expected "Rotation | None"  [arg-type]
 openfold3/core/utils/rigid_utils.py:0: error: Argument 1 to "Rigid" has incompatible type "Rigid"; expected "Rotation | None"  [arg-type]
-openfold3/core/utils/rigid_utils.py:0: error: Argument 1 to "stack" has incompatible type "Tensor"; expected "tuple[Tensor, ...] | list[Tensor]"  [arg-type]
 openfold3/core/utils/rigid_utils.py:0: error: Incompatible return value type (got "Rotation", expected "Rigid")  [return-value]
 openfold3/core/utils/rigid_utils.py:0: error: Incompatible return value type (got "Rotation", expected "Rigid")  [return-value]
 openfold3/core/utils/rigid_utils.py:0: error: Incompatible return value type (got "Rotation", expected "Rigid")  [return-value]
 openfold3/core/utils/rigid_utils.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[Tensor]")  [assignment]
 openfold3/core/utils/rigid_utils.py:0: error: Incompatible types in assignment (expression has type "Tensor", variable has type "list[list[Any]]")  [assignment]
 openfold3/core/utils/rigid_utils.py:0: error: Incompatible types in assignment (expression has type "list[list[Tensor]]", variable has type "Tensor")  [assignment]
-openfold3/core/utils/rigid_utils.py:0: error: Incompatible types in assignment (expression has type "tuple[Tensor, ...]", variable has type "Tensor")  [assignment]
-openfold3/core/utils/rigid_utils.py:0: error: Incompatible types in assignment (expression has type "tuple[Tensor, ...]", variable has type "Tensor")  [assignment]
-openfold3/core/utils/rigid_utils.py:0: error: Incompatible types in assignment (expression has type "tuple[Tensor, ...]", variable has type "Tensor")  [assignment]
 openfold3/core/utils/rigid_utils.py:0: error: Item "None" of "Tensor | None" has no attribute "device"  [union-attr]
 openfold3/core/utils/rigid_utils.py:0: error: Item "None" of "Tensor | None" has no attribute "shape"  [union-attr]
 openfold3/core/utils/rigid_utils.py:0: error: Item "None" of "Tensor | None" has no attribute "shape"  [union-attr]

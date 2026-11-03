@@ -64,7 +64,7 @@ class PocketConstraint(BaseModel):
     max_distance: float = pocket_defaults.DEFAULT_POCKET_CONSTRAINT_MAX_DISTANCE
 
     @model_validator(mode="after")
-    def validate_constraint(self) -> "PocketConstraint":
+    def validate_constraint(self) -> PocketConstraint:
         """Validate pocket constraint geometry inputs."""
         if not self.pocket_residues:
             raise ValueError("pocket_residues must contain at least one residue")
@@ -131,7 +131,7 @@ class Chain(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_ligand_name_input(self) -> "Chain":
+    def validate_ligand_name_input(self) -> Chain:
         """Restrict ligand names to SMILES-only ligand chains."""
         if self.ligand_name is not None and not (
             self.molecule_type == MoleculeType.LIGAND
@@ -146,7 +146,7 @@ class Chain(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_template_inputs(self) -> "Chain":
+    def validate_template_inputs(self) -> Chain:
         """Validate template input consistency."""
         if (
             self.template_alignment_file_path is not None
@@ -187,7 +187,7 @@ class Query(BaseModel):
     pocket_constraint: PocketConstraint | None = None
 
     @model_validator(mode="after")
-    def validate_pocket_constraint(self) -> "Query":
+    def validate_pocket_constraint(self) -> Query:
         """Validate the query-level pocket constraint."""
         if self.pocket_constraint is None:
             return self
@@ -212,7 +212,7 @@ class InferenceQuerySet(BaseModel):
     queries: dict[str, Query]
 
     @classmethod
-    def from_json(cls, json_path: FilePath) -> "InferenceQuerySet":
+    def from_json(cls, json_path: FilePath) -> InferenceQuerySet:
         """Load InferenceQuerySet from a JSON file."""
         with open(json_path) as f:
             data = f.read()

@@ -130,6 +130,7 @@ class PairformerEmbedding(nn.Module):
         offload_inference: bool = False,
         _mask_trans: bool = True,
         pairformer_dtype: torch.dtype = torch.float32,
+        use_stable_triangle_multiplicative: bool = False,
     ):
         batch_dims = x_pred.shape[:-2]
         no_samples = x_pred.shape[-3]
@@ -157,6 +158,7 @@ class PairformerEmbedding(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
@@ -193,6 +195,7 @@ class PairformerEmbedding(nn.Module):
         inplace_safe: bool = False,
         _mask_trans: bool = True,
         pairformer_dtype: torch.dtype = torch.float32,
+        use_stable_triangle_multiplicative: bool = False,
     ):
         zij = self.embed_zij(si_input=si_input, zij=zij, x_pred=x_pred)
 
@@ -212,16 +215,15 @@ class PairformerEmbedding(nn.Module):
         single_mask = reshape_inputs(x=single_mask, feat_dims=single_mask.shape[-1:])
         pair_mask = reshape_inputs(x=pair_mask, feat_dims=pair_mask.shape[-2:])
 
-        # The optimized kernels all require that pair bias have size 1 in the
-        # second dimension and cross-sample chunking has to combine the batch
-        # dimensions and expand it.
+        # These vendor paths use the generic chunker, which expands pair bias
+        # across flattened samples. Turbo has a separate outer-row chunk path
+        # preserving each sample's full shared pair bias, so it keeps chunking.
         use_kernels = (
             use_deepspeed_evo_attention
             or use_cueq_triangle_kernels
-            or use_stable_triangle_attention
             or use_triton_triangle_kernels
         )
-        if use_kernels and si.shape[0] > 1:
+        if use_kernels and not use_stable_triangle_attention and si.shape[0] > 1:
             chunk_size = None
 
         in_dtype = zij.dtype
@@ -235,6 +237,7 @@ class PairformerEmbedding(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
@@ -265,6 +268,7 @@ class PairformerEmbedding(nn.Module):
         _mask_trans: bool = True,
         apply_per_sample: bool = False,
         pairformer_dtype: torch.dtype = torch.float32,
+        use_stable_triangle_multiplicative: bool = False,
     ):
         """
         Args:
@@ -288,6 +292,8 @@ class PairformerEmbedding(nn.Module):
                 Mutually exclusive with use_lma.
             use_cueq_triangle_kernels:
                 Whether to use CuEquivariance kernels.
+            use_stable_triangle_multiplicative:
+                Whether to use Turbo triangular multiplicative updates.
             use_lma:
                 Whether to use low-memory attention during inference.
                 Mutually exclusive with use_deepspeed_evo_attention.
@@ -348,6 +354,7 @@ class PairformerEmbedding(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,
@@ -367,6 +374,7 @@ class PairformerEmbedding(nn.Module):
                 use_deepspeed_evo_attention=use_deepspeed_evo_attention,
                 use_cueq_triangle_kernels=use_cueq_triangle_kernels,
                 use_stable_triangle_attention=use_stable_triangle_attention,
+                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
                 use_triton_triangle_kernels=use_triton_triangle_kernels,
                 use_lma=use_lma,
                 inplace_safe=inplace_safe,

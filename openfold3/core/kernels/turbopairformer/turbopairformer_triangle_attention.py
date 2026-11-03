@@ -97,7 +97,7 @@ def is_turbopairformer_supported(
     """
 
     try:
-        key = tuple(
+        key = (torch.is_grad_enabled(),) + tuple(
             (tuple(tensor.shape), tensor.dtype, tensor.device, tensor.requires_grad)
             for tensor in (q, k, v, res_mask, pair_bias)
         )
@@ -134,6 +134,14 @@ def _is_turbopairformer_supported_uncached(
     }
     if any(not isinstance(tensor, torch.Tensor) for tensor in named_inputs.values()):
         return False, "all inputs must be torch.Tensor instances"
+    if q.dtype == torch.float32:
+        # Native inference has its own broadcast/layout and launch contract;
+        # do not apply the BF16 training kernel's exact-tail/grid restrictions.
+        from openfold3.core.kernels.turbopairformer import (
+            turbopairformer_attention_fp32 as native_fp32,
+        )
+
+        return native_fp32.is_attention_fp32_supported(q, k, v, res_mask, pair_bias)
     if not q.is_cuda:
         return False, "q/k/v, res_mask, and pair_bias must be CUDA tensors"
     capability = _CAPABILITY_CACHE.get(q.device.index)
@@ -366,6 +374,15 @@ def turbopairformer_triangle_attention(
         raise ValueError(f"unsupported TurboPairFormer case: {reason}")
     global _INVOCATIONS
     _INVOCATIONS += 1
+    if q.dtype == torch.float32:
+        # FP32 inference neither rounds Q/K/V/bias to BF16 nor saves the BF16
+        # backward residual. The separate implementation preserves FP32 storage
+        # and observes the caller's TF32 policy for its cuBLAS products.
+        from openfold3.core.kernels.turbopairformer import (
+            turbopairformer_attention_fp32 as native_fp32,
+        )
+
+        return native_fp32.turbopairformer_attention_fp32(q, k, v, res_mask, pair_bias)
     # 2. Convert bias and pad the head/sequence dimensions used by the kernels.
     # Hopper kernels store the bias tile as BF16. Accept the model's native
     # FP32 pair-bias contract and make the precision boundary explicit here;

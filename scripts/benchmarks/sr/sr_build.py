@@ -22,7 +22,9 @@ for name in ("_forward_extension", "_delta_extension"):
     getattr(facade, name)()
     print(f"{name} ready at {time.time() - t0:.0f}s", flush=True)
 
-from openfold3.core.kernels.cuda import turbopairformer_triangle_dkdv as dkdv_mod  # noqa: E402
+from openfold3.core.kernels.cuda import (  # noqa: E402
+    turbopairformer_triangle_dkdv as dkdv_mod,
+)
 from openfold3.core.kernels.cuda import (  # noqa: E402
     turbopairformer_triangle_dq_dbias as dq_mod,
 )

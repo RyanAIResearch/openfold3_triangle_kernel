@@ -1176,10 +1176,9 @@ class TestSetupOpenFold:
         against s3://openfold3-data, which makes these tests depend on that bucket
         being reachable and slow on a poor connection.
 
-        Worse, ``download_s3_file`` is mocked here with a stub that only touches
-        the path: were the check ever to report the CCD stale, the "download"
-        would truncate the installed file to zero bytes and break every later test
-        that needs it.
+        Only parameter downloads are stubbed in these tests, at their imported
+        binding in ``entry_points.parameters``. The separate CCD download must
+        not run against the environment's installed file.
 
         Reporting the CCD as current skips the download entirely. No test in this
         class asserts on CCD behaviour; ``test_setup_openfold.py`` covers it
@@ -1191,7 +1190,7 @@ class TestSetupOpenFold:
     def test_non_interactive(self, tmp_path):
         env_patch = patch.dict(os.environ, {"HOME": str(tmp_path)}, clear=False)
         s3_patch = patch(
-            "openfold3.setup_openfold.download_s3_file",
+            "openfold3.entry_points.parameters.download_s3_file",
             side_effect=_fake_download_s3_file,
         )
         with env_patch, s3_patch:
@@ -1231,7 +1230,7 @@ class TestSetupOpenFold:
         config_file.write_text(config.model_dump_json())
 
         with patch(
-            "openfold3.setup_openfold.download_s3_file",
+            "openfold3.entry_points.parameters.download_s3_file",
             side_effect=_fake_download_s3_file,
         ):
             result = CliRunner().invoke(
@@ -1255,7 +1254,7 @@ class TestSetupOpenFold:
         config_file.write_text(config.model_dump_json())
 
         with patch(
-            "openfold3.setup_openfold.download_s3_file",
+            "openfold3.entry_points.parameters.download_s3_file",
             side_effect=_fake_download_s3_file,
         ):
             result = CliRunner().invoke(
@@ -1281,7 +1280,7 @@ class TestSetupOpenFold:
         config_file.write_text(config.model_dump_json())
 
         with patch(
-            "openfold3.setup_openfold.download_s3_file",
+            "openfold3.entry_points.parameters.download_s3_file",
             side_effect=_fake_download_s3_file,
         ):
             result = CliRunner().invoke(

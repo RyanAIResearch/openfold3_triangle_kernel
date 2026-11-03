@@ -13,6 +13,7 @@ import gc
 import hashlib
 import json
 from dataclasses import asdict
+from typing import TypedDict, cast
 
 import torch
 
@@ -50,9 +51,7 @@ def make_case(name: str) -> tuple[torch.Tensor, ...]:
     q = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
-    mask = torch.zeros(
-        batch, outer, 1, 1, sequence, device="cuda", dtype=torch.float32
-    )
+    mask = torch.zeros(batch, outer, 1, 1, sequence, device="cuda", dtype=torch.float32)
     mask[..., -3:] = float("-inf")
     bias = (
         0.1
@@ -112,9 +111,15 @@ def digest(tensor: torch.Tensor) -> str:
     return hashlib.sha256(memoryview(raw)).hexdigest()
 
 
-def configurations(name: str) -> list[dict[str, int | None]]:
+class WorkspaceOptions(TypedDict):
+    workspace_budget_bytes: int
+    query_span: int | None
+    batch_chunk: int | None
+
+
+def configurations(name: str) -> list[WorkspaceOptions]:
     batch, _, _, sequence, _ = CASES[name]
-    configs: list[dict[str, int | None]] = [
+    configs: list[WorkspaceOptions] = [
         {
             "workspace_budget_bytes": mib * 1024 * 1024,
             "query_span": None,
@@ -140,10 +145,14 @@ def configurations(name: str) -> list[dict[str, int | None]]:
                     "batch_chunk": batch_chunk,
                 }
             )
-    unique: list[dict[str, int | None]] = []
+    unique: list[WorkspaceOptions] = []
     seen: set[tuple[int | None, ...]] = set()
     for config in configs:
-        key = tuple(config.values())
+        key = (
+            config["workspace_budget_bytes"],
+            config["query_span"],
+            config["batch_chunk"],
+        )
         if key not in seen:
             seen.add(key)
             unique.append(config)
@@ -153,8 +162,9 @@ def configurations(name: str) -> list[dict[str, int | None]]:
 def run_case(name: str) -> None:
     q, k, v, mask, bias, grad_out = make_case(name)
     logsumexp, delta = forward_state(q, k, v, mask, bias, grad_out)
-    two_pass_dk, two_pass_dv = turbopairformer_triangle_dkdv(
-        q, k, v, grad_out, logsumexp, delta, mask, bias
+    two_pass_dk, two_pass_dv = cast(
+        tuple[torch.Tensor, torch.Tensor],
+        turbopairformer_triangle_dkdv(q, k, v, grad_out, logsumexp, delta, mask, bias),
     )
     reference: tuple[torch.Tensor, ...] | None = None
     reference_digests: dict[str, str] | None = None

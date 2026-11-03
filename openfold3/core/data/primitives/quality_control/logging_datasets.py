@@ -27,6 +27,7 @@ import traceback
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
+from warnings import deprecated
 
 import biotite.structure as struc
 import biotite.structure.io as strucio
@@ -34,7 +35,6 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, IterableDataset
-from typing_extensions import deprecated
 
 from openfold3.core.data.framework.data_module import DatasetMode, MultiDatasetConfig
 from openfold3.core.data.framework.single_datasets.abstract_single import (

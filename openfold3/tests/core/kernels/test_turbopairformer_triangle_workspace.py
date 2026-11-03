@@ -96,7 +96,7 @@ class TurboPairFormerTriangleWorkspaceTest(unittest.TestCase):
         self.assertEqual(plan.batch_chunk, batch)
         self.assertEqual(plan.elements % plane_elements, 0)
 
-    def test_forced_query_spans_retain_the_same_global_leaf_order(self):
+    def test_forced_query_spans_retain_the_same_global_leaf_order(self) -> None:
         sequence = 257
         expected_leaves = list(range((sequence + 3) // 4))
         for query_span in (64, 128, 256, 320):

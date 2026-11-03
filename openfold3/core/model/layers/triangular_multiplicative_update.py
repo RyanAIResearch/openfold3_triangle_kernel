@@ -31,6 +31,7 @@ import torch.nn as nn
 import openfold3.core.config.default_linear_init_config as lin_init
 from openfold3.core.kernels.cueq_utils import is_cuequivariance_available
 from openfold3.core.model.primitives import LayerNorm, Linear
+from openfold3.core.utils.checkpointing import is_inference_without_checkpoint
 from openfold3.core.utils.tensor_utils import permute_final_dims
 
 if is_cuequivariance_available():
@@ -55,6 +56,28 @@ _TURBOPAIRFORMER_TRIMUL_FALLBACK_LOGGED: set[tuple[str, str]] = set()
 
 def _route_stable_trimul(module, z, mask):
     """Return ``(selected, output)`` without swallowing fast-path failures."""
+    if (
+        z.is_cuda
+        and z.dtype == torch.float32
+        and is_inference_without_checkpoint(module, z, mask)
+        and (
+            not torch.is_autocast_enabled("cuda")
+            or torch.get_autocast_dtype("cuda") == torch.float32
+        )
+    ):
+        # The FP32 inference implementation owns this site, including short
+        # sequences. Unsupported metadata and launch errors propagate instead
+        # of being relabeled as a successful Turbo call to the stock backend.
+        # An FP32 residual inside BF16 autocast retains the established mixed-
+        # precision route; storage dtype alone does not request FP32 compute.
+        # Enabled FP32 autocast, used by the confidence head, still requests
+        # FP32 compute and must retain this native route.
+        from openfold3.core.kernels.turbopairformer.turbopairformer_trimul_fp32 import (
+            run_trimul_fp32,
+        )
+
+        return True, run_trimul_fp32(module, z, mask)
+
     from openfold3.core.utils.distributed_contract import (
         turbopairformer_distributed_strict_enabled,
     )
@@ -733,7 +756,11 @@ class BaseTriangleMultiplicativeUpdate(nn.Module, ABC):
         z: torch.Tensor,
         mask: torch.Tensor | None = None,
         inplace_safe: bool = False,
+        use_cueq_triangle_kernels: bool = False,
+        use_triton_triangle_kernels: bool = False,
+        use_stable_triangle_multiplicative: bool = False,
         _add_with_inplace: bool = False,
+        _inplace_chunk_size: int | None = 256,
     ) -> torch.Tensor:
         """
         Args:

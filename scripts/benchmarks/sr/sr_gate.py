@@ -64,9 +64,7 @@ def make_case(name):
     bias_batch = 1 if bias_one else batch
     bias = (
         0.1
-        * torch.randn(
-            bias_batch, 1, heads, seq, seq, device=dev, dtype=torch.float32
-        )
+        * torch.randn(bias_batch, 1, heads, seq, seq, device=dev, dtype=torch.float32)
     ).requires_grad_()
     return q, k, v, mask, bias
 
@@ -94,9 +92,7 @@ def main():
         first = run_case(name)
         second = run_case(name)
         for key in first:
-            assert torch.equal(first[key], second[key]), (
-                f"REPLAY MISMATCH {name}:{key}"
-            )
+            assert torch.equal(first[key], second[key]), f"REPLAY MISMATCH {name}:{key}"
         results[name] = first
         print(f"{name}: replay bitwise OK", flush=True)
 

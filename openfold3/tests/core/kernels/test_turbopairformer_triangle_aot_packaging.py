@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import tomllib
@@ -14,6 +15,8 @@ from unittest.mock import patch
 REPOSITORY = Path(__file__).resolve().parents[4]
 CUDA_PACKAGE = REPOSITORY / "openfold3/core/kernels/turbopairformer"
 LOADERS = (
+    "turbopairformer_attention_fp32.py",
+    "turbopairformer_trimul_fp32.py",
     "turbopairformer_triangle_forward.py",
     "turbopairformer_triangle_delta.py",
     "turbopairformer_triangle_dkdv.py",
@@ -21,6 +24,8 @@ LOADERS = (
     "turbopairformer_trimul_cuda.py",
 )
 EXPECTED_MODULES = {
+    "_turbopairformer_attention_fp32_sm90a",
+    "_turbopairformer_trimul_fp32_sm90a",
     "_turbopairformer_forward_sm90a",
     "_turbopairformer_delta_sm90a",
     "_turbopairformer_dkdv_sm90a",
@@ -37,7 +42,7 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
             self.assertIn("load_extension_module", text, loader)
             self.assertIn(".turbopairformer._ext.", text, loader)
 
-    def test_jit_import_is_isolated_to_explicit_development_function(self):
+    def test_jit_import_is_isolated_to_explicit_development_function(self) -> None:
         path = CUDA_PACKAGE / "_aot_runtime.py"
         tree = ast.parse(path.read_text())
         imports: list[tuple[str, str]] = []
@@ -65,7 +70,7 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
         self.assertIn('os.environ.get(_DEVELOPMENT_JIT_ENV) == "1"', text)
         self.assertIn("if not _development_jit_enabled():", text)
 
-    def test_setup_defines_five_unique_sm90a_extensions(self):
+    def test_setup_defines_seven_unique_sm90a_extensions(self):
         text = (REPOSITORY / "setup.py").read_text()
         discovered = {name for name in EXPECTED_MODULES if text.count(name) == 1}
         self.assertEqual(discovered, EXPECTED_MODULES)
@@ -91,6 +96,58 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
         ):
             self.assertIn(f'"{symbol}"', text)
         self.assertNotIn("--use_fast_math", text)
+
+    def test_fp32_attention_exports_match_every_packaging_contract(self) -> None:
+        def assignment(path: Path, name: str):
+            for node in ast.parse(path.read_text()).body:
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                elif isinstance(node, ast.AnnAssign):
+                    targets = [node.target]
+                else:
+                    continue
+                if any(
+                    isinstance(target, ast.Name) and target.id == name
+                    for target in targets
+                ):
+                    assert node.value is not None
+                    return ast.literal_eval(node.value)
+            self.fail(f"missing {name} in {path}")
+
+        key = "turbopairformer_attention_fp32"
+        setup = assignment(REPOSITORY / "setup.py", "EXTENSION_SPECS")[key]
+        attestor = assignment(
+            REPOSITORY / "tools/attest_sm90_wheel.py", "EXPECTED_EXTENSIONS"
+        )[key]
+        runtime_module, runtime_symbols = assignment(
+            CUDA_PACKAGE / "_aot_runtime.py", "_PRODUCTION_MODULE_CONTRACT"
+        )[key]
+        loader_tree = ast.parse((CUDA_PACKAGE / f"{key}.py").read_text())
+        loader_call = next(
+            node
+            for node in ast.walk(loader_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "load_extension_module"
+        )
+        loader_symbols = ast.literal_eval(
+            next(
+                keyword.value
+                for keyword in loader_call.keywords
+                if keyword.arg == "expected_symbols"
+            )
+        )
+        cuda_symbols = re.findall(
+            r'module\.def\(\s*"([^"]+)"', (CUDA_PACKAGE / f"{key}.cu").read_text()
+        )
+        expected = set(cuda_symbols)
+        self.assertEqual(len(expected), 6)
+        self.assertEqual(set(setup["symbols"]), expected)
+        self.assertEqual(set(attestor["symbols"]), expected)
+        self.assertEqual(set(runtime_symbols), expected)
+        self.assertEqual(set(loader_symbols), expected)
+        self.assertEqual(setup["module"], attestor["module"])
+        self.assertEqual(setup["module"], runtime_module)
 
     def test_trimul_aot_excludes_legacy_row_gather_symbols(self):
         production_members = (
@@ -291,6 +348,47 @@ class TurboPairFormerTriangleAOTPackagingTest(unittest.TestCase):
             text.index('assert_no_jit_cache("dynamic export registration")'),
             text.index("expected = module(dynamic_z, dynamic_mask)"),
         )
+
+    def test_clean_install_smoke_covers_all_seven_binaries_and_fp32_inference(self):
+        text = (REPOSITORY / "tools/aot_clean_install_smoke.py").read_text()
+        tree = ast.parse(text)
+        modules = next(
+            ast.literal_eval(node.value)
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "MODULES"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(len(modules), 7)
+        self.assertEqual(
+            {name.rsplit(".", 1)[-1] for name in modules}, EXPECTED_MODULES
+        )
+        identity_call = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "distributed_aot_identity"
+        )
+        identity_keys = ast.literal_eval(identity_call.args[0])
+        self.assertEqual(len(identity_keys), 7)
+        self.assertEqual({f"_{name}_sm90a" for name in identity_keys}, EXPECTED_MODULES)
+        for contract in (
+            "len(set(binary_paths)) != 7",
+            "attention.turbopairformer_attention_fp32(*inputs)",
+            "trimul.run_trimul_fp32(module, z, pair_mask)",
+            "trimul.invocation_count() - before != 1",
+            "for allow_tf32 in (False, True)",
+            "for outgoing in (False, True)",
+            "torch.inference_mode()",
+            'torch.autocast("cuda", enabled=False)',
+            'assert_no_jit_cache("native FP32 inference execution")',
+            '"caller_precision_restored": True',
+            '"fp32_inference": fp32_inference_receipt',
+        ):
+            self.assertIn(contract, text)
 
     def test_attestation_is_cp314_sass_only_and_checks_unique_binaries(self):
         text = (REPOSITORY / "tools/attest_sm90_wheel.py").read_text()

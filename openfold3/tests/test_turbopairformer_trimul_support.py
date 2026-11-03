@@ -9,6 +9,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -45,7 +46,6 @@ _LINEAR_NAMES = (
     "linear_g",
     "linear_z",
 )
-_NO_MASK = object()
 
 
 def _tensor_metadata(
@@ -79,7 +79,7 @@ def _metadata(
     z_device_index: int | None = 0,
     z_contiguous: bool = True,
     z_requires_grad: bool = True,
-    mask: TensorMetadata | None | object = _NO_MASK,
+    mask: TensorMetadata | None = None,
     device_name: str = "NVIDIA H100 80GB HBM3",
     capability: tuple[int, int] = (9, 0),
     multiprocessor_count: int = 132,
@@ -104,8 +104,6 @@ def _metadata(
         )
         for name, shape in _WEIGHT_SHAPES.items()
     )
-    if mask is _NO_MASK:
-        mask = None
     return StableTrimulSupportMetadata(
         z=z,
         mask=mask,
@@ -124,7 +122,7 @@ def _metadata(
 def _replace_weight(
     metadata: StableTrimulSupportMetadata,
     name: str,
-    **changes: object,
+    **changes: Any,
 ) -> StableTrimulSupportMetadata:
     weights = tuple(
         replace(item, tensor=replace(item.tensor, **changes))

@@ -49,9 +49,7 @@ def make_case(name):
     bias_batch = 1 if bias_one else batch
     bias = (
         0.1
-        * torch.randn(
-            bias_batch, 1, heads, seq, seq, device=dev, dtype=torch.float32
-        )
+        * torch.randn(bias_batch, 1, heads, seq, seq, device=dev, dtype=torch.float32)
     ).requires_grad_()
     return q, k, v, mask, bias
 
@@ -86,9 +84,7 @@ def fp64_reference(name):
     grad_out = torch.randn(
         out_public.shape, device=out.device, dtype=torch.bfloat16
     ).double()
-    grads = torch.autograd.grad(
-        out_public, (q64, k64, v64, b64), grad_outputs=grad_out
-    )
+    grads = torch.autograd.grad(out_public, (q64, k64, v64, b64), grad_outputs=grad_out)
     return {"dq": grads[0], "dk": grads[1], "dv": grads[2], "dbias": grads[3]}
 
 

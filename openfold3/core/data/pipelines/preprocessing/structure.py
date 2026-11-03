@@ -911,7 +911,9 @@ def preprocess_cif_dir_of3(
                 )
 
             try:
-                batches = list(itertools.batched(remaining, retry_chunksize))
+                batches = list(
+                    itertools.batched(remaining, retry_chunksize, strict=False)
+                )
 
                 with mp.Pool(
                     retry_num_workers,

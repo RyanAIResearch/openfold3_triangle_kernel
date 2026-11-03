@@ -93,8 +93,10 @@ def main() -> None:
         fwd_ms, bwd_ms = event_walls(q, k, v, mask, bias, grad_out)
         rows = profile_kernels(q, k, v, mask, bias, grad_out)
         total_us = sum(r[0] for r in rows)
-        print(f"\n===== N={n}  fwd {fwd_ms:.3f} ms  bwd {bwd_ms:.3f} ms "
-              f"(facade walls, median of {REPS_EVENTS}) =====")
+        print(
+            f"\n===== N={n}  fwd {fwd_ms:.3f} ms  bwd {bwd_ms:.3f} ms "
+            f"(facade walls, median of {REPS_EVENTS}) ====="
+        )
         print(f"{'cuda total ms':>14} {'ms/iter':>9} {'calls':>6}  kernel")
         for cuda_us, count, key in rows:
             if cuda_us / 1000.0 / REPS_PROFILE < 0.005:
@@ -104,8 +106,10 @@ def main() -> None:
                 f"{count:6d}  {key[:100]}"
             )
         print(f"{'-' * 14}")
-        print(f"{total_us / 1000.0:14.3f} {total_us / 1000.0 / REPS_PROFILE:9.4f}"
-              f"         ALL CUDA")
+        print(
+            f"{total_us / 1000.0:14.3f} {total_us / 1000.0 / REPS_PROFILE:9.4f}"
+            f"         ALL CUDA"
+        )
 
 
 if __name__ == "__main__":

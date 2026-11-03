@@ -45,9 +45,7 @@ def max_abs(a, b):
 def build(c_in, c_hidden, heads, seed):
     torch.manual_seed(seed)
     module = (
-        TriangleAttention(
-            c_in=c_in, c_hidden=c_hidden, no_heads=heads, starting=True
-        )
+        TriangleAttention(c_in=c_in, c_hidden=c_hidden, no_heads=heads, starting=True)
         .cuda()
         .to(torch.bfloat16)
     )
@@ -91,8 +89,7 @@ def run_pass(module, x_base, mask, grad_seed, use_stable):
     }
 
 
-def case(label, c_in, c_hidden, heads, n, seed, bitwise_required,
-         mask_dtype=None):
+def case(label, c_in, c_hidden, heads, n, seed, bitwise_required, mask_dtype=None):
     module = build(c_in, c_hidden, heads, seed)
     x_base = torch.randn((1, n, n, c_in), device="cuda").to(torch.bfloat16)
     mask = (torch.rand((1, n, n), device="cuda") > 0.1).float()
@@ -108,8 +105,7 @@ def case(label, c_in, c_hidden, heads, n, seed, bitwise_required,
         nbad(stable["out"], replay["out"])
         + nbad(stable["x_grad"], replay["x_grad"])
         + sum(
-            nbad(stable["grads"][key], replay["grads"][key])
-            for key in stable["grads"]
+            nbad(stable["grads"][key], replay["grads"][key]) for key in stable["grads"]
         )
     )
     if bitwise_required:
@@ -122,16 +118,12 @@ def case(label, c_in, c_hidden, heads, n, seed, bitwise_required,
             )
         )
         passed = bad == 0 and replay_bad == 0
-        print(
-            f"{label}: bitwise_bad={bad} replay_bad={replay_bad} "
-            f"passed={passed}"
-        )
+        print(f"{label}: bitwise_bad={bad} replay_bad={replay_bad} passed={passed}")
         return passed
     out_gap = max_abs(stock["out"], stable["out"])
     x_gap = max_abs(stock["x_grad"], stable["x_grad"])
     grad_gap = max(
-        max_abs(stock["grads"][key], stable["grads"][key])
-        for key in stock["grads"]
+        max_abs(stock["grads"][key], stable["grads"][key]) for key in stock["grads"]
     )
     passed = replay_bad == 0 and out_gap < 0.1 and x_gap < 0.1
     print(
@@ -147,8 +139,16 @@ def main():
         case("trunk D=32 N=384 (TurboPairFormer)", 128, 32, 4, 384, 11, False),
         case("trunk D=32 N=640 (TurboPairFormer)", 128, 32, 4, 640, 12, False),
         case("template D=16 N=640 (TurboPairFormer)", 64, 16, 4, 640, 13, False),
-        case("trunk D=32 N=384 bf16-mask (real AMP dtype)", 128, 32, 4,
-             384, 14, False, mask_dtype=torch.bfloat16),
+        case(
+            "trunk D=32 N=384 bf16-mask (real AMP dtype)",
+            128,
+            32,
+            4,
+            384,
+            14,
+            False,
+            mask_dtype=torch.bfloat16,
+        ),
     ]
     print(f"ALL_PASSED={all(results)}")
 

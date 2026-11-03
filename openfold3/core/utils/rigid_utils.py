@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from functools import cache
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -1182,18 +1182,21 @@ class Rigid:
         Returns:
             A transformation object of shape [*]
         """
-        p_neg_x_axis = torch.unbind(p_neg_x_axis, dim=-1)
-        origin = torch.unbind(origin, dim=-1)
-        p_xy_plane = torch.unbind(p_xy_plane, dim=-1)
+        negative_x_components = torch.unbind(p_neg_x_axis, dim=-1)
+        origin_components = torch.unbind(origin, dim=-1)
+        xy_components = torch.unbind(p_xy_plane, dim=-1)
 
-        e0 = [c1 - c2 for c1, c2 in zip(origin, p_neg_x_axis, strict=True)]
-        e1 = [c1 - c2 for c1, c2 in zip(p_xy_plane, origin, strict=True)]
+        e0 = [
+            c1 - c2
+            for c1, c2 in zip(origin_components, negative_x_components, strict=True)
+        ]
+        e1 = [c1 - c2 for c1, c2 in zip(xy_components, origin_components, strict=True)]
 
-        denom = torch.sqrt(sum(c * c for c in e0) + eps)
+        denom = torch.sqrt(cast(torch.Tensor, sum(c * c for c in e0) + eps))
         e0 = [c / denom for c in e0]
         dot = sum((c1 * c2 for c1, c2 in zip(e0, e1, strict=True)))
         e1 = [c2 - c1 * dot for c1, c2 in zip(e0, e1, strict=True)]
-        denom = torch.sqrt(sum(c * c for c in e1) + eps)
+        denom = torch.sqrt(cast(torch.Tensor, sum(c * c for c in e1) + eps))
         e1 = [c / denom for c in e1]
         e2 = [
             e0[1] * e1[2] - e0[2] * e1[1],
@@ -1208,7 +1211,7 @@ class Rigid:
 
         rot_obj = Rotation(rot_mats=rots, quats=None)
 
-        return Rigid(rot_obj, torch.stack(origin, dim=-1))
+        return Rigid(rot_obj, torch.stack(origin_components, dim=-1))
 
     def unsqueeze(
         self,

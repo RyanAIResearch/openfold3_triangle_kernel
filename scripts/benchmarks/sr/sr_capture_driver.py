@@ -46,12 +46,9 @@ def _capturing(q, k, v, res_mask, pair_bias):
         }
         shape_tag = "x".join(str(int(value)) for value in q.shape)
 
-        def _save_grad(grad_out, snapshot=snapshot, index=index,
-                       shape_tag=shape_tag):
+        def _save_grad(grad_out, snapshot=snapshot, index=index, shape_tag=shape_tag):
             snapshot["grad_out"] = grad_out.detach().to("cpu", copy=True)
-            path = os.path.join(
-                CAPTURE_DIR, f"case_{index:02d}_{shape_tag}.pt"
-            )
+            path = os.path.join(CAPTURE_DIR, f"case_{index:02d}_{shape_tag}.pt")
             torch.save(snapshot, path)
             _state["pending"] -= 1
             _state["captured"] += 1

@@ -25,7 +25,7 @@ import warnings
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import IntEnum
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -104,7 +104,7 @@ def _validate_expected_msa_files(
     try:
         with tarfile.open(tar_gz_file) as tar_gz:
             members: list[str] = sorted(m.name for m in tar_gz.getmembers())
-    except (tarfile.TarError, OSError):
+    except tarfile.TarError, OSError:
         members = ["<missing or unreadable out.tar.gz>"]
 
     query_kind = "paired" if use_pairing else "unpaired"
@@ -1114,7 +1114,7 @@ def _default_msa_output_root() -> Path:
 
 def _default_run_directory_name() -> str:
     """Return a readable, per-run MSA directory name."""
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     return f"msa-{getpass.getuser()}-{timestamp}-{secrets.token_hex(4)}"
 
 
@@ -1249,7 +1249,7 @@ class MsaComputationSettings(BaseModel):
         cls,
         cli_output_dir: Path,
         config_yaml: Path | None = None,
-    ) -> "MsaComputationSettings":
+    ) -> MsaComputationSettings:
         """Create settings from config dict with CLI output directory override.
 
         Args:

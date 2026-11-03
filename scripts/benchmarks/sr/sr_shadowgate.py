@@ -78,16 +78,12 @@ def fp64_reference(name):
         + b64
     )
     probs = torch.softmax(scores, dim=-1)
-    out_public = torch.einsum("bohqk,bohkd->bohqd", probs, v64).permute(
-        0, 1, 3, 2, 4
-    )
+    out_public = torch.einsum("bohqk,bohkd->bohqd", probs, v64).permute(0, 1, 3, 2, 4)
     torch.manual_seed(7)
     grad_out = torch.randn(
         out_public.shape, device="cuda", dtype=torch.bfloat16
     ).double()
-    grads = torch.autograd.grad(
-        out_public, (q64, k64, v64, b64), grad_outputs=grad_out
-    )
+    grads = torch.autograd.grad(out_public, (q64, k64, v64, b64), grad_outputs=grad_out)
     return {"dq": grads[0], "dk": grads[1], "dv": grads[2], "dbias": grads[3]}
 
 
@@ -107,10 +103,7 @@ def main():
         out_classic, classic = run(name, sr=True, shadow=False)
         out_shadow, shadow = run(name, sr=True, shadow=True)
         out_shadow2, shadow2 = run(name, sr=True, shadow=True)
-        if not (
-            torch.equal(out_two, out_classic)
-            and torch.equal(out_two, out_shadow)
-        ):
+        if not (torch.equal(out_two, out_classic) and torch.equal(out_two, out_shadow)):
             print(f"OUT-BITWISE-FAIL {name}: forward changed across arms")
             failures += 1
         for key in ("dq", "dk", "dv", "dbias"):
@@ -134,8 +127,7 @@ def main():
             )
             if key == "dq" and e_shadow > 1.35 * e_two:
                 print(
-                    f"SHADOW-QUALITY-FAIL {name}: shadow {e_shadow} "
-                    f"vs two-pass {e_two}"
+                    f"SHADOW-QUALITY-FAIL {name}: shadow {e_shadow} vs two-pass {e_two}"
                 )
                 failures += 1
         print(" || ".join(line), flush=True)

@@ -61,10 +61,7 @@ def missing_artifacts(
         if rep_id := chain_data.get("alignment_representative_id"):
             alignment = local_root / "alignment_arrays" / f"{rep_id}.npz"
             template_cache = (
-                local_root
-                / "templates"
-                / template_cache_subdir
-                / f"{rep_id}.npz"
+                local_root / "templates" / template_cache_subdir / f"{rep_id}.npz"
             )
             if not alignment.is_file():
                 missing.add(str(alignment))
@@ -74,10 +71,7 @@ def missing_artifacts(
         for template_id in chain_data.get("template_ids") or []:
             template_pdb = template_id.split("_")[0]
             template_root = (
-                local_root
-                / "templates"
-                / "template_structure_arrays"
-                / template_pdb
+                local_root / "templates" / "template_structure_arrays" / template_pdb
             )
             template = template_root / f"{template_id}.npz"
             moltype = template_root / "chain_id_to_moltype.npz"
@@ -160,10 +154,7 @@ def main() -> None:
         "--runner-yaml",
         type=Path,
         default=None,
-        help=(
-            "Final runnable YAML (default: "
-            "<target-dir>/train_pdb_subset.yaml)"
-        ),
+        help=("Final runnable YAML (default: <target-dir>/train_pdb_subset.yaml)"),
     )
     parser.add_argument("--report", type=Path, default=None)
     args = parser.parse_args()
@@ -183,8 +174,8 @@ def main() -> None:
 
     target_dir = (args.target_dir or default_target_dir()).expanduser().resolve()
     local_root = (
-        args.output_dir or (target_dir / "pdb_training_set")
-    ).expanduser().resolve()
+        (args.output_dir or (target_dir / "pdb_training_set")).expanduser().resolve()
+    )
     if not local_root.is_dir():
         parser.error(
             f"download directory not found: {local_root.expanduser().resolve()}. "
@@ -232,8 +223,7 @@ def main() -> None:
 
     report_path = args.report or (target_dir / "pdb_subset_purification_report.json")
     report_path.write_text(
-        json.dumps({"train": train_report, "validation": val_report}, indent=2)
-        + "\n"
+        json.dumps({"train": train_report, "validation": val_report}, indent=2) + "\n"
     )
     print(
         "Purified training subset: "

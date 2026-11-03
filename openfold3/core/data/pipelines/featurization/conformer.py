@@ -76,8 +76,8 @@ def featurize_reference_conformers_of3(
                     Mapping of each unique conformer instance to its symmetry-equivalent
                     permutations, dict of tensors (torch.int32)
     """
-    ref_pos = []
-    ref_mask = []
+    ref_pos_list = []
+    ref_mask_list = []
     ref_element = []
     ref_charge = []
     ref_atom_name_chars = []
@@ -95,8 +95,8 @@ def featurize_reference_conformers_of3(
 
         # Intermediate for this conformer's coordinates so that we can jointly apply a
         # random translation & rotation after collecting the coordinates
-        mol_ref_pos = []
-        mol_ref_mask = []
+        mol_ref_pos_values = []
+        mol_ref_mask_values = []
 
         # Featurize the parts of the molecule that ended up in the selected crop
         for atom, mask in zip(mol.GetAtoms(), in_crop_mask, strict=True):
@@ -106,10 +106,10 @@ def featurize_reference_conformers_of3(
 
             # Intermediate reference coordinates (without random rotation & translation)
             coords = conf.GetAtomPosition(atom.GetIdx())
-            mol_ref_mask.append(int(atom.GetBoolProp("annot_used_atom_mask")))
+            mol_ref_mask_values.append(int(atom.GetBoolProp("annot_used_atom_mask")))
             # Avoid passing RDKit Point3D objects directly into torch.tensor(),
             # which can segfault in some RDKit/PyTorch builds.
-            mol_ref_pos.append((coords.x, coords.y, coords.z))
+            mol_ref_pos_values.append((coords.x, coords.y, coords.z))
 
             # Atom elements (0-indexed)
             element_symbol = atom.GetSymbol()
@@ -135,8 +135,8 @@ def featurize_reference_conformers_of3(
                 chars.append(ord(char) - 32)
             ref_atom_name_chars.append(chars)
 
-        mol_ref_mask = torch.tensor(mol_ref_mask, dtype=torch.int32)
-        mol_ref_pos = torch.tensor(mol_ref_pos, dtype=torch.float32)
+        mol_ref_mask = torch.tensor(mol_ref_mask_values, dtype=torch.int32)
+        mol_ref_pos = torch.tensor(mol_ref_pos_values, dtype=torch.float32)
 
         # Convert NaN ref_pos coordinates to 0
         assert not torch.any(torch.isnan(mol_ref_pos[mol_ref_mask == 1])), (
@@ -148,12 +148,12 @@ def featurize_reference_conformers_of3(
             # Apply random translation & rotation to reference coordinates
             final_ref_pos = centre_random_augmentation(mol_ref_pos, mol_ref_mask)
 
-            ref_pos.append(final_ref_pos)
-            ref_mask.append(mol_ref_mask)
+            ref_pos_list.append(final_ref_pos)
+            ref_mask_list.append(mol_ref_mask)
         else:
             # If all-NaN conformer, skip random augmentation
-            ref_pos.append(mol_ref_pos)
-            ref_mask.append(mol_ref_mask)
+            ref_pos_list.append(mol_ref_pos)
+            ref_mask_list.append(mol_ref_mask)
 
         # Append mapping of each unique conformer instance to its permutations
         if add_ref_space_uid_to_perm:
@@ -161,8 +161,8 @@ def featurize_reference_conformers_of3(
                 permutations, dtype=torch.int32
             )
 
-    ref_pos = torch.concat(ref_pos)
-    ref_mask = torch.concat(ref_mask)
+    ref_pos = torch.concat(ref_pos_list)
+    ref_mask = torch.concat(ref_mask_list)
 
     # DISCREPANCY TO SI: We set the maximum atomic number to 118, not 128, which is the
     # largest known atomic number, and add an additional bin for unknown elements

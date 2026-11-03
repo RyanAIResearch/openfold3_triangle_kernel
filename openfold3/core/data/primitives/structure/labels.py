@@ -695,7 +695,7 @@ class AtomArrayView:
                 return len(self.indices)
 
 
-def component_view_iter(atom_array: AtomArray) -> Generator[AtomArrayView, None, None]:
+def component_view_iter(atom_array: AtomArray) -> Generator[AtomArrayView]:
     """Iterates through components in an AtomArray.
 
     Args:
@@ -711,7 +711,7 @@ def component_view_iter(atom_array: AtomArray) -> Generator[AtomArrayView, None,
         yield AtomArrayView(atom_array, slice(start, stop))
 
 
-def residue_view_iter(atom_array: AtomArray) -> Generator[AtomArrayView, None, None]:
+def residue_view_iter(atom_array: AtomArray) -> Generator[AtomArrayView]:
     """Iterates through residues in an AtomArray.
 
     Args:
@@ -727,7 +727,7 @@ def residue_view_iter(atom_array: AtomArray) -> Generator[AtomArrayView, None, N
         yield AtomArrayView(atom_array, slice(start, stop))
 
 
-def chain_view_iter(atom_array: AtomArray) -> Generator[AtomArrayView, None, None]:
+def chain_view_iter(atom_array: AtomArray) -> Generator[AtomArrayView]:
     """Iterates through chains in an AtomArray.
 
     Args:

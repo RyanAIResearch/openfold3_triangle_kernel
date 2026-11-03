@@ -20,9 +20,7 @@ def main() -> None:
     q = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
     v = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
-    mask = torch.zeros(
-        batch, outer, 1, 1, sequence, device="cuda", dtype=torch.float32
-    )
+    mask = torch.zeros(batch, outer, 1, 1, sequence, device="cuda", dtype=torch.float32)
     bias = torch.randn(
         batch,
         1,

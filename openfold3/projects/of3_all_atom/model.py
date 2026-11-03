@@ -246,10 +246,6 @@ class OpenFold3(nn.Module):
                     "use_stable_triangle_attention is mutually exclusive with: "
                     + ", ".join(conflicting_backends)
                 )
-            if mode_mem_settings.chunk_size is not None:
-                raise ValueError(
-                    "use_stable_triangle_attention requires chunk_size=None"
-                )
 
         offload_msa_module = self._do_inference_offload(
             seq_len=batch["token_mask"].shape[-1],
@@ -439,6 +435,22 @@ class OpenFold3(nn.Module):
         """
         mode_mem_settings = self._get_mode_mem_settings()
 
+        # Check the caller's precision policy before the local FP32 autocast
+        # regions below. Mixed-BF16 inference also returns FP32 trunk tensors,
+        # and must retain its previous confidence implementation.
+        use_stable_confidence_trimul = (
+            bool(mode_mem_settings.get("use_stable_triangle_multiplicative", False))
+            and not self.training
+            and not torch.is_grad_enabled()
+            and zij_trunk.is_cuda
+            and si_trunk.dtype == torch.float32
+            and zij_trunk.dtype == torch.float32
+            and (
+                not torch.is_autocast_enabled("cuda")
+                or torch.get_autocast_dtype("cuda") == torch.float32
+            )
+        )
+
         offload_confidence_heads = self._do_inference_offload(
             seq_len=batch["token_mask"].shape[-1],
             module_name=OffloadModules.CONFIDENCE_HEADS.value,
@@ -525,6 +537,7 @@ class OpenFold3(nn.Module):
                     use_stable_triangle_attention=bool(
                         mode_mem_settings.get("use_stable_triangle_attention", False)
                     ),
+                    use_stable_triangle_multiplicative=use_stable_confidence_trimul,
                     use_lma=mode_mem_settings.use_lma,
                     inplace_safe=inplace_safe,
                     offload_inference=offload_confidence_heads,

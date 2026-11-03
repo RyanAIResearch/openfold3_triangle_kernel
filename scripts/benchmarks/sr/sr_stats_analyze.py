@@ -45,7 +45,7 @@ sr_walls = [read_wall(f"b{b}_sr") for b in blocks]
 margins = [s - c for s, c in zip(sr_walls, cueq_walls)]
 print(f"scratch walls cueq={cueq_walls}")
 print(f"scratch walls sr  ={sr_walls}")
-print(f"per-block margins  {['%.2f' % m for m in margins]}")
+print(f"per-block margins  {[f'{m:.2f}' for m in margins]}")
 print(
     f"mean cueq {statistics.mean(cueq_walls):.2f}  "
     f"mean sr {statistics.mean(sr_walls):.2f}  "
@@ -54,17 +54,18 @@ print(
 )
 random.seed(20260822)
 resamples = [
-    statistics.mean(random.choices(margins, k=len(margins)))
-    for _ in range(20000)
+    statistics.mean(random.choices(margins, k=len(margins))) for _ in range(20000)
 ]
 resamples.sort()
 print(
-    f"bootstrap 95% CI on mean margin: "
-    f"[{resamples[500]:.2f}, {resamples[19499]:.2f}] s"
+    f"bootstrap 95% CI on mean margin: [{resamples[500]:.2f}, {resamples[19499]:.2f}] s"
 )
-print(f"pretrained: cueq {read_wall('pre_cueq'):.2f} "
-      f"sr {read_wall('pre_sr'):.2f} "
-      f"margin {read_wall('pre_sr') - read_wall('pre_cueq'):.2f}s")
+print(
+    f"pretrained: cueq {read_wall('pre_cueq'):.2f} "
+    f"sr {read_wall('pre_sr'):.2f} "
+    f"margin {read_wall('pre_sr') - read_wall('pre_cueq'):.2f}s"
+)
+
 
 # per-step wall times (steady state = steps 2..)
 def steady(name):
@@ -74,7 +75,7 @@ def steady(name):
     return statistics.mean(values) if values else None
 
 
-for group, names in (
+for _group, names in (
     ("scratch", [f"b{b}_{arm}" for b in blocks for arm in ("cueq", "sr")]),
     ("pretrained", ["pre_cueq", "pre_sr"]),
 ):
@@ -82,6 +83,7 @@ for group, names in (
         value = steady(name)
         if value is not None:
             print(f"steady step s/step {name}: {value:.3f}")
+
 
 # loss referee
 def losses(name):
@@ -93,47 +95,53 @@ def losses(name):
     return columns[candidates[0]] if candidates else {}
 
 
-series = {name: losses(name) for name in
-          [f"b{b}_{arm}" for b in blocks for arm in ("cueq", "sr")]
-          + ["pre_cueq", "pre_sr"]}
+series = {
+    name: losses(name)
+    for name in [f"b{b}_{arm}" for b in blocks for arm in ("cueq", "sr")]
+    + ["pre_cueq", "pre_sr"]
+}
 common = None
 for name in [f"b{b}_cueq" for b in blocks]:
     keys = set(series[name])
     common = keys if common is None else (common & keys)
-common = sorted(common or [])
-if common:
+common_steps = sorted(common or [])
+if common_steps:
     # cueq self-envelope across its four identical-config runs
     spread = [
         max(series[f"b{b}_cueq"][step] for b in blocks)
         - min(series[f"b{b}_cueq"][step] for b in blocks)
-        for step in common
+        for step in common_steps
     ]
-    print(f"cueq 4-run self-envelope: mean {statistics.mean(spread):.3e} "
-          f"max {max(spread):.3e} over {len(common)} steps")
+    print(
+        f"cueq 4-run self-envelope: mean {statistics.mean(spread):.3e} "
+        f"max {max(spread):.3e} over {len(common_steps)} steps"
+    )
     sr_spread = [
         max(series[f"b{b}_sr"][step] for b in blocks)
         - min(series[f"b{b}_sr"][step] for b in blocks)
-        for step in common
+        for step in common_steps
         if all(step in series[f"b{b}_sr"] for b in blocks)
     ]
-    print(f"sr   4-run self-envelope: mean {statistics.mean(sr_spread):.3e} "
-          f"max {max(sr_spread):.3e}")
+    print(
+        f"sr   4-run self-envelope: mean {statistics.mean(sr_spread):.3e} "
+        f"max {max(sr_spread):.3e}"
+    )
     gaps = [
-        abs(series["b1_sr"].get(step, float("nan"))
-            - series["b1_cueq"][step])
-        for step in common
+        abs(series["b1_sr"].get(step, float("nan")) - series["b1_cueq"][step])
+        for step in common_steps
         if step in series["b1_sr"]
     ]
-    print(f"sr-vs-cueq same-seed |dloss|: mean {statistics.mean(gaps):.3e} "
-          f"max {max(gaps):.3e}")
+    print(
+        f"sr-vs-cueq same-seed |dloss|: mean {statistics.mean(gaps):.3e} "
+        f"max {max(gaps):.3e}"
+    )
 pre_common = sorted(set(series["pre_cueq"]) & set(series["pre_sr"]))
 if pre_common:
-    gaps = [abs(series["pre_sr"][s] - series["pre_cueq"][s])
-            for s in pre_common]
-    base = statistics.mean(
-        [abs(series["pre_cueq"][s]) for s in pre_common]
+    gaps = [abs(series["pre_sr"][s] - series["pre_cueq"][s]) for s in pre_common]
+    base = statistics.mean([abs(series["pre_cueq"][s]) for s in pre_common])
+    print(
+        f"PRETRAINED sr-vs-cueq |dloss|: mean {statistics.mean(gaps):.3e} "
+        f"max {max(gaps):.3e} (mean |loss| {base:.3f}, "
+        f"{len(pre_common)} steps)"
     )
-    print(f"PRETRAINED sr-vs-cueq |dloss|: mean {statistics.mean(gaps):.3e} "
-          f"max {max(gaps):.3e} (mean |loss| {base:.3f}, "
-          f"{len(pre_common)} steps)")
 print("ANALYZE_DONE")

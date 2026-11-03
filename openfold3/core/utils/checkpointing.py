@@ -14,6 +14,8 @@
 
 import importlib
 from collections.abc import Callable, Sequence
+from contextvars import ContextVar
+from functools import wraps
 from typing import Any
 
 import torch
@@ -30,6 +32,33 @@ if deepspeed_is_installed:
 BLOCK_ARG = Any
 BLOCK_ARGS = Sequence[BLOCK_ARG]
 
+_CHECKPOINT_ACTIVE: ContextVar[bool] = ContextVar(
+    "openfold3_checkpoint_active", default=False
+)
+
+
+def is_inference_without_checkpoint(
+    module: torch.nn.Module, *inputs: torch.Tensor | None
+) -> bool:
+    """Whether automatic inference-only kernels may replace trainable math.
+
+    Reentrant checkpointing runs its first forward under no_grad, including
+    when the module is in eval mode. Our checkpoint wrapper marks that entire
+    call, since intermediate projections can erase the inputs' requires_grad.
+    The input check also covers direct torch checkpoint calls at this boundary.
+    External checkpoint calls around larger eval-mode functions should use
+    get_checkpoint_fn so their nested modules see the same context.
+
+    Ordinary module inference requires eval and no_grad (or inference_mode).
+    Direct native inference APIs retain their explicit no_grad-only contract.
+    """
+    return (
+        not module.training
+        and not torch.is_grad_enabled()
+        and not _CHECKPOINT_ACTIVE.get()
+        and not any(value is not None and value.requires_grad for value in inputs)
+    )
+
 
 def is_deepspeed_configured() -> bool:
     return deepspeed_is_installed and deepspeed.checkpointing.is_configured()
@@ -44,7 +73,42 @@ def get_checkpoint_fn(use_reentrant: bool | None = None):
     else:
         checkpoint = torch.utils.checkpoint.checkpoint
 
-    return checkpoint
+    is_native_checkpoint = checkpoint is torch.utils.checkpoint.checkpoint
+
+    def checkpoint_with_context(function, *args, **kwargs):
+        # Bind the factory's default even when callers omit the keyword. An
+        # explicit native override still determines whether a marker is needed.
+        # DeepSpeed selects a separate function and does not accept this option.
+        if is_native_checkpoint and use_reentrant is not None:
+            kwargs.setdefault("use_reentrant", use_reentrant)
+        actual_reentrant = (
+            kwargs.get("use_reentrant") if is_native_checkpoint else use_reentrant
+        )
+        # Non-reentrant checkpointing keeps autograd enabled in the original
+        # forward and recomputation, so inference dispatch is already excluded.
+        if actual_reentrant is False:
+            return checkpoint(function, *args, **kwargs)
+        if is_native_checkpoint and torch.compiler.is_compiling():
+            # Dynamo lowers native checkpointing to a non-reentrant graph,
+            # whose forward keeps autograd enabled. A Python ContextVar write
+            # would prevent that graph from being captured. DeepSpeed still
+            # needs the eager marker and never takes this compiler shortcut.
+            return checkpoint(function, *args, **kwargs)
+
+        @wraps(function)
+        def run_function(*inputs, **input_kwargs):
+            # Mark both the first forward and every recomputation. ContextVar
+            # makes nested calls and independent Python threads restore safely,
+            # including when checkpoint's early-stop unwinds the recomputation.
+            token = _CHECKPOINT_ACTIVE.set(True)
+            try:
+                return function(*inputs, **input_kwargs)
+            finally:
+                _CHECKPOINT_ACTIVE.reset(token)
+
+        return checkpoint(run_function, *args, **kwargs)
+
+    return checkpoint_with_context
 
 
 @torch.jit.ignore

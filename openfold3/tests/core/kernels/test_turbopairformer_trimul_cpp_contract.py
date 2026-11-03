@@ -27,8 +27,7 @@ def _make_tensors(channels=32, sequence=16):
     bf16 = torch.bfloat16
     fp32 = torch.float32
     weights = [
-        torch.randn(channels, channels, device=device, dtype=fp32)
-        for _ in range(6)
+        torch.randn(channels, channels, device=device, dtype=fp32) for _ in range(6)
     ]
     return {
         "B": batch,
@@ -42,9 +41,7 @@ def _make_tensors(channels=32, sequence=16):
         "gamma": torch.ones(channels, device=device, dtype=fp32),
         "beta": torch.zeros(channels, device=device, dtype=fp32),
         "weights": weights,
-        "x": torch.randn(
-            batch * channels, nn, device=device, dtype=bf16
-        ),
+        "x": torch.randn(batch * channels, nn, device=device, dtype=bf16),
         "gate": torch.randn(rows, channels, device=device, dtype=bf16),
         "grad": torch.randn(rows, channels, device=device, dtype=bf16),
         "mean": torch.zeros(rows, device=device, dtype=fp32),
@@ -110,9 +107,7 @@ def _run_all_eight(extension, tensors):
         channels,
         True,
     )
-    d_proj5 = torch.empty(
-        rows, 5 * channels, device="cuda", dtype=torch.bfloat16
-    )
+    d_proj5 = torch.empty(rows, 5 * channels, device="cuda", dtype=torch.bfloat16)
     d_raw = extension.sig_mul_bwd_out(
         out,
         gate,
@@ -169,9 +164,7 @@ def _run_all_eight(extension, tensors):
     partials = torch.randn(
         3, 5 * channels, channels, device="cuda", dtype=torch.float32
     )
-    d_w5 = torch.empty(
-        5 * channels, channels, device="cuda", dtype=torch.float32
-    )
+    d_w5 = torch.empty(5 * channels, channels, device="cuda", dtype=torch.float32)
     folded = extension.trimul_wgrad_fixed_fold(partials, d_w5, True)
     return (
         out,
@@ -239,15 +232,9 @@ def test_wgrad_fold_matches_strict_ascending_reference(extension, channels):
 def test_wgrad_fold_carries_a_fixed_order_across_waves(extension):
     channels = 64
     torch.manual_seed(9923)
-    first = torch.randn(
-        7, 5 * channels, channels, device="cuda", dtype=torch.float32
-    )
-    second = torch.randn(
-        11, 5 * channels, channels, device="cuda", dtype=torch.float32
-    )
-    expected = _strict_ascending_fold(
-        second, _strict_ascending_fold(first)
-    )
+    first = torch.randn(7, 5 * channels, channels, device="cuda", dtype=torch.float32)
+    second = torch.randn(11, 5 * channels, channels, device="cuda", dtype=torch.float32)
+    expected = _strict_ascending_fold(second, _strict_ascending_fold(first))
     actual = torch.empty_like(expected)
     extension.trimul_wgrad_fixed_fold(first, actual, True)
     extension.trimul_wgrad_fixed_fold(second, actual, False)
@@ -288,43 +275,31 @@ def test_wgrad_fold_rejects_invalid_inputs(extension):
     accumulator = torch.empty_like(partials[0])
 
     with pytest.raises(RuntimeError, match="partials must be a CUDA tensor"):
-        extension.trimul_wgrad_fixed_fold(
-            partials.cpu(), accumulator, True
-        )
+        extension.trimul_wgrad_fixed_fold(partials.cpu(), accumulator, True)
     with pytest.raises(RuntimeError, match="partials has the wrong dtype"):
         extension.trimul_wgrad_fixed_fold(
             partials.to(torch.bfloat16), accumulator, True
         )
     with pytest.raises(RuntimeError, match="partials must be contiguous"):
-        extension.trimul_wgrad_fixed_fold(
-            partials.transpose(1, 2), accumulator, True
-        )
+        extension.trimul_wgrad_fixed_fold(partials.transpose(1, 2), accumulator, True)
     with pytest.raises(RuntimeError, match="chunks must be positive"):
         extension.trimul_wgrad_fixed_fold(partials[:0], accumulator, True)
     with pytest.raises(RuntimeError, match="M must be positive"):
         extension.trimul_wgrad_fixed_fold(
-            torch.empty(
-                3, 0, channels, device="cuda", dtype=torch.float32
-            ),
+            torch.empty(3, 0, channels, device="cuda", dtype=torch.float32),
             torch.empty(0, channels, device="cuda", dtype=torch.float32),
             True,
         )
     with pytest.raises(RuntimeError, match="C must be positive"):
         extension.trimul_wgrad_fixed_fold(
-            torch.empty(
-                3, 5 * channels, 0, device="cuda", dtype=torch.float32
-            ),
+            torch.empty(3, 5 * channels, 0, device="cuda", dtype=torch.float32),
             torch.empty(5 * channels, 0, device="cuda", dtype=torch.float32),
             True,
         )
     with pytest.raises(RuntimeError, match="accumulator has wrong shape"):
-        extension.trimul_wgrad_fixed_fold(
-            partials, accumulator[:-1], True
-        )
+        extension.trimul_wgrad_fixed_fold(partials, accumulator[:-1], True)
     with pytest.raises(RuntimeError, match="accumulator must be a CUDA tensor"):
-        extension.trimul_wgrad_fixed_fold(
-            partials, accumulator.cpu(), True
-        )
+        extension.trimul_wgrad_fixed_fold(partials, accumulator.cpu(), True)
     with pytest.raises(RuntimeError, match="accumulator has the wrong dtype"):
         extension.trimul_wgrad_fixed_fold(
             partials, accumulator.to(torch.bfloat16), True
@@ -333,13 +308,9 @@ def test_wgrad_fold_rejects_invalid_inputs(extension):
         noncontiguous = torch.empty(
             channels, 5 * channels, device="cuda", dtype=torch.float32
         ).t()
-        extension.trimul_wgrad_fixed_fold(
-            partials, noncontiguous, True
-        )
+        extension.trimul_wgrad_fixed_fold(partials, noncontiguous, True)
     with pytest.raises(RuntimeError, match="written-to tensor"):
-        extension.trimul_wgrad_fixed_fold(
-            partials[:1], partials[0], True
-        )
+        extension.trimul_wgrad_fixed_fold(partials[:1], partials[0], True)
 
 
 def test_cpp_source_pins_device_and_cuda_error_contracts():

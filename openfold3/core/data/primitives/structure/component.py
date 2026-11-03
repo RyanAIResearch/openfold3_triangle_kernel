@@ -17,7 +17,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Generator, Iterable
 from functools import cached_property
-from typing import Literal, NamedTuple, TypeAlias
+from typing import Literal, NamedTuple
 
 import biotite.structure as struc
 import gemmi
@@ -44,7 +44,7 @@ from openfold3.core.data.resources.residues import MoleculeType
 logger = logging.getLogger(__name__)
 
 # TODO: Make this a proper class
-AnnotatedMol: TypeAlias = Mol
+type AnnotatedMol = Mol
 """An RDKit mol object containing additional atom-wise annotations.
 
 The custom atom-wise annotations are stored as atom properties in the Mol object,
@@ -570,7 +570,7 @@ def get_reference_molecule_metadata(
 
 def component_view_iter_from_metadata(
     atom_array: AtomArray, per_chain_metadata: DatasetChainData
-) -> Generator[AtomArrayView, None, None]:
+) -> Generator[AtomArrayView]:
     """Yields AtomArrayView objects for each component in a structure."""
     for chain_array_view in chain_view_iter(atom_array):
         chain_id = chain_array_view.chain_id[0]

@@ -112,7 +112,7 @@ def _get_confidence_scores(batch: dict, outputs: dict, config: ConfigDict) -> di
 def get_confidence_scores(
     batch: dict,
     outputs: dict,
-    config: "ConfigDict",
+    config: ConfigDict,
     compute_per_sample: bool = False,
 ) -> dict[str, torch.Tensor]:
     """

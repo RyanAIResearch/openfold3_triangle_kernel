@@ -62,10 +62,10 @@ def test_wgrad_planner_has_bounded_globally_ordered_waves(rows, channels):
     assert stable._WGRAD_PARTIAL_CAP_BYTES == 48 * 1024 * 1024
     assert plan.partial_bytes_per_chunk == 5 * channels * channels * 4
     assert plan.chunks_per_wave == _WGRAD_WAVE_CAPACITY[channels]
-    assert sum(
-        wave.full_chunks + int(wave.tail_rows != 0)
-        for wave in plan.waves
-    ) == expected_logical
+    assert (
+        sum(wave.full_chunks + int(wave.tail_rows != 0) for wave in plan.waves)
+        == expected_logical
+    )
 
     next_chunk = 0
     observed_full = 0
@@ -86,10 +86,7 @@ def test_wgrad_planner_has_bounded_globally_ordered_waves(rows, channels):
     assert observed_full == expected_full
     assert observed_tail == ([expected_tail] if expected_tail else [])
 
-    if (
-        rows == 153 * _EXPECTED_WGRAD_K_CHUNK + 1
-        and channels == 128
-    ):
+    if rows == 153 * _EXPECTED_WGRAD_K_CHUNK + 1 and channels == 128:
         assert plan.waves == (
             stable._WgradWave(0, 153, 0),
             stable._WgradWave(153, 0, 1),
@@ -106,15 +103,11 @@ def test_wgrad_full_chunk_operands_are_zero_copy_views():
     rows = 3 * stable._WGRAD_K_CHUNK
     d_proj5 = torch.empty((rows, 5 * channels), dtype=torch.bfloat16)
     z_ln = torch.empty((rows, channels), dtype=torch.bfloat16)
-    projection_t, normalized = stable._wgrad_full_chunk_views(
-        d_proj5, z_ln, 1, 2
-    )
+    projection_t, normalized = stable._wgrad_full_chunk_views(d_proj5, z_ln, 1, 2)
 
     assert torch._C._is_alias_of(projection_t, d_proj5)
     assert torch._C._is_alias_of(normalized, z_ln)
-    assert projection_t.shape == (
-        2, 5 * channels, stable._WGRAD_K_CHUNK
-    )
+    assert projection_t.shape == (2, 5 * channels, stable._WGRAD_K_CHUNK)
     assert normalized.shape == (2, stable._WGRAD_K_CHUNK, channels)
     assert projection_t.stride() == (
         stable._WGRAD_K_CHUNK * 5 * channels,
@@ -138,8 +131,7 @@ def test_wgrad_route_is_fixed_cap_tail_only_and_leaves_dwz_unchanged():
     assert "os.environ" not in planner_source
     assert "d_w5 = _trimul_wgrad_fixed(ext, d_proj5, z_ln)" in route_source
     assert (
-        "d_wz = torch.mm(d_raw.t(), xlnT.t(), out_dtype=torch.float32)"
-        in route_source
+        "d_wz = torch.mm(d_raw.t(), xlnT.t(), out_dtype=torch.float32)" in route_source
     )
 
 
@@ -154,8 +146,9 @@ def _flat_inputs(device: torch.device | str, n: int = 17, c: int = 32):
 
 def _assert_pairwise_no_alias(tensors: tuple[torch.Tensor, ...]) -> None:
     for index, tensor in enumerate(tensors):
-        for other in tensors[index + 1:]:
-            assert not torch._C._is_alias_of(tensor, other)
+        for other in tensors[index + 1 :]:
+            # This private extension helper is absent from Torch's type stubs.
+            assert not vars(torch._C)["_is_alias_of"](tensor, other)
 
 
 def test_schema_and_fake_kernels_are_extension_lazy():
@@ -178,10 +171,23 @@ def test_schema_and_fake_kernels_are_extension_lazy():
         inference_outputs = stable._trimul_fwd_v1(*inputs, False, False)
         backward_outputs = stable._trimul_bwd_v1(
             torch.empty_like(inputs[0]),
-            inputs[0], inputs[1],
-            outputs[1], outputs[2], outputs[3], outputs[4], outputs[5],
-            outputs[6], outputs[7], outputs[8], outputs[9], outputs[10],
-            *inputs[2:8], inputs[8], inputs[10], outputs[0], True,
+            inputs[0],
+            inputs[1],
+            outputs[1],
+            outputs[2],
+            outputs[3],
+            outputs[4],
+            outputs[5],
+            outputs[6],
+            outputs[7],
+            outputs[8],
+            outputs[9],
+            outputs[10],
+            *inputs[2:8],
+            inputs[8],
+            inputs[10],
+            outputs[0],
+            True,
         )
 
     rows = 17 * 17
@@ -301,7 +307,7 @@ def test_autograd_context_and_gradient_slots_match_the_legacy_contract():
     for index in range(5):
         torch.testing.assert_close(
             gradients[2 + index],
-            d_w5[index * c:(index + 1) * c],
+            d_w5[index * c : (index + 1) * c],
         )
     assert gradients[7] is d_wz
     assert gradients[8] is d_gin
@@ -360,11 +366,16 @@ def _dummy_module(c: int = 32):
 
 def _dummy_parameters(module):
     return (
-        module.linear_a_p.weight, module.linear_a_g.weight,
-        module.linear_b_p.weight, module.linear_b_g.weight,
-        module.linear_g.weight, module.linear_z.weight,
-        module.layer_norm_in.weight, module.layer_norm_in.bias,
-        module.layer_norm_out.weight, module.layer_norm_out.bias,
+        module.linear_a_p.weight,
+        module.linear_a_g.weight,
+        module.linear_b_p.weight,
+        module.linear_b_g.weight,
+        module.linear_g.weight,
+        module.linear_z.weight,
+        module.layer_norm_in.weight,
+        module.layer_norm_in.bias,
+        module.layer_norm_out.weight,
+        module.layer_norm_out.bias,
     )
 
 
@@ -436,10 +447,14 @@ def _live_module(c: int, outgoing: bool):
 
 def _legacy_call(module, z, mask):
     return stable._StableTrimulFn.apply(
-        z, mask,
-        module.linear_a_p.weight, module.linear_a_g.weight,
-        module.linear_b_p.weight, module.linear_b_g.weight,
-        module.linear_g.weight, module.linear_z.weight,
+        z,
+        mask,
+        module.linear_a_p.weight,
+        module.linear_a_g.weight,
+        module.linear_b_p.weight,
+        module.linear_b_g.weight,
+        module.linear_g.weight,
+        module.linear_z.weight,
         module.layer_norm_in.weight.float(),
         module.layer_norm_in.bias.float(),
         module.layer_norm_out.weight.float(),
@@ -479,26 +494,18 @@ def _manual_wgrad_fixed_reference(d_proj5, z_ln):
             projection_t, normalized = stable._wgrad_full_chunk_views(
                 d_proj5, z_ln, wave.first_chunk, wave.full_chunks
             )
-            partials = torch.bmm(
-                projection_t, normalized, out_dtype=torch.float32
-            )
+            partials = torch.bmm(projection_t, normalized, out_dtype=torch.float32)
             for partial in partials.unbind(0):
                 output.add_(partial)
             del partials, projection_t, normalized
         if wave.tail_rows:
-            tail_start = (
-                wave.first_chunk + wave.full_chunks
-            ) * stable._WGRAD_K_CHUNK
-            projection_tail = d_proj5.new_zeros(
-                (1, stable._WGRAD_K_CHUNK, five_hidden)
-            )
-            normalized_tail = z_ln.new_zeros(
-                (1, stable._WGRAD_K_CHUNK, channels)
-            )
-            projection_tail[0, :wave.tail_rows].copy_(
+            tail_start = (wave.first_chunk + wave.full_chunks) * stable._WGRAD_K_CHUNK
+            projection_tail = d_proj5.new_zeros((1, stable._WGRAD_K_CHUNK, five_hidden))
+            normalized_tail = z_ln.new_zeros((1, stable._WGRAD_K_CHUNK, channels))
+            projection_tail[0, : wave.tail_rows].copy_(
                 d_proj5.narrow(0, tail_start, wave.tail_rows)
             )
-            normalized_tail[0, :wave.tail_rows].copy_(
+            normalized_tail[0, : wave.tail_rows].copy_(
                 z_ln.narrow(0, tail_start, wave.tail_rows)
             )
             partial = torch.bmm(
@@ -518,9 +525,7 @@ class _RecordingWgradFold:
 
     def trimul_wgrad_fixed_fold(self, partials, accumulator, initialize):
         self.initialize.append(initialize)
-        return self.extension.trimul_wgrad_fixed_fold(
-            partials, accumulator, initialize
-        )
+        return self.extension.trimul_wgrad_fixed_fold(partials, accumulator, initialize)
 
 
 @pytest.mark.slow
@@ -534,18 +539,12 @@ def test_hopper_wgrad_c128_single_wave_large_tail_reference_replay_and_memory(
     channels = 128
     rows = sequence * sequence
     torch.manual_seed(7300 + sequence)
-    d_proj5 = torch.randn(
-        (rows, 5 * channels), device="cuda", dtype=torch.bfloat16
-    )
-    z_ln = torch.randn(
-        (rows, channels), device="cuda", dtype=torch.bfloat16
-    )
+    d_proj5 = torch.randn((rows, 5 * channels), device="cuda", dtype=torch.bfloat16)
+    z_ln = torch.randn((rows, channels), device="cuda", dtype=torch.bfloat16)
     plan = stable._plan_wgrad_fixed_fold(rows, channels, channels)
     expected_full, expected_tail = divmod(rows, stable._WGRAD_K_CHUNK)
     assert expected_tail > 0
-    assert plan.waves == (
-        stable._WgradWave(0, expected_full, expected_tail),
-    )
+    assert plan.waves == (stable._WgradWave(0, expected_full, expected_tail),)
     recorder = _RecordingWgradFold(stable._get_ext())
 
     baseline_bytes = torch.cuda.memory_allocated()
@@ -575,12 +574,8 @@ def test_hopper_wgrad_tail_accuracy_matches_pure_pytorch_fp32():
     sequence = 65
     rows = sequence * sequence
     torch.manual_seed(8173)
-    d_proj5 = torch.randn(
-        (rows, 5 * channels), device="cuda", dtype=torch.bfloat16
-    )
-    z_ln = torch.randn(
-        (rows, channels), device="cuda", dtype=torch.bfloat16
-    )
+    d_proj5 = torch.randn((rows, 5 * channels), device="cuda", dtype=torch.bfloat16)
+    z_ln = torch.randn((rows, channels), device="cuda", dtype=torch.bfloat16)
     actual = stable._trimul_wgrad_fixed(stable._get_ext(), d_proj5, z_ln)
     reference = d_proj5.float().t() @ z_ln.float()
     relative_l2 = (actual - reference).norm() / reference.norm().clamp_min(1e-12)
@@ -595,7 +590,9 @@ def test_hopper_wgrad_tail_accuracy_matches_pure_pytorch_fp32():
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("sequence", (17, 33, 101, 113))
 def test_hopper_legacy_custom_op_exact_parity_and_replay(
-    channels, outgoing, sequence,
+    channels,
+    outgoing,
+    sequence,
 ):
     torch.manual_seed(1000 + channels + sequence + int(outgoing))
     module = _live_module(channels, outgoing)
@@ -605,17 +602,29 @@ def test_hopper_legacy_custom_op_exact_parity_and_replay(
         device="cuda",
     )
     mask = torch.randint(
-        0, 2, (1, sequence, sequence), dtype=torch.float32, device="cuda",
+        0,
+        2,
+        (1, sequence, sequence),
+        dtype=torch.float32,
+        device="cuda",
     )
     grad_out = torch.randn_like(z)
 
     legacy = _run_and_collect(_legacy_call, module, z, mask, grad_out)
     legacy_replay = _run_and_collect(_legacy_call, module, z, mask, grad_out)
     custom = _run_and_collect(
-        stable._run_supported_stable_trimul, module, z, mask, grad_out,
+        stable._run_supported_stable_trimul,
+        module,
+        z,
+        mask,
+        grad_out,
     )
     custom_replay = _run_and_collect(
-        stable._run_supported_stable_trimul, module, z, mask, grad_out,
+        stable._run_supported_stable_trimul,
+        module,
+        z,
+        mask,
+        grad_out,
     )
 
     _assert_exact_receipts(legacy, legacy_replay)
@@ -628,9 +637,7 @@ def test_hopper_legacy_custom_op_exact_parity_and_replay(
     not _is_supported_hopper(), reason="requires an NVIDIA H100 or H200"
 )
 @pytest.mark.parametrize("outgoing", (False, True))
-@pytest.mark.parametrize(
-    ("channels", "sequence"), ((32, 64), (128, 65))
-)
+@pytest.mark.parametrize(("channels", "sequence"), ((32, 64), (128, 65)))
 def test_hopper_custom_ops_pass_opcheck(channels, sequence, outgoing):
     torch.manual_seed(2026 + channels + sequence + int(outgoing))
     module = _live_module(channels, outgoing)
@@ -639,17 +646,22 @@ def test_hopper_custom_ops_pass_opcheck(channels, sequence, outgoing):
         dtype=torch.bfloat16,
         device="cuda",
     )
-    mask = torch.ones(
-        (1, sequence, sequence), dtype=torch.float32, device="cuda"
-    )
+    mask = torch.ones((1, sequence, sequence), dtype=torch.float32, device="cuda")
     inputs = (
-        z.requires_grad_(True), mask,
-        module.linear_a_p.weight, module.linear_a_g.weight,
-        module.linear_b_p.weight, module.linear_b_g.weight,
-        module.linear_g.weight, module.linear_z.weight,
-        module.layer_norm_in.weight, module.layer_norm_in.bias,
-        module.layer_norm_out.weight, module.layer_norm_out.bias,
-        outgoing, True,
+        z.requires_grad_(True),
+        mask,
+        module.linear_a_p.weight,
+        module.linear_a_g.weight,
+        module.linear_b_p.weight,
+        module.linear_b_g.weight,
+        module.linear_g.weight,
+        module.linear_z.weight,
+        module.layer_norm_in.weight,
+        module.layer_norm_in.bias,
+        module.layer_norm_out.weight,
+        module.layer_norm_out.bias,
+        outgoing,
+        True,
     )
     forward_result = torch.library.opcheck(
         stable._trimul_fwd_v1,
@@ -662,10 +674,23 @@ def test_hopper_custom_ops_pass_opcheck(channels, sequence, outgoing):
         outputs = stable._trimul_fwd_v1(*inputs)
     backward_inputs = (
         torch.randn_like(outputs[0]),
-        inputs[0], inputs[1],
-        outputs[1], outputs[2], outputs[3], outputs[4], outputs[5], outputs[6],
-        outputs[7], outputs[8], outputs[9], outputs[10],
-        *inputs[2:8], inputs[8], inputs[10], outputs[0], outgoing,
+        inputs[0],
+        inputs[1],
+        outputs[1],
+        outputs[2],
+        outputs[3],
+        outputs[4],
+        outputs[5],
+        outputs[6],
+        outputs[7],
+        outputs[8],
+        outputs[9],
+        outputs[10],
+        *inputs[2:8],
+        inputs[8],
+        inputs[10],
+        outputs[0],
+        outgoing,
     )
     # The backward op is intentionally the once-differentiable implementation
     # detail.  Detach its opcheck inputs so this gate covers schema, fake, and
@@ -699,11 +724,16 @@ def test_hopper_actual_and_fake_forward_metadata_match(save_state):
     inputs = (
         torch.randn((1, 17, 17, 32), dtype=torch.bfloat16, device="cuda"),
         torch.ones((1, 17, 17), dtype=torch.float32, device="cuda"),
-        module.linear_a_p.weight.detach(), module.linear_a_g.weight.detach(),
-        module.linear_b_p.weight.detach(), module.linear_b_g.weight.detach(),
-        module.linear_g.weight.detach(), module.linear_z.weight.detach(),
-        module.layer_norm_in.weight.detach(), module.layer_norm_in.bias.detach(),
-        module.layer_norm_out.weight.detach(), module.layer_norm_out.bias.detach(),
+        module.linear_a_p.weight.detach(),
+        module.linear_a_g.weight.detach(),
+        module.linear_b_p.weight.detach(),
+        module.linear_b_g.weight.detach(),
+        module.linear_g.weight.detach(),
+        module.linear_z.weight.detach(),
+        module.layer_norm_in.weight.detach(),
+        module.layer_norm_in.bias.detach(),
+        module.layer_norm_out.weight.detach(),
+        module.layer_norm_out.bias.detach(),
     )
     with torch.no_grad():
         actual = stable._trimul_fwd_v1(*inputs, True, save_state)
@@ -747,11 +777,12 @@ class _SupportedModule(torch.nn.Module):
 )
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("backend", ("aot_eager", "inductor"))
-@pytest.mark.parametrize(
-    ("channels", "sequence"), ((32, 64), (128, 65))
-)
+@pytest.mark.parametrize(("channels", "sequence"), ((32, 64), (128, 65)))
 def test_hopper_eager_matches_fullgraph_forward_and_backward(
-    outgoing, backend, channels, sequence,
+    outgoing,
+    backend,
+    channels,
+    sequence,
 ):
     torch.compiler.reset()
     torch.manual_seed(3030 + channels + sequence + int(outgoing))
@@ -763,9 +794,7 @@ def test_hopper_eager_matches_fullgraph_forward_and_backward(
         dtype=torch.bfloat16,
         device="cuda",
     )
-    mask = torch.ones(
-        (1, sequence, sequence), dtype=torch.float32, device="cuda"
-    )
+    mask = torch.ones((1, sequence, sequence), dtype=torch.float32, device="cuda")
     grad_out = torch.randn_like(z)
 
     eager_receipt = _run_and_collect(
@@ -792,7 +821,8 @@ def test_hopper_eager_matches_fullgraph_forward_and_backward(
 @pytest.mark.parametrize("outgoing", (False, True))
 @pytest.mark.parametrize("backend", ("aot_eager", "inductor"))
 def test_hopper_dynamic_fullgraph_backward_crosses_k_chunk_boundary(
-    outgoing, backend,
+    outgoing,
+    backend,
 ):
     torch.compiler.reset()
     channels = 32
@@ -807,9 +837,7 @@ def test_hopper_dynamic_fullgraph_backward_crosses_k_chunk_boundary(
             dtype=torch.bfloat16,
             device="cuda",
         )
-        mask = torch.ones(
-            (1, sequence, sequence), dtype=torch.float32, device="cuda"
-        )
+        mask = torch.ones((1, sequence, sequence), dtype=torch.float32, device="cuda")
         grad_out = torch.randn_like(z)
         eager_receipt = _run_and_collect(
             lambda wrapper, value, pair_mask: wrapper(value, pair_mask),
@@ -849,7 +877,8 @@ def test_hopper_dynamic_sequence_export_save_load_preserves_versioned_target(tmp
     custom_targets = [
         str(node.target)
         for node in exported.graph.nodes
-        if node.op == "call_function" and "openfold3_turbopairformer" in str(node.target)
+        if node.op == "call_function"
+        and "openfold3_turbopairformer" in str(node.target)
     ]
     assert custom_targets == ["openfold3_turbopairformer._trimul_fwd_v1.default"]
 
@@ -857,10 +886,14 @@ def test_hopper_dynamic_sequence_export_save_load_preserves_versioned_target(tmp
     torch.export.save(exported, artifact)
     loaded = torch.export.load(artifact).module()
     z_dynamic = torch.randn(
-        (1, 33, 33, 32), dtype=torch.bfloat16, device="cuda",
+        (1, 33, 33, 32),
+        dtype=torch.bfloat16,
+        device="cuda",
     )
     mask_dynamic = torch.ones(
-        (1, 33, 33), dtype=torch.float32, device="cuda",
+        (1, 33, 33),
+        dtype=torch.float32,
+        device="cuda",
     )
     expected = wrapper(z_dynamic, mask_dynamic)
     actual = loaded(z_dynamic, mask_dynamic)

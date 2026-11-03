@@ -16,6 +16,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_MEMBER = "openfold3/core/kernels/turbopairformer/_build_manifest.json"
 EXPECTED_EXTENSIONS = {
+    "turbopairformer_attention_fp32": {
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_attention_fp32_sm90a"
+        ),
+        "symbols": [
+            "turbopairformer_attention_fp32_forward",
+            "turbopairformer_attention_fp32_module_projections",
+            "turbopairformer_attention_fp32_module_layer_norm",
+            "turbopairformer_attention_fp32_module_pair_bias",
+            "turbopairformer_attention_fp32_module_chunk_projections",
+            "turbopairformer_attention_fp32_gated_forward",
+        ],
+    },
+    "turbopairformer_trimul_fp32": {
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_trimul_fp32_sm90a"
+        ),
+        "symbols": [
+            "trimul_fp32_gate_pack_out",
+            "trimul_fp32_gate_output_out",
+            "trimul_fp32_input_fused_out",
+            "trimul_fp32_output_fused_out",
+            "trimul_fp32_normalize_input_out",
+        ],
+    },
     "turbopairformer_forward": {
         "module": (
             "openfold3.core.kernels.turbopairformer._ext._turbopairformer_forward_sm90a"
@@ -71,6 +96,8 @@ EXPECTED_EXTENSIONS = {
     },
 }
 LOADER_MEMBERS = (
+    "openfold3/core/kernels/turbopairformer/turbopairformer_attention_fp32.py",
+    "openfold3/core/kernels/turbopairformer/turbopairformer_trimul_fp32.py",
     "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_forward.py",
     "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_delta.py",
     "openfold3/core/kernels/turbopairformer/turbopairformer_triangle_dkdv.py",
@@ -92,9 +119,7 @@ def sha256_file(path: Path) -> str:
 
 
 def command(*values: str) -> str:
-    return subprocess.run(
-        values, check=True, capture_output=True, text=True
-    ).stdout
+    return subprocess.run(values, check=True, capture_output=True, text=True).stdout
 
 
 def verify_binary_tools(
@@ -177,7 +202,7 @@ def main() -> None:
 
         extensions = manifest.get("extensions", {})
         if set(extensions) != set(EXPECTED_EXTENSIONS):
-            raise RuntimeError("wheel does not contain exactly five extensions")
+            raise RuntimeError("wheel does not contain exactly seven extensions")
         binary_members: set[str] = set()
         for key, record in extensions.items():
             member = str(record["filename"])

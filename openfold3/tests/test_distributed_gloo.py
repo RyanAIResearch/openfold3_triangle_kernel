@@ -11,11 +11,13 @@ import os
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.strategies import DDPStrategy
 
 import openfold3.core.utils.distributed_contract as contract
@@ -122,7 +124,7 @@ def _callback_worker(
         )
         # Keep CPU/Gloo collectives but present the qualified NCCL backend to
         # the kernel identity gate.
-        contract.dist.get_backend = lambda *args, **kwargs: "nccl"
+        contract.dist.get_backend = lambda *args, **kwargs: dist.Backend("nccl")
         if (
             failure_mode
             in (
@@ -152,19 +154,23 @@ def _callback_worker(
             expected_aot_modules=("turbopairformer_forward",),
             receipt_path=Path(receipt_path),
         )
-        trainer = SimpleNamespace(
-            world_size=world_size,
-            global_rank=rank,
-            local_rank=rank,
-            node_rank=0,
-            strategy=DDPStrategy(),
+        trainer = cast(
+            Trainer,
+            SimpleNamespace(
+                world_size=world_size,
+                global_rank=rank,
+                local_rank=rank,
+                node_rank=0,
+                strategy=DDPStrategy(),
+            ),
         )
+        model = cast(LightningModule, SimpleNamespace())
 
         error = None
         try:
-            callback.setup(trainer, SimpleNamespace(), "fit")
+            callback.setup(trainer, model, "fit")
             contract.dist.get_backend = original_get_backend
-            callback.on_fit_start(trainer, SimpleNamespace())
+            callback.on_fit_start(trainer, model)
         except contract.DistributedContractError as caught:
             error = str(caught)
         finally:
@@ -176,7 +182,7 @@ def _callback_worker(
         if failure_mode is None:
             assert caught_count.item() == 0, error
             assert contract.turbopairformer_distributed_strict_enabled()
-            callback.on_fit_end(trainer, SimpleNamespace())
+            callback.on_fit_end(trainer, model)
             assert not contract.turbopairformer_distributed_strict_enabled()
         else:
             assert caught_count.item() == world_size

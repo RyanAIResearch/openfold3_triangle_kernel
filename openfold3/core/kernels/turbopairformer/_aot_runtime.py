@@ -36,6 +36,27 @@ _MODULE_CACHE: dict[str, Any] = {}
 
 # Shared binary names and exports for per-kernel loaders and distributed preload.
 _PRODUCTION_MODULE_CONTRACT: dict[str, tuple[str, tuple[str, ...]]] = {
+    "turbopairformer_attention_fp32": (
+        "openfold3.core.kernels.turbopairformer._ext._turbopairformer_attention_fp32_sm90a",
+        (
+            "turbopairformer_attention_fp32_forward",
+            "turbopairformer_attention_fp32_module_projections",
+            "turbopairformer_attention_fp32_module_layer_norm",
+            "turbopairformer_attention_fp32_module_pair_bias",
+            "turbopairformer_attention_fp32_module_chunk_projections",
+            "turbopairformer_attention_fp32_gated_forward",
+        ),
+    ),
+    "turbopairformer_trimul_fp32": (
+        "openfold3.core.kernels.turbopairformer._ext._turbopairformer_trimul_fp32_sm90a",
+        (
+            "trimul_fp32_gate_pack_out",
+            "trimul_fp32_gate_output_out",
+            "trimul_fp32_input_fused_out",
+            "trimul_fp32_output_fused_out",
+            "trimul_fp32_normalize_input_out",
+        ),
+    ),
     "turbopairformer_forward": (
         "openfold3.core.kernels.turbopairformer._ext._turbopairformer_forward_sm90a",
         (
@@ -242,6 +263,9 @@ def _load_development_jit(
         name=f"openfold3_triangle_dev_{module_key}_{source_hash}",
         sources=[str(source)],
         extra_cuda_cflags=["-O3", "-lineinfo"],
+        extra_ldflags=["-lcublas"]
+        if module_key == "turbopairformer_attention_fp32"
+        else [],
         verbose=verbose,
     )
 

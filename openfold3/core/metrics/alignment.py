@@ -65,7 +65,7 @@ class Structure:
     atom_array: AtomArray
 
     @classmethod
-    def from_cif(cls, path: Path) -> "Structure":
+    def from_cif(cls, path: Path) -> Structure:
         return cls(path=path, atom_array=parse_mmcif(path).atom_array)
 
     @cached_property

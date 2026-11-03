@@ -403,7 +403,7 @@ class ChunkSizeTuner:
     def tune_chunk_size(
         self,
         representative_fn: Callable,
-        args: tuple[Any],
+        args: tuple[Any, ...],
         max_chunk_size: int,
     ) -> int:
         def remove_tensors(a):

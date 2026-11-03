@@ -104,9 +104,9 @@ def _projection_view(
         dtype=torch.float32,
         generator=generator,
     ).to(torch.bfloat16)
-    return projected.view(
-        tuple(prefix) + (outer, sequence, heads, head_dim)
-    ).transpose(-2, -3)
+    return projected.view(tuple(prefix) + (outer, sequence, heads, head_dim)).transpose(
+        -2, -3
+    )
 
 
 def _make_inputs(
@@ -130,9 +130,7 @@ def _make_inputs(
     if bias_prefix_override is not None:
         if len(bias_prefix_override) != len(prefix) or any(
             bias not in (1, target)
-            for target, bias in zip(
-                prefix, bias_prefix_override, strict=True
-            )
+            for target, bias in zip(prefix, bias_prefix_override, strict=True)
         ):
             raise ValueError(
                 "--bias-prefix must match the target prefix rank and each "
@@ -150,11 +148,7 @@ def _make_inputs(
         )
         * 0.1
     ).to(torch.bfloat16)
-    pair_bias = (
-        pair_bias_physical.movedim(-1, -3)
-        .unsqueeze(-4)
-        .requires_grad_(True)
-    )
+    pair_bias = pair_bias_physical.movedim(-1, -3).unsqueeze(-4).requires_grad_(True)
 
     mask = torch.zeros(
         prefix + (sequence, 1, 1, sequence),
@@ -164,9 +158,7 @@ def _make_inputs(
     if fully_masked:
         mask.fill_(float("-inf"))
     else:
-        masked_keys = 1 if sequence == 1 else min(
-            sequence - 1, max(1, sequence // 17)
-        )
+        masked_keys = 1 if sequence == 1 else min(sequence - 1, max(1, sequence // 17))
         mask[..., -masked_keys:] = -1.0e9
 
     d_output = torch.randn(
@@ -265,9 +257,7 @@ def _broadcast_bias_reference(
     )
     observed_cpu = observed_dbias.detach().cpu().contiguous()
     mismatch = int(torch.count_nonzero(observed_cpu != reference).item())
-    max_abs = float(
-        (observed_cpu.float() - reference.float()).abs().max().item()
-    )
+    max_abs = float((observed_cpu.float() - reference.float()).abs().max().item())
     return {
         "target_prefix": list(prefix),
         "bias_prefix": list(bias_prefix),
@@ -377,7 +367,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         inputs["pair_bias"],
     )
     if not supported:
-        raise RuntimeError(f"TurboPairFormer facade rejected smoke case: {support_reason}")
+        raise RuntimeError(
+            f"TurboPairFormer facade rejected smoke case: {support_reason}"
+        )
     if not layout_contract["passed"]:
         failed = [
             name
@@ -395,7 +387,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.cuda_profiler_range:
         torch.cuda.cudart().cudaProfilerStart()
     try:
-        torch.cuda.nvtx.range_push("turbopairformer.public_facade.full_forward_backward")
+        torch.cuda.nvtx.range_push(
+            "turbopairformer.public_facade.full_forward_backward"
+        )
         try:
             output, gradients = _forward_backward(inputs)
         finally:
@@ -428,23 +422,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "dV": gradients[2],
         "dBias": gradients[3],
     }
-    results = {
-        name: _result_receipt(value) for name, value in named_results.items()
-    }
+    results = {name: _result_receipt(value) for name, value in named_results.items()}
+    finite_per_tensor = {name: value["finite"] for name, value in results.items()}
     finite = {
-        "per_tensor": {name: value["finite"] for name, value in results.items()}
+        "per_tensor": finite_per_tensor,
+        "passed": all(finite_per_tensor.values()),
     }
-    finite["passed"] = all(finite["per_tensor"].values())
+    zero_per_tensor = {
+        name: int(torch.count_nonzero(value).item()) == 0
+        for name, value in named_results.items()
+    }
     fully_masked_zero = {
         "required": bool(args.fully_masked),
-        "per_tensor": {
-            name: int(torch.count_nonzero(value).item()) == 0
-            for name, value in named_results.items()
-        },
+        "per_tensor": zero_per_tensor,
     }
     fully_masked_zero["passed"] = bool(
-        not fully_masked_zero["required"]
-        or all(fully_masked_zero["per_tensor"].values())
+        not fully_masked_zero["required"] or all(zero_per_tensor.values())
     )
     broadcast_bias_reference = {
         "required": bool(args.check_broadcast_reference),
@@ -488,7 +481,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     properties = torch.cuda.get_device_properties(args.device)
     return {
         "schema_version": 1,
-        "purpose": "production TurboPairFormer Triangle Attention full F+B sanitizer smoke",
+        "purpose": (
+            "production TurboPairFormer Triangle Attention full F+B sanitizer smoke"
+        ),
         "verdict": "PASS" if verdict else "FAIL",
         "case": {
             "prefix": list(prefix),

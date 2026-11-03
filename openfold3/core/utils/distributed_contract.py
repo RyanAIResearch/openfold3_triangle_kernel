@@ -188,7 +188,9 @@ def installed_distribution_identity() -> dict[str, Any]:
         raise DistributedContractError(
             "installed wheel does not contain one distributed contract module"
         )
-    installed_runtime = Path(distribution.locate_file(runtime_members[0])).resolve()
+    installed_runtime = Path(
+        str(distribution.locate_file(runtime_members[0]))
+    ).resolve()
     if installed_runtime != Path(__file__).resolve():
         raise DistributedContractError(
             "current OpenFold3 import is not the verified installed wheel"
@@ -199,7 +201,7 @@ def installed_distribution_identity() -> dict[str, Any]:
         relative = str(member)
         if not relative.startswith("openfold3/") or member.hash is None:
             continue
-        path = Path(distribution.locate_file(member))
+        path = Path(str(distribution.locate_file(member)))
         if not path.is_file():
             raise DistributedContractError(
                 f"installed wheel member is missing: {relative}"
@@ -366,7 +368,9 @@ def _validate_kernel_records(records: list[dict[str, Any]]) -> None:
     """Validate gathered rank records without inspecting training state."""
 
     if not records:
-        raise DistributedContractError("no TurboPairFormer kernel rank records gathered")
+        raise DistributedContractError(
+            "no TurboPairFormer kernel rank records gathered"
+        )
     failures = {
         record.get("global_rank", index): record.get("error", "unknown error")
         for index, record in enumerate(records)
@@ -574,7 +578,8 @@ class TurboPairFormerKernelDDPCallback(pl.Callback):
         dist.broadcast_object_list(receipt_status, src=0)
         if not receipt_status[0] or not receipt_status[0].get("ok"):
             raise DistributedContractError(
-                f"failed to seal TurboPairFormer kernel DDP receipt: {receipt_status[0]}"
+                "failed to seal TurboPairFormer kernel DDP receipt: "
+                f"{receipt_status[0]}"
             )
 
         local_readback = _receipt_readback_status(
@@ -592,7 +597,8 @@ class TurboPairFormerKernelDDPCallback(pl.Callback):
         }
         if failures:
             raise DistributedContractError(
-                f"TurboPairFormer kernel receipt is not readable on every rank: {failures}"
+                "TurboPairFormer kernel receipt is not readable on every rank: "
+                f"{failures}"
             )
 
         final_status: list[dict[str, Any] | None] = [None]
@@ -615,7 +621,8 @@ class TurboPairFormerKernelDDPCallback(pl.Callback):
         dist.broadcast_object_list(final_status, src=0)
         if not final_status[0] or not final_status[0].get("ok"):
             raise DistributedContractError(
-                f"failed to finalize TurboPairFormer kernel DDP receipt: {final_status[0]}"
+                "failed to finalize TurboPairFormer kernel DDP receipt: "
+                f"{final_status[0]}"
             )
 
         final_readback = _receipt_readback_status(

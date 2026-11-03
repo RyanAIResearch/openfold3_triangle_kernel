@@ -35,7 +35,10 @@ from ml_collections import ConfigDict
 import openfold3.core.config.default_linear_init_config as lin_init
 from openfold3.core.kernels.cueq_utils import is_cuequivariance_available
 from openfold3.core.model.primitives.linear import Linear
-from openfold3.core.utils.checkpointing import get_checkpoint_fn
+from openfold3.core.utils.checkpointing import (
+    get_checkpoint_fn,
+    is_inference_without_checkpoint,
+)
 from openfold3.core.utils.device_utils import autocast_device_type
 from openfold3.core.utils.tensor_utils import flatten_final_dims
 
@@ -370,6 +373,7 @@ class Attention(nn.Module):
         lma_kv_chunk_size: int = DEFAULT_LMA_KV_CHUNK_SIZE,
         use_high_precision: bool = False,
         use_protenix_triangle_attention: bool = False,
+        _allow_fp32_inference: bool = True,
     ) -> torch.Tensor:
         """
         Args:
@@ -490,18 +494,40 @@ class Attention(nn.Module):
             biases = []
 
         if use_stable_triangle_attention:
-            # Blanket-coverage soft gate, mirroring the cuEq fallback
-            # contract: shapes outside the TurboPairFormer facade fall back to the
-            # stock path (identical math, never a silent wrong result).
+            native_fp32_inference = (
+                q_x.dtype == torch.float32
+                and _allow_fp32_inference
+                and is_inference_without_checkpoint(self, q_x, kv_x, *biases)
+                and (
+                    not torch.is_autocast_enabled("cuda")
+                    or torch.get_autocast_dtype("cuda") == torch.float32
+                )
+            )
+            # A parent can preserve the original input's eligibility through
+            # normalization, which erases requires_grad during no_grad forwards.
+            # CUDA autocast can be enabled with dtype FP32 (as in the
+            # confidence head). Only lower-precision autocast keeps the
+            # established mixed-precision route.
+            # Preserve the established training/BF16 coverage gate. Explicit
+            # FP32 inference requests fail on unsupported inputs instead of
+            # silently substituting the stock implementation.
             # Mask-only sites (e.g. MSA column attention) get the cached zero
             # pair bias so the two-bias facade contract holds.
-            hidden_dim = q_x.shape[-1] // self.no_heads
+            hidden_dim = (
+                self.c_hidden
+                if native_fp32_inference
+                else q_x.shape[-1] // self.no_heads
+            )
             if len(biases) == 1 and q_x.ndim >= 4:
                 heads_l = self.no_heads
                 n_res = q_x.shape[-2]
                 lead = int(biases[0].shape[0]) if biases[0].ndim >= 1 else 1
                 zero_pb = _get_zero_pair_bias(
-                    q_x.device, torch.bfloat16, lead, heads_l, n_res
+                    q_x.device,
+                    torch.float32 if native_fp32_inference else torch.bfloat16,
+                    lead,
+                    heads_l,
+                    n_res,
                 )
                 target = biases[0].ndim
                 while zero_pb.ndim < target:
@@ -514,11 +540,16 @@ class Attention(nn.Module):
                 blanket_reasons.append("requires CUDA inputs")
             if hidden_dim > 64:
                 blanket_reasons.append("head dimension exceeds 64")
-            if q_x.shape[-2] < 2:
+            if q_x.shape[-2] < (1 if native_fp32_inference else 2):
                 blanket_reasons.append("sequence length is below 2")
             if q_x.is_cuda and torch.cuda.get_device_capability(q_x.device) != (9, 0):
                 blanket_reasons.append("requires Hopper compute capability 9.0")
             if blanket_reasons:
+                if native_fp32_inference:
+                    raise ValueError(
+                        "unsupported TurboPairFormer FP32 inference attention: "
+                        + "; ".join(blanket_reasons)
+                    )
                 _raise_if_strict_turbopairformer_fallback(
                     "; ".join(blanket_reasons), tuple(q_x.shape)
                 )
@@ -575,11 +606,14 @@ class Attention(nn.Module):
             # replay-bitwise vs itself, zero FP atomics. Triangle-site shapes
             # always validate; blanket-coverage sites with residual shape
             # mismatches fall back to stock math (correct, logged once).
-            # fp32 call sites (e.g. aux heads under the training-time fp32
-            # autocast) are served by a bf16 cast, mirroring the Triton path;
-            # native bf16 sites pass through untouched.
+            # Inference keeps FP32 operands for the dedicated FP32/TF32 path.
+            # Training retains the established BF16 forward/backward contract,
+            # including FP32 auxiliary-head inputs under mixed precision.
             orig_dtype = q.dtype
-            if orig_dtype != torch.bfloat16:
+            cast_for_bf16 = orig_dtype != torch.bfloat16 and not (
+                orig_dtype == torch.float32 and native_fp32_inference
+            )
+            if cast_for_bf16:
                 q_s, k_s, v_s = (
                     q.to(torch.bfloat16),
                     k.to(torch.bfloat16),
@@ -596,9 +630,14 @@ class Attention(nn.Module):
                 o = turbopairformer_triangle_attention(
                     q_s, k_s, v_s, bias_s[0], bias_s[1]
                 )
-                if orig_dtype != torch.bfloat16:
+                if cast_for_bf16:
                     o = o.to(orig_dtype)
             else:
+                if orig_dtype == torch.float32 and native_fp32_inference:
+                    raise ValueError(
+                        "unsupported TurboPairFormer FP32 inference attention: "
+                        f"{reason}"
+                    )
                 _raise_if_strict_turbopairformer_fallback(reason, tuple(q.shape))
                 global _TURBOPAIRFORMER_FALLBACK_LOGGED
                 key = (reason, tuple(q.shape))

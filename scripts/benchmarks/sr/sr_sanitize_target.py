@@ -30,8 +30,7 @@ for batch, outer, heads, seq, dim in (
     v = torch.randn(shape, device="cuda", dtype=torch.bfloat16, requires_grad=True)
     mask = torch.zeros(batch, outer, 1, 1, seq, device="cuda", dtype=torch.float32)
     bias = (
-        0.1
-        * torch.randn(batch, 1, heads, seq, seq, device="cuda", dtype=torch.float32)
+        0.1 * torch.randn(batch, 1, heads, seq, seq, device="cuda", dtype=torch.float32)
     ).requires_grad_()
     out = turbopairformer_triangle_attention(q, k, v, mask, bias)
     torch.autograd.grad(out, (q, k, v, bias), grad_outputs=torch.ones_like(out))

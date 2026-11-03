@@ -48,6 +48,22 @@ pip install turbopairformer==0.1.1
 pip install turbopairformer==0.1.0
 ```
 
+### Integrated OpenFold3 environment
+
+From this repository on Linux x86-64 with a Hopper GPU, install and verify the
+repository-pinned OpenFold3 runtime with Pixi:
+
+```bash
+pixi install -e openfold3-cuda12
+pixi run -e openfold3-cuda12 doctor-hopper
+pixi run -e openfold3-cuda12 verify-aot
+```
+
+This environment installs the existing pinned binary. Changes to the source
+checkout do not update that wheel or the standalone PyPI release. See the
+[OpenFold3 training quick start](docs/source/bare_metal_distributed_quickstart.md)
+for its validation scope and training commands.
+
 ## Offline CLI Documentation
 
 TurboPairFormer includes built-in offline API documentation. It requires no PyTorch import, GPU, compiler, or network connection:
@@ -108,8 +124,13 @@ from turbopairformer import turbo_trimul
 
 # Input z: [*B, N, N, C] where N > 100 and C in {32, 64, 96, 128}
 z = torch.randn(
-    1, 128, 128, 128,
-    device="cuda", dtype=torch.bfloat16, requires_grad=True,
+    1,
+    128,
+    128,
+    128,
+    device="cuda",
+    dtype=torch.bfloat16,
+    requires_grad=True,
 )
 
 # direction accepts "outgoing" (default) or "incoming"

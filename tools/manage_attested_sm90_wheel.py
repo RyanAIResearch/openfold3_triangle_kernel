@@ -50,13 +50,26 @@ PREBUILT_FILE_SHA256 = {
     ),
 }
 MANIFEST_MEMBER = "openfold3/core/kernels/turbopairformer/_build_manifest.json"
-MODULE_KEYS = (
+PREBUILT_MODULE_KEYS = (
     "turbopairformer_forward",
     "turbopairformer_delta",
     "turbopairformer_dkdv",
     "turbopairformer_dq_dbias",
     "turbopairformer_trimul",
 )
+
+MODULE_KEYS = (
+    "turbopairformer_attention_fp32",
+    "turbopairformer_trimul_fp32",
+    *PREBUILT_MODULE_KEYS,
+)
+
+
+def _module_keys_for_wheel(wheel_sha256: str) -> tuple[str, ...]:
+    """Only the exact pinned historical binary may retain the five-module ABI."""
+    if wheel_sha256 == PREBUILT_FILE_SHA256[PREBUILT_WHEEL]:
+        return PREBUILT_MODULE_KEYS
+    return MODULE_KEYS
 
 
 class ArtifactError(RuntimeError):
@@ -221,8 +234,12 @@ def discover_bundle(
             installed_distribution = _wheel_distribution_identity(archive)
             members = set(archive.namelist())
             extensions = manifest["extensions"]
-            if set(extensions) != set(MODULE_KEYS):
-                raise ArtifactError("wheel does not contain exactly five AOT modules")
+            module_keys = _module_keys_for_wheel(wheel_sha256)
+            if set(extensions) != set(module_keys):
+                raise ArtifactError(
+                    "wheel AOT modules do not match the required contract: "
+                    f"expected {sorted(module_keys)}, got {sorted(extensions)}"
+                )
             for key, extension in extensions.items():
                 filename = extension["filename"]
                 if filename not in members:
@@ -504,6 +521,7 @@ def _verification_program(bundle: ArtifactBundle, expected_commit: str) -> str:
         _canonical_aot_identity(_expected_aot_identity(bundle)), sort_keys=True
     )
     expected_distribution = json.dumps(bundle.installed_distribution, sort_keys=True)
+    module_keys = _module_keys_for_wheel(bundle.wheel_sha256)
     runtime_module = "openfold3.core.kernels.turbopairformer._aot_runtime"
     if bundle.wheel_sha256 == PREBUILT_FILE_SHA256[PREBUILT_WHEEL]:
         runtime_module = "openfold3.core.kernels.cuda._aot_runtime"
@@ -530,7 +548,7 @@ for key, expected in expected_distribution.items():
             f'{{distribution.get(key)}} != {{expected}}'
         )
 from {runtime_module} import distributed_aot_identity
-identity = distributed_aot_identity({MODULE_KEYS!r})
+identity = distributed_aot_identity({module_keys!r})
 expected_aot = json.loads({expected_aot!r})
 for extension in identity.get('extensions', {{}}).values():
     symbols = extension.get('symbols')
@@ -615,7 +633,7 @@ def ensure_bundle(bundle: ArtifactBundle, expected_commit: str) -> dict[str, Any
 
 
 def build_bundle() -> None:
-    """Run the one canonical five-extension builder."""
+    """Run the canonical seven-extension builder for the current source."""
 
     environment = os.environ.copy()
     conda_prefix = environment.get("CONDA_PREFIX")

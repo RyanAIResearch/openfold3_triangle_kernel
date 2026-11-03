@@ -1571,7 +1571,7 @@ class TemplatePreprocessorInputInference(BaseModel):
         )
 
     @model_validator(mode="after")
-    def validate_inputs(self) -> "TemplatePreprocessorInputInference":
+    def validate_inputs(self) -> TemplatePreprocessorInputInference:
         """Validate template input consistency."""
         if self.aln_path is not None and self.template_cif_paths is not None:
             raise ValueError(
@@ -1704,7 +1704,7 @@ class TemplatePreprocessorSettings(BaseModel):
     _run_owned_output_directory: Path | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
-    def _prepare_output_directories(self) -> "TemplatePreprocessorSettings":
+    def _prepare_output_directories(self) -> TemplatePreprocessorSettings:
         # TODO: add .pdb support
         if self.structure_file_format not in ["cif", "npz"]:
             raise NotImplementedError(

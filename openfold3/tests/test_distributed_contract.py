@@ -11,8 +11,10 @@ import json
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from pytorch_lightning import LightningModule, Trainer
 
 from openfold3.core.utils import distributed_contract
 from openfold3.core.utils.distributed_contract import (
@@ -49,7 +51,7 @@ def _config(
                     "use_stable_triangle_attention": eval_attention,
                     "use_stable_triangle_multiplicative": eval_trimul,
                 },
-            )
+            ),
         )
     )
 
@@ -102,7 +104,9 @@ def test_unset_sr_flags_resolve_to_explicit_production_defaults(monkeypatch):
     }
     validate_turbopairformer_attention_policy()
     assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_SHADOW")
-    assert not turbopairformer_distributed_execution_flag("OPENFOLD3_TRIANGLE_ALLOW_JIT")
+    assert not turbopairformer_distributed_execution_flag(
+        "OPENFOLD3_TRIANGLE_ALLOW_JIT"
+    )
 
     monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1")
     monkeypatch.setenv("OPENFOLD3_SR_SHADOW", "1")
@@ -143,7 +147,9 @@ def test_attention_policy_rejects_disabled_frozen_flag(monkeypatch):
     _set_turbopairformer_distributed_strict(True, expected)
     try:
         monkeypatch.setenv("OPENFOLD3_SR_BACKWARD", "1")
-        with pytest.raises(RuntimeError, match="requires single-reconstruction backward"):
+        with pytest.raises(
+            RuntimeError, match="requires single-reconstruction backward"
+        ):
             validate_turbopairformer_attention_policy()
     finally:
         _set_turbopairformer_distributed_strict(False)
@@ -161,7 +167,9 @@ def test_strict_execution_flags_are_immutable(monkeypatch):
     try:
         assert turbopairformer_distributed_strict_enabled()
         assert turbopairformer_distributed_execution_flag("OPENFOLD3_SR_BACKWARD")
-        assert not turbopairformer_distributed_execution_flag("OPENFOLD3_TRIANGLE_ALLOW_JIT")
+        assert not turbopairformer_distributed_execution_flag(
+            "OPENFOLD3_TRIANGLE_ALLOW_JIT"
+        )
 
         monkeypatch.setenv("OPENFOLD3_SR_SHADOW", "0")
         with pytest.raises(DistributedContractError, match="environment changed"):
@@ -466,7 +474,9 @@ def test_fit_start_rejects_missing_kernel_preflight(tmp_path: Path):
         receipt_path=tmp_path / "turbopairformer_kernel_ddp.json",
     )
     with pytest.raises(DistributedContractError, match="process group"):
-        callback.on_fit_start(SimpleNamespace(), SimpleNamespace())
+        callback.on_fit_start(
+            cast(Trainer, SimpleNamespace()), cast(LightningModule, SimpleNamespace())
+        )
 
 
 def test_training_runner_keeps_aqlab_ddp_and_adds_only_kernel_callback(

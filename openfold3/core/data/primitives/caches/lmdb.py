@@ -16,7 +16,7 @@ import json
 import pickle as pkl
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Generic, Literal, TypeVar, Union
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 import lmdb
 from tqdm import tqdm
@@ -53,7 +53,7 @@ class LMDBEnv:
 
 
 def convert_datacache_to_lmdb(
-    dataset_cache_file_or_obj: Union[Path, "DatasetCache"],
+    dataset_cache_file_or_obj: Path | DatasetCache,
     lmdb_directory: Path,
     map_size: int,
     mode: Literal["single-read", "iterative"] = "single-read",
@@ -154,7 +154,7 @@ def convert_datacache_to_lmdb(
         raise ValueError(f"Invalid mode: {mode}. Must be 'single-read' or 'iterative'.")
 
 
-class LMDBDict(Mapping[K, V], Generic[K, V]):
+class LMDBDict[K, V](Mapping[K, V]):
     def __init__(
         self,
         lmdb_env: LMDBEnv,

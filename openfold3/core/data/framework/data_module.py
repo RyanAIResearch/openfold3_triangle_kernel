@@ -129,7 +129,7 @@ class MultiDatasetConfig:
     def __len__(self):
         return len(self.classes)
 
-    def get_subset(self, index: list[bool]) -> "MultiDatasetConfig":
+    def get_subset(self, index: list[bool]) -> MultiDatasetConfig:
         """Returns a subset of the MultiDatasetConfig.
 
         Args:
@@ -151,7 +151,7 @@ class MultiDatasetConfig:
             weights=apply_bool(self.weights, index),
         )
 
-    def get_config_for_mode(self, mode: DatasetMode) -> "MultiDatasetConfig":
+    def get_config_for_mode(self, mode: DatasetMode) -> MultiDatasetConfig:
         datasets_stage_mask = [m == mode for m in self.modes]
         return self.get_subset(datasets_stage_mask)
 
@@ -659,7 +659,7 @@ class DataModule(pl.LightningDataModule):
 class InferenceDataModule(DataModule):
     """LightningDataModule that contains a prepare_data hook for inference."""
 
-    inference_config: "InferenceJobConfig"
+    inference_config: InferenceJobConfig
 
     def __init__(
         self,

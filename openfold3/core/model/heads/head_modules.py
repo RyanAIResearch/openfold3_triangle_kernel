@@ -105,6 +105,7 @@ class AuxiliaryHeadsAllAtom(nn.Module):
         offload_inference: bool = False,
         _mask_trans: bool = True,
         pairformer_dtype: torch.dtype = torch.float32,
+        use_stable_triangle_multiplicative: bool = False,
     ):
         """
         Args:
@@ -142,6 +143,10 @@ class AuxiliaryHeadsAllAtom(nn.Module):
                 Whether to offload some computation to CPU
             _mask_trans:
                 Whether to mask the output of the transition layers
+            use_stable_triangle_multiplicative:
+                Whether to use Turbo triangular multiplicative updates. The
+                model enables this route only for explicitly configured FP32
+                inference, preserving the training and mixed-BF16 defaults.
 
         Returns:
             aux_out:
@@ -210,6 +215,7 @@ class AuxiliaryHeadsAllAtom(nn.Module):
             use_deepspeed_evo_attention=use_deepspeed_evo_attention,
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
+            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_lma=use_lma,
             inplace_safe=inplace_safe,

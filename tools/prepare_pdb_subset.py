@@ -7,11 +7,15 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-try:
+if TYPE_CHECKING:
     from tools.validate_training_data import validate_runner_yaml
-except ModuleNotFoundError:
-    from validate_training_data import validate_runner_yaml
+else:
+    try:
+        from tools.validate_training_data import validate_runner_yaml
+    except ModuleNotFoundError:
+        from validate_training_data import validate_runner_yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 VAL_SIZE = 4
@@ -40,7 +44,7 @@ def prepare_subset(
     target_dir = target_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
     common = ("--target-dir", str(target_dir), "--train-size", str(train_size))
-    generate_arguments = (
+    generate_arguments: tuple[str, ...] = (
         *common,
         "--seed",
         str(seed),

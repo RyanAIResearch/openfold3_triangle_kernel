@@ -16,11 +16,11 @@
 
 import logging
 from collections.abc import Generator
+from typing import Self
 
 import numpy as np
 from biotite.structure import AtomArray
 from scipy.spatial import KDTree
-from typing_extensions import Self
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +307,7 @@ def chain_paired_interface_atom_iter(
     atom_array: AtomArray,
     distance_threshold: float = 5.0,
     ignore_covalent: bool = False,
-) -> Generator[tuple[tuple[int, int], np.ndarray[np.integer, np.integer]], None, None]:
+) -> Generator[tuple[tuple[int, int], np.ndarray[np.integer, np.integer]]]:
     """Yields interface atom pairs grouped by unique chain pairs.
 
     Interface atoms are defined as atoms that are within a given distance threshold of

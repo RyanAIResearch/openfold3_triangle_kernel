@@ -105,11 +105,13 @@ class EvoformerBlock(MSABlock):
         _offload_inference: bool = False,
         _offloadable_inputs: Sequence[torch.Tensor] | None = None,
         use_protenix_triangle_attention: bool = False,
+        use_stable_triangle_multiplicative: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if use_protenix_triangle_attention:
             if any(
                 (
                     use_stable_triangle_attention,
+                    use_stable_triangle_multiplicative,
                     use_deepspeed_evo_attention,
                     use_triton_triangle_kernels,
                     use_lma,
@@ -251,6 +253,7 @@ class EvoformerBlock(MSABlock):
             use_cueq_triangle_kernels=use_cueq_triangle_kernels,
             use_stable_triangle_attention=use_stable_triangle_attention,
             use_protenix_triangle_attention=use_protenix_triangle_attention,
+            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
             use_triton_triangle_kernels=use_triton_triangle_kernels,
             use_lma=use_lma,
             inplace_safe=inplace_safe,

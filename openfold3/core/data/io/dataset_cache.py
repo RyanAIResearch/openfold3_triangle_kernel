@@ -20,7 +20,7 @@ import re
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import IO, TYPE_CHECKING, Any, Literal
 
 import lmdb
 
@@ -89,14 +89,12 @@ def convert_dataclass_to_dict(dataclass: Any) -> dict:
         PreprocessingDataCache,
     )
 
-    DataCacheType: TypeAlias = PreprocessingDataCache | DatasetCache
-
     datacache_dict = asdict(dataclass)
 
     # Remove private fields
     datacache_dict = {k: v for k, v in datacache_dict.items() if not k.startswith("_")}
 
-    if isinstance(dataclass, DataCacheType):
+    if isinstance(dataclass, PreprocessingDataCache | DatasetCache):
         # Add type (which is not a field but an attribute) as the very first(!) key of
         # the dict
         datacache_dict = {"_type": dataclass._type, **datacache_dict}
@@ -106,7 +104,7 @@ def convert_dataclass_to_dict(dataclass: Any) -> dict:
     return datacache_dict
 
 
-def write_datacache_to_json(datacache: "DataCacheType", output: Path | IO[str]) -> None:
+def write_datacache_to_json(datacache: DataCacheType, output: Path | IO[str]) -> None:
     """Writes a DataCache dataclass to JSON.
 
     This ignores any private fields (those starting with an underscore) in the
@@ -128,7 +126,7 @@ def write_datacache_to_json(datacache: "DataCacheType", output: Path | IO[str]) 
         json.dump(datacache_dict, output, indent=4, allow_nan=False)
 
 
-def _read_datacache_file(datacache_path: Path) -> "DataCacheType":
+def _read_datacache_file(datacache_path: Path) -> DataCacheType:
     """Loads a datacache from a json file"""
     with open(datacache_path) as f:
         next(f)
@@ -155,7 +153,7 @@ def read_datacache(
     str_encoding: Literal["utf-8", "pkl"] = "utf-8",
     structure_data_encoding: Literal["utf-8", "pkl"] = "pkl",
     reference_molecule_data_encoding: Literal["utf-8", "pkl"] = "pkl",
-) -> "DataCacheType":
+) -> DataCacheType:
     """Reads a DataCache dataclass from a JSON file.
 
     Args:

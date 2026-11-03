@@ -131,6 +131,8 @@ openfold3 = [
     "projects/*/config/*.yml",
     "tests/test_data/**/*",
     "scripts/*.sh",
+    "core/kernels/turbopairformer/turbopairformer_attention_fp32.cu",
+    "core/kernels/turbopairformer/turbopairformer_trimul_fp32.cu",
     "core/kernels/turbopairformer/turbopairformer_triangle_forward.cu",
     "core/kernels/turbopairformer/turbopairformer_triangle_delta.cu",
     "core/kernels/turbopairformer/turbopairformer_triangle_dkdv.cu",
@@ -173,6 +175,11 @@ ignore = [
     "B905",  # explicit strict= for zip
 ]
 extend-safe-fixes = ["UP006"]
+
+# Historical, byte-frozen validators still import the former kernel namespace.
+# Classify it as project code even when that namespace is absent on disk.
+[tool.ruff.lint.isort]
+known-first-party = ["openfold3"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

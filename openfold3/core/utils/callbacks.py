@@ -290,8 +290,8 @@ class RankSpecificSeedCallback(pl.Callback):
 
     def setup(
         self,
-        trainer: "pl.Trainer",  # noqa: F821
-        pl_module: "pl.LightningModule",  # noqa: F821
+        trainer: pl.Trainer,  # noqa: F821
+        pl_module: pl.LightningModule,  # noqa: F821
         stage: str,
     ) -> None:
         """

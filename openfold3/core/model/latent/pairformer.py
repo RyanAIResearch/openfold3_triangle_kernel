@@ -401,13 +401,32 @@ class PairFormerStack(nn.Module):
                 use_cueq_triangle_kernels
                 or use_triton_triangle_kernels
                 or use_deepspeed_evo_attention
+                or use_stable_triangle_attention
             )
+            # Keep the full representative tensors and selected backend in the
+            # tuner cache key; changing routes must trigger a fresh probe.
+            backend_signature = (
+                use_deepspeed_evo_attention,
+                use_cueq_triangle_kernels,
+                use_triton_triangle_kernels,
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_protenix_triangle_attention,
+                use_lma,
+                inplace_safe,
+                _mask_trans,
+            )
+
+            def representative_block(s, z, _backend_signature, chunk_size):
+                return blocks[0](s, z, chunk_size=chunk_size)
+
             tuned_chunk_size = self.chunk_size_tuner.tune_chunk_size(
-                representative_fn=blocks[0],
+                representative_fn=representative_block,
                 # We don't want to write in-place during chunk tuning runs
                 args=(
                     s.clone(),
                     z.clone(),
+                    backend_signature,
                 ),
                 max_chunk_size=chunk_size,
             )
@@ -492,11 +511,6 @@ class PairFormerStack(nn.Module):
                     "Protenix requires unchunked, non-inplace execution "
                     "without inference offload"
                 )
-
-        if use_stable_triangle_attention and chunk_size is not None:
-            raise ValueError(
-                "stable Triangle Attention does not support chunked Pairformer stacks"
-            )
 
         blocks = self._prep_blocks(
             s=s,

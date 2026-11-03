@@ -35,7 +35,7 @@ class SeqMoltype(NamedTuple):
 
 def _iter_fasta_records(
     input_path: Path,
-) -> Generator[tuple[str, str, int], None, None]:
+) -> Generator[tuple[str, str, int]]:
     """Yields (header, sequence, line_number) tuples from a FASTA file.
 
     The header is returned without the leading ``>`` and stripped of whitespace.

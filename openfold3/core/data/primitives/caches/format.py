@@ -20,7 +20,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, TypeAlias, TypeVar
+from typing import Literal, TypeVar
 
 import lmdb
 
@@ -361,10 +361,10 @@ class DisorderedPreprocessingStructureData(PreprocessingStructureData):
     distance_clash_map: dict[float, bool]
 
 
-PreprocessingStructureDataCache: TypeAlias = dict[str, PreprocessingStructureData]
+type PreprocessingStructureDataCache = dict[str, PreprocessingStructureData]
 """Structure data cache from preprocessing metadata_cache."""
 
-DisorderedPreprocessingStructureDataCache: TypeAlias = dict[
+type DisorderedPreprocessingStructureDataCache = dict[
     str, DisorderedPreprocessingStructureData
 ]
 """Structure data cache from disordered preprocessing metadata_cache."""
@@ -392,9 +392,7 @@ class PreprocessingReferenceMoleculeData:
     fallback_conformer_source: str | None = None
 
 
-PreprocessingReferenceMoleculeCache: TypeAlias = dict[
-    str, PreprocessingReferenceMoleculeData
-]
+type PreprocessingReferenceMoleculeCache = dict[str, PreprocessingReferenceMoleculeData]
 
 
 # ==============================================================================
@@ -699,13 +697,11 @@ class DatasetReferenceMoleculeData:
     fallback_conformer_source: str | None = None
 
 
-DictOrLMDBDict: TypeAlias = dict[K, V] | LMDBDict[K, V]
+type DictOrLMDBDict[K, V] = dict[K, V] | LMDBDict[K, V]
 
 # Reference molecule data should be the same for all datasets so we provide it here as a
 # general type.
-DatasetReferenceMoleculeCache: TypeAlias = DictOrLMDBDict[
-    str, DatasetReferenceMoleculeData
-]
+type DatasetReferenceMoleculeCache = DictOrLMDBDict[str, DatasetReferenceMoleculeData]
 
 
 # ==============================================================================
@@ -871,16 +867,14 @@ class RNAMonomerStructureData:
     chains: dict[str, RNAMonomerChainData]
 
 
-ClusteredDatasetStructureDataCache: TypeAlias = DictOrLMDBDict[
+type ClusteredDatasetStructureDataCache = DictOrLMDBDict[
     str, ClusteredDatasetStructureData
 ]
-ValClusteredDatasetStructureDataCache: TypeAlias = DictOrLMDBDict[
+type ValClusteredDatasetStructureDataCache = DictOrLMDBDict[
     str, ValidationDatasetStructureData
 ]
-ProteinMonomerStructureDataCache: TypeAlias = DictOrLMDBDict[
-    str, ProteinMonomerStructureData
-]
-RNAMonomerStructureDataCache: TypeAlias = DictOrLMDBDict[str, RNAMonomerStructureData]
+type ProteinMonomerStructureDataCache = DictOrLMDBDict[str, ProteinMonomerStructureData]
+type RNAMonomerStructureDataCache = DictOrLMDBDict[str, RNAMonomerStructureData]
 
 
 # --- Reference molecule dataclasses ---
@@ -1003,13 +997,13 @@ class RNAMonomerDatasetCache(DatasetCache):
 
 
 # Grouped type-aliases for more convenient type-hinting of general-purpose functions
-ChainData: TypeAlias = (
+type ChainData = (
     PreprocessingChainData
     | PDBChainData
     | ProteinMonomerChainData
     | RNAMonomerChainData
 )
-StructureDataCache: TypeAlias = (
+type StructureDataCache = (
     PreprocessingStructureDataCache
     | DisorderedPreprocessingStructureDataCache
     | ClusteredDatasetStructureDataCache
@@ -1017,7 +1011,7 @@ StructureDataCache: TypeAlias = (
     | ProteinMonomerStructureDataCache
     | RNAMonomerStructureDataCache
 )
-ReferenceMoleculeCache: TypeAlias = (
+type ReferenceMoleculeCache = (
     PreprocessingReferenceMoleculeCache | DatasetReferenceMoleculeCache
 )
-DataCacheType: TypeAlias = PreprocessingDataCache | DatasetCache
+type DataCacheType = PreprocessingDataCache | DatasetCache

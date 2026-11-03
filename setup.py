@@ -38,6 +38,34 @@ NVCC_FLAGS = [
 ]
 
 EXTENSION_SPECS = {
+    "turbopairformer_attention_fp32": {
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_attention_fp32_sm90a"
+        ),
+        "source": "turbopairformer_attention_fp32.cu",
+        "symbols": [
+            "turbopairformer_attention_fp32_forward",
+            "turbopairformer_attention_fp32_module_projections",
+            "turbopairformer_attention_fp32_module_layer_norm",
+            "turbopairformer_attention_fp32_module_pair_bias",
+            "turbopairformer_attention_fp32_module_chunk_projections",
+            "turbopairformer_attention_fp32_gated_forward",
+        ],
+        "libraries": ["cublas"],
+    },
+    "turbopairformer_trimul_fp32": {
+        "module": (
+            "openfold3.core.kernels.turbopairformer._ext._turbopairformer_trimul_fp32_sm90a"
+        ),
+        "source": "turbopairformer_trimul_fp32.cu",
+        "symbols": [
+            "trimul_fp32_gate_pack_out",
+            "trimul_fp32_gate_output_out",
+            "trimul_fp32_input_fused_out",
+            "trimul_fp32_output_fused_out",
+            "trimul_fp32_normalize_input_out",
+        ],
+    },
     "turbopairformer_forward": {
         "module": (
             "openfold3.core.kernels.turbopairformer._ext._turbopairformer_forward_sm90a"
@@ -157,6 +185,8 @@ def _source_paths() -> list[Path]:
             "turbopairformer_triangle_attention.py",
             "turbopairformer_trimul.py",
             "turbopairformer_trimul_cuda.py",
+            "turbopairformer_attention_fp32.py",
+            "turbopairformer_trimul_fp32.py",
             "_aot_runtime.py",
         )
     )
@@ -283,6 +313,7 @@ if BUILD_AOT:
             # line-info does not capture a random mktemp source prefix.
             sources=[f"openfold3/core/kernels/turbopairformer/{value['source']}"],
             extra_compile_args={"cxx": CXX_FLAGS, "nvcc": NVCC_FLAGS},
+            libraries=value.get("libraries", []),
         )
         for value in EXTENSION_SPECS.values()
     ]

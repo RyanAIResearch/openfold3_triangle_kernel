@@ -103,7 +103,7 @@ class PerSampleGradManager:
         self._max_norm_tensor = None
 
     def setup(
-        self, model: torch.nn.Module, trainer: "pl.Trainer", logger: "pl.loggers.Logger"
+        self, model: torch.nn.Module, trainer: pl.Trainer, logger: pl.loggers.Logger
     ):
         """
         Initializes the gradient accumulator and links essential components.

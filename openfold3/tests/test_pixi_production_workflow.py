@@ -1,5 +1,9 @@
 import ast
+import base64
+import csv
 import hashlib
+import io
+import json
 import tomllib
 import zipfile
 from pathlib import Path
@@ -491,3 +495,211 @@ def test_artifact_publish_accepts_a_precreated_empty_directory(tmp_path, monkeyp
     assert {path.name for path in destination.iterdir()} == {
         path.name for path in paths
     }
+
+
+_CURRENT_MODULE_KEYS = (
+    "turbopairformer_attention_fp32",
+    "turbopairformer_trimul_fp32",
+    "turbopairformer_forward",
+    "turbopairformer_delta",
+    "turbopairformer_dkdv",
+    "turbopairformer_dq_dbias",
+    "turbopairformer_trimul",
+)
+
+
+def _current_test_bundle(
+    directory: Path,
+    module_keys: tuple[str, ...] = _CURRENT_MODULE_KEYS,
+    *,
+    filename: str = "openfold3-current.whl",
+    corrupt_binary: str | None = None,
+) -> artifact_manager.ArtifactBundle:
+    """Create a small real ZIP/RECORD/receipt bundle without loading CUDA."""
+    directory.mkdir(parents=True, exist_ok=True)
+    members = {"openfold3/__init__.py": b"# synthetic artifact fixture\n"}
+    extensions = {}
+    for key in module_keys:
+        member = f"openfold3/core/kernels/turbopairformer/_ext/_{key}.so"
+        payload = f"synthetic binary for {key}".encode()
+        extensions[key] = {
+            "module": f"openfold3.core.kernels.turbopairformer._ext._{key}",
+            "filename": member,
+            "symbols": ["test_entrypoint"],
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        members[member] = payload + (b"corrupted" if key == corrupt_binary else b"")
+    manifest = {
+        "schema_version": 1,
+        "built": True,
+        "git": {"commit": "a" * 40, "dirty": False},
+        "target": {
+            "cuda_arch": "sm_90a",
+            "ptx_embedded": False,
+            "torch_cuda_arch_list": "9.0a",
+        },
+        "abi": {
+            "python_soabi": "cpython-314-x86_64-linux-gnu",
+            "torch_version": "2.10.0",
+            "torch_cuda_version": "12.9",
+        },
+        "sources": {
+            "README.md": artifact_manager.sha256_file(REPOSITORY / "README.md")
+        },
+        "extensions": extensions,
+    }
+    manifest_bytes = json.dumps(manifest, sort_keys=True).encode()
+    members[artifact_manager.MANIFEST_MEMBER] = manifest_bytes
+    record = io.StringIO()
+    writer = csv.writer(record, lineterminator="\n")
+    for name, payload in members.items():
+        encoded = base64.urlsafe_b64encode(hashlib.sha256(payload).digest())
+        writer.writerow((name, "sha256=" + encoded.rstrip(b"=").decode(), len(payload)))
+    record_member = "openfold3-current.dist-info/RECORD"
+    writer.writerow((record_member, "", ""))
+    members[record_member] = record.getvalue().encode()
+    wheel = directory / filename
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, payload in members.items():
+            archive.writestr(name, payload)
+    digest = artifact_manager.sha256_file(wheel)
+    checksum = wheel.with_suffix(wheel.suffix + ".sha256")
+    checksum.write_text(f"{digest}  {wheel.name}\n")
+    receipt = {
+        "wheel": wheel.name,
+        "wheel_sha256": digest,
+        "embedded_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "git": manifest["git"],
+        "abi": manifest["abi"],
+        "target": manifest["target"],
+        "extension_sha256": {key: value["sha256"] for key, value in extensions.items()},
+    }
+    attestation = wheel.with_suffix(wheel.suffix + ".attestation.json")
+    attestation.write_text(json.dumps(receipt))
+    with zipfile.ZipFile(wheel) as archive:
+        distribution = artifact_manager._wheel_distribution_identity(archive)
+    smoke = directory / "aot_clean_install_smoke.json"
+    bundle = artifact_manager.ArtifactBundle(
+        wheel=wheel,
+        checksum=checksum,
+        attestation=attestation,
+        smoke=smoke,
+        wheel_sha256=digest,
+        manifest=manifest,
+        receipt=receipt,
+        installed_distribution=distribution,
+    )
+    smoke.write_text(
+        json.dumps(
+            {
+                "verdict": "PASS",
+                "aot_identity": artifact_manager._expected_aot_identity(bundle),
+                "installed_distribution": distribution,
+            }
+        )
+    )
+    return bundle
+
+
+def _verification_module_keys(bundle):
+    program = artifact_manager._verification_program(
+        bundle, bundle.manifest["git"]["commit"]
+    )
+    call = next(
+        node
+        for node in ast.walk(ast.parse(program))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "distributed_aot_identity"
+    )
+    return ast.literal_eval(call.args[0])
+
+
+def test_current_bundle_checks_and_copies_all_seven_modules(tmp_path):
+    expected = _current_test_bundle(tmp_path / "source")
+    bundle = discover_bundle(expected.wheel.parent, expected_commit="a" * 40)
+    assert set(bundle.manifest["extensions"]) == set(_CURRENT_MODULE_KEYS)
+    assert _verification_module_keys(bundle) == _CURRENT_MODULE_KEYS
+    copied = artifact_manager._copy_bundle(bundle, tmp_path / "copied", "a" * 40)
+    assert copied.wheel_sha256 == bundle.wheel_sha256
+    assert set(copied.manifest["extensions"]) == set(_CURRENT_MODULE_KEYS)
+
+
+@pytest.mark.parametrize("missing", _CURRENT_MODULE_KEYS)
+def test_current_bundle_rejects_any_missing_module(tmp_path, missing):
+    _current_test_bundle(
+        tmp_path, tuple(key for key in _CURRENT_MODULE_KEYS if key != missing)
+    )
+    with pytest.raises(ArtifactError, match="required contract"):
+        discover_bundle(tmp_path)
+
+
+def test_current_bundle_rejects_unexpected_modules(tmp_path):
+    _current_test_bundle(tmp_path, (*_CURRENT_MODULE_KEYS, "unexpected_extension"))
+    with pytest.raises(ArtifactError, match="required contract"):
+        discover_bundle(tmp_path)
+
+
+def test_historical_filename_does_not_authorize_five_module_contract(tmp_path):
+    _current_test_bundle(
+        tmp_path, _CURRENT_MODULE_KEYS[2:], filename=artifact_manager.PREBUILT_WHEEL
+    )
+    with pytest.raises(ArtifactError, match="required contract"):
+        discover_bundle(tmp_path)
+
+
+def test_exact_pinned_wheel_still_verifies_only_its_five_modules():
+    bundle = artifact_manager.prebuilt_bundle()
+    assert _verification_module_keys(bundle) == _CURRENT_MODULE_KEYS[2:]
+    assert set(bundle.manifest["extensions"]) == set(_CURRENT_MODULE_KEYS[2:])
+
+
+@pytest.mark.parametrize("key", _CURRENT_MODULE_KEYS[:2])
+def test_current_bundle_checks_each_new_binary_hash(tmp_path, key):
+    _current_test_bundle(tmp_path, corrupt_binary=key)
+    with pytest.raises(ArtifactError, match=f"AOT member hash mismatch: {key}"):
+        discover_bundle(tmp_path)
+
+
+def test_current_bundle_requires_seven_module_smoke_identity(tmp_path):
+    bundle = _current_test_bundle(tmp_path)
+    smoke = json.loads(bundle.smoke.read_text())
+    del smoke["aot_identity"]["extensions"][_CURRENT_MODULE_KEYS[0]]
+    bundle.smoke.write_text(json.dumps(smoke))
+    with pytest.raises(ArtifactError, match="smoke names a different AOT artifact"):
+        discover_bundle(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "action", ["install_bundle", "verify_installed", "ensure_bundle"]
+)
+def test_current_install_and_verify_select_all_seven_modules(
+    tmp_path, monkeypatch, action
+):
+    bundle = _current_test_bundle(tmp_path)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if "-c" in command:
+            program = command[-1]
+            assert f"distributed_aot_identity({_CURRENT_MODULE_KEYS!r})" in program
+            assert kwargs["env"]["OPENFOLD3_TRIANGLE_ALLOW_JIT"] == "0"
+            assert "PYTHONPATH" not in kwargs["env"]
+            assert not Path(kwargs["cwd"]).is_relative_to(REPOSITORY)
+            return SimpleNamespace(returncode=0, stdout='{"verified": true}', stderr="")
+        assert command[1:] == (
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--force-reinstall",
+            str(bundle.wheel),
+        )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(artifact_manager.subprocess, "run", run)
+    result = getattr(artifact_manager, action)(bundle, "a" * 40)
+    assert result == {"verified": True}
+    assert sum("-c" in command for command in calls) == 1
+    assert sum("pip" in command for command in calls) == int(action == "install_bundle")

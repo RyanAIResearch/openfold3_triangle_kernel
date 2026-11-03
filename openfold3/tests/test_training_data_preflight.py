@@ -99,9 +99,7 @@ def test_generated_runner_paths_are_absolute(monkeypatch, tmp_path):
         assert Path(values["alignment_array_directory"]).is_absolute()
 
 
-def test_prepare_subset_runs_two_download_passes_then_purifies(
-    monkeypatch, tmp_path
-):
+def test_prepare_subset_runs_two_download_passes_then_purifies(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
         preparer, "_run", lambda script, *args: calls.append((script, args))

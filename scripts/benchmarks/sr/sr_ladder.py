@@ -52,9 +52,7 @@ def synthetic_case(name):
     k = (qk_sigma * torch.randn(shape, device="cuda")).bfloat16()
     v = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
     mask = torch.zeros(1, seq, 1, 1, seq, device="cuda", dtype=torch.float32)
-    bias = (
-        bias_sigma * torch.randn(1, 1, heads, seq, seq, device="cuda")
-    ).bfloat16()
+    bias = (bias_sigma * torch.randn(1, 1, heads, seq, seq, device="cuda")).bfloat16()
     torch.manual_seed(7)
     grad_out = torch.randn(
         (1, seq, seq, heads, dim), device="cuda", dtype=torch.bfloat16
@@ -64,6 +62,7 @@ def synthetic_case(name):
 
 def load_capture(path):
     blob = torch.load(path, weights_only=True, map_location="cuda")
+
     def flat(t):
         return t.reshape(-1, *t.shape[-4:])
 
@@ -93,7 +92,7 @@ def kernel_forward(q, k, v, mask, bias):
 def fp64_pieces(q, k, v, mask, bias, grad_out, chunk=32):
     """Chunked-over-outer FP64 forward/backward reference + delta pieces."""
     dim = q.shape[-1]
-    scale = 1.0 / (dim ** 0.5)
+    scale = 1.0 / (dim**0.5)
     refs = {"dq": [], "dk": [], "dv": [], "delta": []}
     dbias_acc = None
     o_fp32_rows = []
@@ -105,25 +104,19 @@ def fp64_pieces(q, k, v, mask, bias, grad_out, chunk=32):
         v64 = v[:, start:stop].double().requires_grad_()
         b64 = bias.double().requires_grad_()
         m64 = mask[:, start:stop].double().permute(0, 1, 3, 2, 4)
-        scores = (
-            torch.einsum("bohqd,bohkd->bohqk", q64, k64) * scale + m64 + b64
-        )
+        scores = torch.einsum("bohqd,bohkd->bohqk", q64, k64) * scale + m64 + b64
         probs = torch.softmax(scores, dim=-1)
         out_public = torch.einsum("bohqk,bohkd->bohqd", probs, v64).permute(
             0, 1, 3, 2, 4
         )
         go = grad_out[:, start:stop].double()
-        grads = torch.autograd.grad(
-            out_public, (q64, k64, v64, b64), grad_outputs=go
-        )
+        grads = torch.autograd.grad(out_public, (q64, k64, v64, b64), grad_outputs=go)
         refs["dq"].append(grads[0])
         refs["dk"].append(grads[1])
         refs["dv"].append(grads[2])
         dbias_acc = grads[3] if dbias_acc is None else dbias_acc + grads[3]
         # perfect delta: sum_k P dP with dP = dO @ V^T (fp64)
-        dp64 = torch.einsum(
-            "bonhd,bohkd->bohnk", go, v64
-        )
+        dp64 = torch.einsum("bonhd,bohkd->bohnk", go, v64)
         refs["delta"].append((probs * dp64).sum(-1))
         # fp32 shadow output (torch fp32 forward path)
         scores32 = (
@@ -135,9 +128,9 @@ def fp64_pieces(q, k, v, mask, bias, grad_out, chunk=32):
             + b64.detach().float()
         )
         probs32 = torch.softmax(scores32, dim=-1)
-        o32 = torch.einsum(
-            "bohqk,bohkd->bohqd", probs32, v64.detach().float()
-        ).permute(0, 1, 3, 2, 4)
+        o32 = torch.einsum("bohqk,bohkd->bohqd", probs32, v64.detach().float()).permute(
+            0, 1, 3, 2, 4
+        )
         o_fp32_rows.append(o32)
         del q64, k64, v64, b64, scores, probs, out_public, scores32, probs32
         torch.cuda.empty_cache()
@@ -172,9 +165,7 @@ def run_case(name, q, k, v, mask, bias, grad_out):
     ref = fp64_pieces(q, k, v, mask, bias, grad_out)
     arms = {}
     arms["sr-classic"] = delta_from_out(grad_out, out)
-    arms["sr-shadow"] = delta_from_out(
-        grad_out, out.float() + shadow.float()
-    )
+    arms["sr-shadow"] = delta_from_out(grad_out, out.float() + shadow.float())
     arms["sr-fp32shadow"] = delta_from_out(grad_out, ref["o_fp32"])
     arms["sr-perfect"] = ref["delta_perfect"].float().contiguous()
     lines = [name]

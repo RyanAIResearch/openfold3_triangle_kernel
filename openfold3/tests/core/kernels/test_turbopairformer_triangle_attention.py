@@ -48,15 +48,9 @@ class TurboPairFormerTriangleAttentionSupportTest(unittest.TestCase):
         q = torch.empty(
             (1, 1, 1, 4, 1, 16), device="cuda", dtype=torch.bfloat16
         ).expand(shape)
-        mask = torch.zeros(
-            (1, 1, 384, 1, 1, 384), device="cuda", dtype=torch.bfloat16
-        )
-        bias = torch.zeros(
-            (1, 1, 1, 4, 384, 384), device="cuda", dtype=torch.bfloat16
-        )
-        supported, reason = self.support(
-            q=q, k=q, v=q, mask=mask, bias=bias
-        )
+        mask = torch.zeros((1, 1, 384, 1, 1, 384), device="cuda", dtype=torch.bfloat16)
+        bias = torch.zeros((1, 1, 1, 4, 384, 384), device="cuda", dtype=torch.bfloat16)
+        supported, reason = self.support(q=q, k=q, v=q, mask=mask, bias=bias)
         self.assertTrue(supported, reason)
 
     def test_accepts_runtime_sequence_length(self):
@@ -64,15 +58,9 @@ class TurboPairFormerTriangleAttentionSupportTest(unittest.TestCase):
         q = torch.empty((1, 1, 4, 1, 32), device="cuda", dtype=torch.bfloat16).expand(
             shape
         )
-        mask = torch.zeros(
-            (1, 512, 1, 1, 512), device="cuda", dtype=torch.bfloat16
-        )
-        bias = torch.zeros(
-            (1, 1, 4, 512, 512), device="cuda", dtype=torch.bfloat16
-        )
-        supported, reason = self.support(
-            q=q, k=q, v=q, mask=mask, bias=bias
-        )
+        mask = torch.zeros((1, 512, 1, 1, 512), device="cuda", dtype=torch.bfloat16)
+        bias = torch.zeros((1, 1, 4, 512, 512), device="cuda", dtype=torch.bfloat16)
+        supported, reason = self.support(q=q, k=q, v=q, mask=mask, bias=bias)
         self.assertTrue(supported, reason)
 
     def test_accepts_runtime_head_count_and_compiled_d16(self):
@@ -99,9 +87,7 @@ class TurboPairFormerTriangleAttentionSupportTest(unittest.TestCase):
                 bias = torch.zeros(
                     (1, 1, 2, 64, 64), device="cuda", dtype=torch.bfloat16
                 )
-                supported, reason = self.support(
-                    q=q, k=q, v=q, mask=mask, bias=bias
-                )
+                supported, reason = self.support(q=q, k=q, v=q, mask=mask, bias=bias)
                 self.assertTrue(supported, reason)
 
     def test_accepts_batched_prefix(self):
@@ -162,49 +148,43 @@ class TurboPairFormerTriangleAttentionSupportTest(unittest.TestCase):
 
     def test_accepts_sequence_above_the_legacy_grid_z_limit(self):
         sequence = 65_536
-        q = torch.empty(
-            (1, 1, 1, 1, 16), device="cuda", dtype=torch.bfloat16
-        ).expand((1, sequence, 1, sequence, 16))
-        mask = torch.empty(
-            (1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16
-        ).expand((1, sequence, 1, 1, sequence))
-        bias = torch.empty(
-            (1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16
-        ).expand((1, 1, 1, sequence, sequence))
-        supported, reason = self.support(
-            q=q, k=q, v=q, mask=mask, bias=bias
+        q = torch.empty((1, 1, 1, 1, 16), device="cuda", dtype=torch.bfloat16).expand(
+            (1, sequence, 1, sequence, 16)
         )
+        mask = torch.empty((1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16).expand(
+            (1, sequence, 1, 1, sequence)
+        )
+        bias = torch.empty((1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16).expand(
+            (1, 1, 1, sequence, sequence)
+        )
+        supported, reason = self.support(q=q, k=q, v=q, mask=mask, bias=bias)
         self.assertTrue(supported, reason)
 
     def test_rejects_sequence_requiring_too_many_query_blocks(self):
         sequence = 65_535 * 32 + 1
-        q = torch.empty(
-            (1, 1, 1, 1, 16), device="cuda", dtype=torch.bfloat16
-        ).expand((1, sequence, 1, sequence, 16))
-        mask = torch.empty(
-            (1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16
-        ).expand((1, sequence, 1, 1, sequence))
-        bias = torch.empty(
-            (1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16
-        ).expand((1, 1, 1, sequence, sequence))
-        supported, reason = self.support(
-            q=q, k=q, v=q, mask=mask, bias=bias
+        q = torch.empty((1, 1, 1, 1, 16), device="cuda", dtype=torch.bfloat16).expand(
+            (1, sequence, 1, sequence, 16)
         )
+        mask = torch.empty((1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16).expand(
+            (1, sequence, 1, 1, sequence)
+        )
+        bias = torch.empty((1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16).expand(
+            (1, 1, 1, sequence, sequence)
+        )
+        supported, reason = self.support(q=q, k=q, v=q, mask=mask, bias=bias)
         self.assertFalse(supported)
         self.assertIn("too many CUDA query blocks", reason)
 
     def test_rejects_heads_beyond_cuda_grid_y(self):
         heads = 65_536
-        q = torch.empty(
-            (1, 1, 1, 1, 16), device="cuda", dtype=torch.bfloat16
-        ).expand((1, 1, heads, 1, 16))
-        mask = torch.zeros((1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16)
-        bias = torch.empty(
-            (1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16
-        ).expand((1, 1, heads, 1, 1))
-        supported, reason = self.support(
-            q=q, k=q, v=q, mask=mask, bias=bias
+        q = torch.empty((1, 1, 1, 1, 16), device="cuda", dtype=torch.bfloat16).expand(
+            (1, 1, heads, 1, 16)
         )
+        mask = torch.zeros((1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16)
+        bias = torch.empty((1, 1, 1, 1, 1), device="cuda", dtype=torch.bfloat16).expand(
+            (1, 1, heads, 1, 1)
+        )
+        supported, reason = self.support(q=q, k=q, v=q, mask=mask, bias=bias)
         self.assertFalse(supported)
         self.assertIn("grid-y", reason)
 

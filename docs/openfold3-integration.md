@@ -68,7 +68,8 @@ A technical description of the OpenFold3-preview2 model version is available [he
 - CPython 3.14
 - PyTorch 2.10.0 built for CUDA 12.9
 - NVIDIA driver compatible with the locked CUDA 12.9 runtime; users do not need NVCC
-- BF16 Q/K/V; BF16 or FP32 pair bias; FP16, BF16, or FP32 additive mask
+- For the existing BF16 path: BF16 Q/K/V; BF16 or FP32 pair bias;
+  FP16, BF16, or FP32 additive mask. Native FP32 inference is described below.
 
 The prebuilt Triangle Attention extensions contain Hopper-specific SASS and no
 PTX fallback. An ABI or device mismatch is an error, not a reason to load the
@@ -230,6 +231,118 @@ model_update:
           chunk_size: null
 ```
 
+### Inference with automatic chunking
+
+The current source integration supports the official prediction preset's
+`chunk_size: 1024` and `tune_chunk_size: true` with Turbo attention. Select the
+backend under `memory.eval`, keeping the prediction preset's other settings:
+
+```yaml
+model_update:
+  presets: [predict]
+  custom:
+    settings:
+      memory:
+        eval:
+          use_stable_triangle_attention: true
+          use_stable_triangle_multiplicative: true
+          use_cueq_triangle_kernels: false
+          use_triton_triangle_kernels: false
+          use_deepspeed_evo_attention: false
+          use_protenix_triangle_attention: false
+          use_lma: false
+          chunk_size: 1024
+          tune_chunk_size: true
+```
+
+The existing tuner probes a representative module and chooses a viable chunk
+size up to the configured maximum. Changing the selected backend invalidates
+the tuning cache. Triangle attention splits independent outer rows while
+retaining the full key sequence, pair bias and matching masks. For example,
+1280 rows with a chunk size of 1024 execute as 1024 and 256 rows; both chunks
+still attend over all 1280 keys. Turbo also retains this chunking when the
+confidence head processes multiple diffusion candidates together. This outer-row
+chunking is inference-only: the module must be in `eval()` mode, gradients must
+be disabled, and the call must be outside activation checkpointing. Training
+retains the dense Turbo attention route; an explicit training chunk request
+raises rather than silently changing BF16 gradient accumulation.
+
+The current source adds inference-only FP32 implementations for both selected
+operators. Automatic model dispatch requires `eval()` together with
+`32-true` and `torch.no_grad()` / `torch.inference_mode()`. In that mode,
+attention preserves FP32 Q/K/V, mask, pair bias, probabilities and output;
+Triangle Multiplication preserves FP32 activations, projections, contractions
+and output. Neither implementation converts these values to BF16 or calls the
+stock/cuEq operator as a fallback. Unsupported CUDA requests selected for this
+FP32 inference path raise explicitly. The model's TriMul selector
+preserves its CPU compatibility fallback; the direct native FP32 APIs require
+CUDA. The established BF16 training kernels and backward remain in use for
+training. The repository checkpoint wrapper also keeps the training route for
+both the initial forward and recomputation, including nested projections. An
+eval-mode checkpoint entry with gradient-requiring inputs stays on that route.
+External `torch.utils.checkpoint` wrappers around an arbitrary eval-mode model
+cannot always be detected once intermediate tensors lose their autograd state;
+use the repository checkpoint wrapper, or keep the model in training mode when
+checkpointing. Direct native FP32 APIs remain inference-only and require a
+no-grad context. At model dispatch, CUDA autocast requesting BF16 or FP16 retains the
+existing mixed-precision route. The new FP32 route accepts both disabled
+autocast and enabled FP32 autocast, including the confidence head's FP32
+context. Calling a native FP32 API directly intentionally disables autocast
+inside that API.
+
+With TF32 enabled, FP32 attention fuses QK, online softmax and PV in one CUDA
+kernel. Scores and probabilities stay on chip and the kernel writes the public
+output layout directly. QK uses three TF32 products (leading and two cross
+terms) to reduce rounding error; PV uses a single TF32 product. Operands use
+explicit round-to-nearest-even conversion, with FP32 accumulators and stored
+tensors. This forward expansion is distinct from the BF16 backward shadow
+correction and must not be labelled “all precision compensation off.”
+
+For C and hidden widths in {32, 64, 96, 128}, TF32 Triangle Multiplication
+normalizes each input row once per projection chunk and reuses the rounded
+FP32 scratch across its five projections. The following kernel fuses projections,
+gates and layout packing. Fused
+gates use FP32 approximate exponential/division, checked against the unchanged
+numerical error bounds. Its output kernel fuses normalization, projection and gating directly from the
+contraction layout. The complete-N contraction still uses vendor batched GEMM.
+Other channel widths and TF32-disabled calls retain the native FP32 vendor
+composition. TF32-disabled attention uses bounded cuBLAS PEDANTIC QK/PV and
+native CUDA softmax. Neither implementation calls stock/cuEq as a fallback.
+
+Both paths honor `torch.backends.cuda.matmul.allow_tf32`, with
+`NVIDIA_TF32_OVERRIDE=0` taking precedence. They disable autocast locally and
+never modify global precision flags. Allowing TF32 changes internal arithmetic,
+not tensor storage dtype. Strict FP32 and TF32 are separate performance modes.
+
+Attention's 64 MiB score/output scratch budget applies to the strict FP32
+path; fused TF32 attention does not allocate those global tiles. TriMul input
+projection chunk sizing uses a 128 MiB budget. Contraction uses a separate
+512 MiB FP32 product-scratch budget and selects the output-row count from the
+sequence length and hidden width, always retaining the complete reduction axis.
+The direct API can instead set an explicit output-row count. The TF32 input path additionally
+holds one normalized FP32 chunk, preserving the existing chunk boundaries:
+up to 21.33 MiB for C=H=128, at most 42.67 MiB over the supported widths. It avoids
+materializing the five projection outputs separately. Budgets exclude returned outputs, input
+layout copies, persistent A/B/gate tensors and vendor-library workspace.
+The model's automatic outer-row chunking still applies.
+
+The explicit Turbo TriMul selector also reaches the confidence head during
+CUDA FP32 inference with gradients disabled. It preserves the existing batched
+and per-sample confidence modes. Training and callers using BF16/FP16 autocast
+retain the previous confidence TriMul route.
+
+These new extensions require rebuilding from the current source; previously
+published `0.1.3.post1` binaries do not contain them. This implementation adds
+precision support and does not by itself establish a speedup or structure
+quality equivalence. MSA/template inference-offload restrictions remain.
+
+Run the host integration tests and, on Hopper, the real-kernel checks with:
+
+```bash
+python -m pytest openfold3/tests/test_turbopairformer_chunking.py \
+  openfold3/tests/test_turbopairformer_fp32_inference.py -q
+```
+
 ## 4. Verify before training
 
 Run the packaging and routing tests:
@@ -275,6 +388,15 @@ In new clean-install reports, `default_sr_shadow` leaves the SR flags unset and
 `explicit_sr_shadow` sets both to `1`. Both execute SR with shadow; these labels
 do not represent two different backward algorithms.
 
+A current-source wheel contains seven extensions, including the separate FP32
+attention and TriMul binaries. `tools.manage_attested_sm90_wheel` checks all
+seven for its `check`, `install`, `ensure`, `verify`, and `build-install` actions,
+and when copying a bundle with `--copy-to`. The exact SHA-pinned September 18
+wheel alone retains the five-extension contract and historical namespace.
+`verify-prebuilt` continues to verify that historical artifact; merging source
+changes does not replace the Pixi pin or publish a new wheel. A formal new
+release must be rebuilt and attested from its final clean commit.
+
 After installing a new wheel non-editably in the locked H100 environment, run
 its numerical qualification separately. Replace the paths and commit below;
 the commit must be the wheel's full build commit, as recorded in its attestation.
@@ -290,7 +412,9 @@ env -u PYTHONPATH CUDA_VISIBLE_DEVICES=0 OPENFOLD3_TRIANGLE_ALLOW_JIT=0 \
 ```
 
 Use a fresh output path for each run. A PASS report records the wheel, validator,
-oracle, installed Python files, and all five AOT binary identities. All nine
+oracle, installed Python files, and the five BF16-path AOT binary identities.
+This oracle run does not numerically qualify the two FP32 inference extensions;
+the new-wheel clean-install smoke separately exercises their FP32/TF32 paths. All nine
 Attention input specifications use the current SR facade; default flags,
 explicit SR+shadow flags, and replay must agree bitwise. The FP64 error limit
 remains `1.1 * stock_relative_l2 + 1e-6`. The report covers one H100 and the tested
@@ -326,18 +450,31 @@ unset OPENFOLD3_SR_BACKWARD
 unset OPENFOLD3_SR_SHADOW
 ```
 
-Unsupported TurboPairFormer Attention shapes are explicitly routed to the stock
-OpenFold3 implementation; the public TurboPairFormer facade itself fails closed.
+For the established BF16/training path, unsupported TurboPairFormer Attention
+shapes are explicitly routed to the stock OpenFold3 implementation; the public
+TurboPairFormer facade itself fails closed. CUDA FP32 inference requests fail
+closed at the model selector as well.
 Monitor fallback counts rather than assuming every call used the custom kernel.
 
-TurboPairFormer TriMul uses a fixed, non-configurable short-sequence boundary:
-valid TriMul calls with `N <= 100` are metadata-unsupported by the AOT path and
-the model selector routes them directly to stock PyTorch. The H100 BF16 AOT
+TurboPairFormer's BF16 TriMul path uses a fixed, non-configurable short-sequence
+boundary: valid BF16 calls with `N <= 100` are metadata-unsupported by that AOT
+path and the model selector routes them directly to stock PyTorch. The H100 BF16 AOT
 path starts at `N = 101` for `C_z = C_hidden` in `{32, 64, 96, 128}`. The
 boundary value matches cuEquivariance 0.10's
 `CUEQ_TRIMUL_FALLBACK_THRESHOLD=100`, but TurboPairFormer does not read that or any
 other environment variable. Unsupported direct-facade calls remain
 fail-closed; only the model selector owns the stock fallback.
+The BF16 rewrite preserves the supported `C_z = C_hidden = 96` case, but it
+does not promise bitwise compatibility with older builds at that width. In the
+old/new audit, four C96 cases had identical final outputs while saved normalized
+values and some gates differed by one BF16 ulp; the packed input-projection
+weight gradient differed by up to `2.289e-5` (normalized RMSE `1.18e-8`). The
+eight tested C64/C128 cases matched in outputs, saved state and all seven
+backward results. These are tested-case observations, not a claim of
+cross-version equivalence for every supported shape.
+
+The new CUDA FP32 inference TriMul path supports positive sequence lengths
+starting at `N = 1` and does not use this BF16 threshold.
 
 ## Supported scope and claim boundaries
 

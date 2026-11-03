@@ -152,7 +152,7 @@ class SampleScores:
     @classmethod
     def of(
         cls, measurements: Iterable[T], select: Callable[[T], float]
-    ) -> "SampleScores":
+    ) -> SampleScores:
         """Pull one field out of per-sample measurements already taken."""
         return cls(tuple(select(measurement) for measurement in measurements))
 
@@ -184,7 +184,7 @@ class SampleScores:
         )
 
 
-def measure_samples(
+def measure_samples[T](
     sample_cifs: Sequence[Path],
     measure: Callable[[Structure], T],
     *,

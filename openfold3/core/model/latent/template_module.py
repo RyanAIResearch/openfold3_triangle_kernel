@@ -443,9 +443,26 @@ class TemplatePairStack(nn.Module):
                 or use_deepspeed_evo_attention
                 or use_stable_triangle_attention
             )
+            # Backend flags are not tensor arguments to the block, but they
+            # must participate in the tuner's cache key when routes change.
+            backend_signature = (
+                use_deepspeed_evo_attention,
+                use_cueq_triangle_kernels,
+                use_triton_triangle_kernels,
+                use_stable_triangle_attention,
+                use_stable_triangle_multiplicative,
+                use_protenix_triangle_attention,
+                use_lma,
+                inplace_safe,
+                _mask_trans,
+            )
+
+            def representative_block(t, _backend_signature, chunk_size):
+                return blocks[0](t, chunk_size=chunk_size)
+
             tuned_chunk_size = self.chunk_size_tuner.tune_chunk_size(
-                representative_fn=blocks[0],
-                args=(t.clone(),),
+                representative_fn=representative_block,
+                args=(t.clone(), backend_signature),
                 max_chunk_size=chunk_size,
             )
             attn_chunk = (

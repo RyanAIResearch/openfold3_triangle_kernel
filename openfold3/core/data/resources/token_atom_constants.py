@@ -133,7 +133,7 @@ def get_atom_name_to_index(atom_name):
         try:
             indices.append(TOKEN_NAME_TO_ATOM_NAMES[name].index(atom_name))
             mask.append(1)
-        except (KeyError, ValueError):
+        except KeyError, ValueError:
             indices.append(-1)
             mask.append(0)
     return {"index": indices, "mask": mask}

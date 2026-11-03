@@ -45,9 +45,7 @@ class TurboPairFormerTrianglePackagingTest(unittest.TestCase):
 
     def test_runtime_cuda_sources_are_shipped_as_package_data(self):
         project = tomllib.loads((REPOSITORY / "pyproject.toml").read_text())
-        package_data = set(
-            project["tool"]["setuptools"]["package-data"]["openfold3"]
-        )
+        package_data = set(project["tool"]["setuptools"]["package-data"]["openfold3"])
         required = {
             "core/kernels/turbopairformer/turbopairformer_triangle_forward.cu",
             "core/kernels/turbopairformer/turbopairformer_triangle_delta.cu",
