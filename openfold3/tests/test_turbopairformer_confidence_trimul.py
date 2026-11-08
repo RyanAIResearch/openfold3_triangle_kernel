@@ -77,9 +77,9 @@ def test_model_confidence_route_uses_callers_precision_policy(
     amp_state = {"dtype": amp_dtype}
 
     @contextmanager
-    def local_autocast(*, device_type, dtype):
+    def local_autocast(*, device_type, dtype, enabled=True):
         previous = amp_state["dtype"]
-        amp_state["dtype"] = dtype
+        amp_state["dtype"] = dtype if enabled else None
         try:
             yield
         finally:

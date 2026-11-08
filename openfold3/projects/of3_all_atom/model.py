@@ -515,8 +515,17 @@ class OpenFold3(nn.Module):
         }
 
         cast_dtype = torch.float32 if self.training else si_trunk.dtype
+        use_frozen_tpf_confidence = bool(
+            mode_mem_settings.get("use_frozen_tpf_confidence", False)
+        )
         with torch.amp.autocast(
-            device_type=autocast_device_type(si_trunk), dtype=cast_dtype
+            device_type=autocast_device_type(si_trunk),
+            dtype=cast_dtype,
+            # Recent PyTorch keeps an FP32 CUDA autocast context enabled. The
+            # frozen TPF confidence scope requires autocast to be disabled, so
+            # only that opt-in route skips this context. Every other route is
+            # unchanged.
+            enabled=not use_frozen_tpf_confidence,
         ):
             # Compute confidence logits
             output.update(
@@ -528,19 +537,16 @@ class OpenFold3(nn.Module):
                     chunk_size=mode_mem_settings.chunk_size,
                     use_deepspeed_evo_attention=mode_mem_settings.use_deepspeed_evo_attention,
                     use_triton_triangle_kernels=mode_mem_settings.use_triton_triangle_kernels,
-                    use_cueq_triangle_kernels=(
-                        mode_mem_settings.use_cueq_triangle_kernels
-                        and not mode_mem_settings.get(
-                            "use_protenix_triangle_attention", False
-                        )
-                    ),
+                    # The Protenix preset keeps cuEq enabled for TriMul. Its FP32
+                    # confidence head therefore uses cuEq attention and cuEq
+                    # TriMul, exactly like the cuEq preset; the Protenix kernel
+                    # serves only the BF16 trunk attention sites.
+                    use_cueq_triangle_kernels=mode_mem_settings.use_cueq_triangle_kernels,
                     use_stable_triangle_attention=bool(
                         mode_mem_settings.get("use_stable_triangle_attention", False)
                     ),
                     use_stable_triangle_multiplicative=use_stable_confidence_trimul,
-                    use_frozen_tpf_confidence=bool(
-                        mode_mem_settings.get("use_frozen_tpf_confidence", False)
-                    ),
+                    use_frozen_tpf_confidence=use_frozen_tpf_confidence,
                     use_lma=mode_mem_settings.use_lma,
                     inplace_safe=inplace_safe,
                     offload_inference=offload_confidence_heads,

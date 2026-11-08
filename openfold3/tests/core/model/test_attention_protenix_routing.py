@@ -258,12 +258,36 @@ def test_full_model_scope_preserves_confidence_and_diffusion(monkeypatch, proten
     monkeypatch.setattr(model_module, "create_noise_schedule", lambda **kw: None)
     OpenFold3._rollout(host, batch, x, x, z)
     confidence = host.aux_heads.call_args.kwargs
-    assert confidence["use_cueq_triangle_kernels"] is (not protenix)
+    # Both presets run the FP32 confidence head on cuEq attention and TriMul.
+    assert confidence["use_cueq_triangle_kernels"] is True
     assert "use_protenix_triangle_attention" not in confidence
     diffusion = host.sample_diffusion.call_args.kwargs
     assert diffusion["use_high_precision_attention"]
     assert "use_protenix_triangle_attention" not in diffusion
     assert "use_cueq_triangle_kernels" not in diffusion
+
+
+@pytest.mark.parametrize("frozen_tpf", (False, True))
+def test_confidence_autocast_is_skipped_only_for_frozen_tpf(monkeypatch, frozen_tpf):
+    host, memory, x, z = _host_stub(protenix=False)
+    memory["use_frozen_tpf_confidence"] = frozen_tpf
+    real_autocast = torch.amp.autocast
+    contexts = []
+
+    def recording_autocast(*args, **kwargs):
+        contexts.append(kwargs)
+        return real_autocast(*args, **kwargs)
+
+    monkeypatch.setattr(model_module.torch.amp, "autocast", recording_autocast)
+    monkeypatch.setattr(model_module, "create_noise_schedule", lambda **kw: None)
+    OpenFold3._rollout(host, {"token_mask": torch.ones(1, 3)}, x, x, z)
+    # The diffusion context is unchanged; only the confidence context differs.
+    diffusion_context, confidence_context = contexts
+    assert diffusion_context.get("enabled", True) is True
+    assert confidence_context["dtype"] is torch.float32
+    assert confidence_context["enabled"] is (not frozen_tpf)
+    confidence = host.aux_heads.call_args.kwargs
+    assert confidence["use_frozen_tpf_confidence"] is frozen_tpf
 
 
 @pytest.mark.parametrize(
