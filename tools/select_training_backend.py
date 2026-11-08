@@ -74,6 +74,7 @@ def configure_training_backend(
     config: dict[str, Any],
     *,
     backend: str,
+    frozen_tpf_confidence: bool | None = None,
 ) -> dict[str, Any]:
     """Update only mutually exclusive training-kernel flags in ``config``."""
 
@@ -85,6 +86,8 @@ def configure_training_backend(
     memory = settings.setdefault("memory", {})
     train_memory = memory.setdefault("train", {})
     train_memory.update(BACKEND_FLAGS[backend])
+    if frozen_tpf_confidence is not None:
+        train_memory["use_frozen_tpf_confidence"] = frozen_tpf_confidence
     return config
 
 
@@ -132,6 +135,11 @@ def main() -> None:
     parser.add_argument("runner_yaml", type=Path)
     parser.add_argument("--backend", required=True, choices=tuple(BACKEND_FLAGS))
     parser.add_argument(
+        "--frozen-tpf-confidence", action=argparse.BooleanOptionalAction,
+        default=None,
+        help="opt into frozen FP32 confidence only; does not change freezing, data, or evaluation settings",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="write a new YAML instead of replacing runner_yaml",
@@ -150,6 +158,7 @@ def main() -> None:
     configure_training_backend(
         config,
         backend=args.backend,
+        frozen_tpf_confidence=args.frozen_tpf_confidence,
     )
     if args.single_gpu_smoke:
         configure_single_gpu_smoke(config, backend=args.backend)

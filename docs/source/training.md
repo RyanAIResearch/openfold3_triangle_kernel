@@ -249,6 +249,44 @@ AQLab/OpenFold3 stock PyTorch, cuEquivariance, TurboPairFormer, and DeepSpeed Ev
 attention, see
 {doc}`bare_metal_distributed_quickstart`.
 
+### Frozen FP32 confidence with TurboPairFormer
+
+`settings.memory.train.use_frozen_tpf_confidence` is an explicit, default-off
+option for a recipe whose confidence heads are already frozen. The matching
+evaluation setting also defaults to `false`. It selects the repository's native
+FP32 Triangle Attention and TriMul implementations only inside
+`aux_heads.pairformer_embedding`, independent of the trunk backend:
+Its four single-representation attention-with-pair-bias (APB) layers keep the
+original high-precision stock path; the option selects only the eight triangle
+attention and eight TriMul sites.
+
+```bash
+python tools/select_training_backend.py training.yaml --backend protenix \
+  --frozen-tpf-confidence --output frozen-confidence.yaml
+```
+
+The selector does not freeze weights or change data, rollout sampling, learning
+rates, or evaluation settings. Omitting the new switch preserves an existing
+confidence setting; `--no-frozen-tpf-confidence` explicitly disables it.
+
+All existing confidence heads (`pairformer_embedding`, `pde`, `plddt`,
+`experimentally_resolved`, and enabled `pae`) must have frozen FP32 parameters.
+The embedding requires detached FP32 inputs, one rollout sample, and no
+per-sample, CPU-offload, or inplace execution. Only this verified module subtree
+enters a local `no_grad` scope. Training mode and dropout remain unchanged;
+distogram executes outside the scope and retains its normal gradient path.
+There is no FP32 backward implementation implied by this option.
+
+The scope is eager-only and rejects low-precision autocast and checkpoint
+regions marked by OpenFold3's reentrant checkpoint wrapper. It does not change
+the existing non-reentrant checkpoint or compiler policy. As with the direct
+native FP32 APIs, these kernels require supported Hopper hardware and compatible
+in-tree FP32 extensions. They preserve the caller's TF32 policy and fail on
+unsupported native inputs. These FP32 implementations are separate from the
+published TurboPairFormer 0.1.3 BF16 wheel; enabling the option does not turn that
+wheel into an FP32 backend. CUDA source and extension bytes are unchanged by
+the routing option.
+
 ## 5. Monitoring Training
 
 Enable Weights & Biases logging by configuring `wandb_config` in your YAML:

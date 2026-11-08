@@ -538,6 +538,9 @@ class OpenFold3(nn.Module):
                         mode_mem_settings.get("use_stable_triangle_attention", False)
                     ),
                     use_stable_triangle_multiplicative=use_stable_confidence_trimul,
+                    use_frozen_tpf_confidence=bool(
+                        mode_mem_settings.get("use_frozen_tpf_confidence", False)
+                    ),
                     use_lma=mode_mem_settings.use_lma,
                     inplace_safe=inplace_safe,
                     offload_inference=offload_confidence_heads,

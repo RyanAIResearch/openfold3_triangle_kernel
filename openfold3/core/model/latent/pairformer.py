@@ -29,7 +29,10 @@ import openfold3.core.config.default_linear_init_config as lin_init
 from openfold3.core.model.latent.base_blocks import PairBlock
 from openfold3.core.model.layers.attention_pair_bias import AttentionPairBias
 from openfold3.core.model.layers.transition import SwiGLUTransition
-from openfold3.core.utils.checkpointing import checkpoint_blocks
+from openfold3.core.utils.checkpointing import (
+    checkpoint_blocks,
+    is_in_frozen_confidence_scope,
+)
 from openfold3.core.utils.chunk_utils import ChunkSizeTuner
 from openfold3.core.utils.device_utils import empty_device_cache
 from openfold3.core.utils.tensor_utils import add
@@ -213,6 +216,11 @@ class PairFormerBlock(nn.Module):
             _attn_chunk_size=_attn_chunk_size,
         )
 
+        # Frozen confidence selects Turbo only for the triangle operators.
+        # Keep its single-representation APB on the original FP32 stock path.
+        use_stable_apb = (
+            use_stable_triangle_attention and not is_in_frozen_confidence_scope(self)
+        )
         # TODO: Add back triton and cueq APB kernel
         s = add(
             s,
@@ -220,8 +228,8 @@ class PairFormerBlock(nn.Module):
                 a=s,
                 z=z,
                 mask=single_mask,
-                use_stable_triangle_attention=use_stable_triangle_attention,
-                use_high_precision_attention=not use_stable_triangle_attention,
+                use_stable_triangle_attention=use_stable_apb,
+                use_high_precision_attention=not use_stable_apb,
             ),
             inplace=inplace_safe,
         )

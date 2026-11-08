@@ -109,6 +109,8 @@ model_config = mlc.ConfigDict(
                     "use_stable_triangle_attention": False,
                     "use_protenix_triangle_attention": False,
                     "use_stable_triangle_multiplicative": False,
+                    # Explicit forward-only FP32 path; does not freeze heads.
+                    "use_frozen_tpf_confidence": False,
                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
                     # exclusive with use_deepspeed_evo_attention.
                     "use_lma": False,
@@ -125,6 +127,7 @@ model_config = mlc.ConfigDict(
                     "use_stable_triangle_attention": False,
                     "use_protenix_triangle_attention": False,
                     "use_stable_triangle_multiplicative": False,
+                    "use_frozen_tpf_confidence": False,
                     "use_triton_triangle_kernels": True,
                     "use_lma": False,
                     "msa_module": {

@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import importlib
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -31,6 +32,7 @@ from openfold3.core.utils.atomize_utils import (
     broadcast_token_feat_to_atoms,
     get_token_representative_atoms,
 )
+from openfold3.core.utils.checkpointing import frozen_confidence_inference_scope
 
 deepspeed_is_installed = importlib.util.find_spec("deepspeed") is not None
 if deepspeed_is_installed:
@@ -106,6 +108,7 @@ class AuxiliaryHeadsAllAtom(nn.Module):
         _mask_trans: bool = True,
         pairformer_dtype: torch.dtype = torch.float32,
         use_stable_triangle_multiplicative: bool = False,
+        use_frozen_tpf_confidence: bool = False,
     ):
         """
         Args:
@@ -147,6 +150,10 @@ class AuxiliaryHeadsAllAtom(nn.Module):
                 Whether to use Turbo triangular multiplicative updates. The
                 model enables this route only for explicitly configured FP32
                 inference, preserving the training and mixed-BF16 defaults.
+            use_frozen_tpf_confidence:
+                Explicit forward-only FP32 Turbo route for a frozen confidence
+                embedding. Requires all five confidence heads frozen and one
+                rollout sample; distogram remains outside this boundary.
 
         Returns:
             aux_out:
@@ -202,28 +209,71 @@ class AuxiliaryHeadsAllAtom(nn.Module):
         if not use_zij_trunk_embedding:
             zij = zij * 0
 
+        confidence_scope = nullcontext()
+        if use_frozen_tpf_confidence:
+            if not any(p.requires_grad for p in self.distogram.parameters()):
+                raise ValueError("Frozen TPF confidence requires a trainable distogram")
+            # Do not infer freezing from train/eval mode or modify the recipe.
+            # PAE can be disabled by configuration; every existing confidence
+            # head must be frozen, including those outside the embedding.
+            for name in (
+                "pairformer_embedding", "pde", "plddt", "experimentally_resolved", "pae"
+            ):
+                head = getattr(self, name, None)
+                if head is None:
+                    if name == "pae" and not self.config.pae.enabled:
+                        continue
+                    raise ValueError(f"Missing frozen confidence head: {name}")
+                if any(
+                    p.requires_grad or p.dtype != torch.float32
+                    for p in head.parameters()
+                ):
+                    raise ValueError(
+                        f"Confidence head {name} must have frozen FP32 parameters"
+                    )
+            if num_samples != 1 or apply_per_sample or offload_inference or inplace_safe:
+                raise ValueError(
+                    "Frozen TPF confidence requires one sample, without "
+                    "per-sample/offload/inplace execution"
+                )
+            if pairformer_dtype != torch.float32:
+                raise ValueError(
+                    "Frozen TPF confidence requires pairformer_dtype=torch.float32"
+                )
+            confidence_scope = frozen_confidence_inference_scope(
+                self.pairformer_embedding,
+                si_input, si, zij, repr_x_pred, token_mask, pair_mask,
+            )
+            use_stable_triangle_attention = True
+            use_stable_triangle_multiplicative = True
+            use_deepspeed_evo_attention = False
+            use_cueq_triangle_kernels = False
+            use_triton_triangle_kernels = False
+            use_lma = False
+
         # Embed trunk outputs
         # If offload_inference is enabled, si and zij will be returned on the CPU
-        si, zij = self.pairformer_embedding(
-            si_input=si_input,
-            si=si,
-            zij=zij,
-            x_pred=repr_x_pred,
-            single_mask=token_mask,
-            pair_mask=pair_mask,
-            chunk_size=chunk_size,
-            use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-            use_cueq_triangle_kernels=use_cueq_triangle_kernels,
-            use_stable_triangle_attention=use_stable_triangle_attention,
-            use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
-            use_triton_triangle_kernels=use_triton_triangle_kernels,
-            use_lma=use_lma,
-            inplace_safe=inplace_safe,
-            offload_inference=offload_inference,
-            _mask_trans=_mask_trans,
-            apply_per_sample=apply_per_sample,
-            pairformer_dtype=pairformer_dtype,
-        )
+        with confidence_scope:
+            si, zij = self.pairformer_embedding(
+                si_input=si_input,
+                si=si,
+                zij=zij,
+                x_pred=repr_x_pred,
+                single_mask=token_mask,
+                pair_mask=pair_mask,
+                chunk_size=chunk_size,
+                use_deepspeed_evo_attention=use_deepspeed_evo_attention,
+                use_cueq_triangle_kernels=use_cueq_triangle_kernels,
+                use_stable_triangle_attention=use_stable_triangle_attention,
+                use_stable_triangle_multiplicative=use_stable_triangle_multiplicative,
+                use_triton_triangle_kernels=use_triton_triangle_kernels,
+                use_lma=use_lma,
+                inplace_safe=inplace_safe,
+                offload_inference=offload_inference,
+                _mask_trans=_mask_trans,
+                apply_per_sample=apply_per_sample,
+                pairformer_dtype=pairformer_dtype,
+            )
 
         # Get atom mask padded to MAX_ATOMS_PER_TOKEN
         # Required to extract pLDDT and experimentally resolved logits for

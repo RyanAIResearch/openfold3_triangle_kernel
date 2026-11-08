@@ -14,6 +14,7 @@
 
 import importlib
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from typing import Any
@@ -35,6 +36,56 @@ BLOCK_ARGS = Sequence[BLOCK_ARG]
 _CHECKPOINT_ACTIVE: ContextVar[bool] = ContextVar(
     "openfold3_checkpoint_active", default=False
 )
+_FROZEN_INFERENCE_MODULES: ContextVar[frozenset[int]] = ContextVar(
+    "openfold3_frozen_inference_modules", default=frozenset()
+)
+
+
+def is_in_frozen_confidence_scope(module: torch.nn.Module) -> bool:
+    """Query exact subtree ownership without changing inference eligibility."""
+    if torch.compiler.is_compiling():
+        return False
+    return id(module) in _FROZEN_INFERENCE_MODULES.get()
+
+
+@contextmanager
+def frozen_confidence_inference_scope(module: torch.nn.Module, *inputs: torch.Tensor):
+    """Allow native FP32 inference only within one verified frozen subtree.
+
+    This is an explicit eager-only boundary for frozen confidence. It preserves
+    training mode (including dropout), and does not detach an input, freeze a
+    parameter, or change precision. Other training modules remain ineligible.
+    """
+    if torch.compiler.is_compiling() or torch.jit.is_tracing() or torch.jit.is_scripting():
+        raise RuntimeError("Frozen confidence inference requires eager execution")
+    if _CHECKPOINT_ACTIVE.get():
+        raise RuntimeError("Frozen confidence inference cannot enter a marked checkpoint region")
+    if _FROZEN_INFERENCE_MODULES.get():
+        raise RuntimeError("Nested frozen confidence inference scopes are unsupported")
+    if not inputs or any(
+        not isinstance(value, torch.Tensor)
+        or value.requires_grad
+        or value.dtype != torch.float32
+        for value in inputs
+    ):
+        raise ValueError("Frozen confidence inputs must be detached FP32 tensors")
+    if any(p.requires_grad or p.dtype != torch.float32 for p in module.parameters()):
+        raise ValueError("Frozen confidence parameters must be frozen FP32 tensors")
+    if any(torch.is_autocast_enabled(device) for device in ("cpu", "cuda")):
+        raise RuntimeError("Frozen confidence requires autocast disabled at its FP32 boundary")
+
+    # Keep strong references for the complete scope, so object IDs cannot be
+    # recycled. Training flags are observed, never changed to reach a kernel.
+    owned_modules = tuple(module.modules())
+    training_flags = tuple(child.training for child in owned_modules)
+    token = _FROZEN_INFERENCE_MODULES.set(frozenset(map(id, owned_modules)))
+    try:
+        with torch.no_grad():
+            yield
+    finally:
+        _FROZEN_INFERENCE_MODULES.reset(token)
+        if tuple(child.training for child in owned_modules) != training_flags:
+            raise RuntimeError("Frozen confidence changed a module's training mode")
 
 
 def is_inference_without_checkpoint(
@@ -50,10 +101,15 @@ def is_inference_without_checkpoint(
     get_checkpoint_fn so their nested modules see the same context.
 
     Ordinary module inference requires eval and no_grad (or inference_mode).
+    An explicitly verified frozen subtree can retain training-mode dropout.
     Direct native inference APIs retain their explicit no_grad-only contract.
     """
+    # The explicit scope is eager-only. Preserve the previous constant-False
+    # training/compile decision without introducing a ContextVar graph break.
+    if module.training and torch.compiler.is_compiling():
+        return False
     return (
-        not module.training
+        (not module.training or id(module) in _FROZEN_INFERENCE_MODULES.get())
         and not torch.is_grad_enabled()
         and not _CHECKPOINT_ACTIVE.get()
         and not any(value is not None and value.requires_grad for value in inputs)
