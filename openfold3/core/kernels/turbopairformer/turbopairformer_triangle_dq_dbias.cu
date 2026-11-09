@@ -27,6 +27,9 @@
 //
 // Internal CUDA ABI layouts:
 // q/k/v/out_dq/out_dk/out_dv: [B,O,H,N,D] BF16; dO: [B,O,N,H,D] BF16.
+// The SR entry point also accepts q/k/v stored sequence-major ([B,O,N,H,D]
+// viewed as [B,O,H,N,D]) and then writes dQ/dK/dV in that order too; the
+// split entry points require contiguous [B,O,H,N,D].
 // mask: [B,O,1,1,N] FP32 additive; bias: [B,1,H,N,N] BF16 additive.
 // lse/delta: [B,O,H,N] FP32; out_dbias: [B,1,H,N,N] FP32.
 // B = batch, O = independent outer planes, H = heads, N = sequence length,
@@ -44,7 +47,9 @@
 
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <cuda.h>
 #include <cuda_bf16.h>
+#include <cuda_runtime_api.h>
 #include <pybind11/stl.h>
 #include <torch/extension.h>
 
@@ -988,9 +993,26 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_dq_dbias_wg_ker
 //     reducer folds key-block partials in ascending order and scales dQ once.
 constexpr int kSrKeyBlock = 64;
 constexpr int kSrQueryTile = 32;
-constexpr int kSrTreeStride = kSrKeyBlock + 1;
+// FP32 dBias pair-sum row stride. Step F stores one value per lane at
+// (query = 8c + 2 * (lane % 4) + pair, key = lane / 4 + const). With 68
+// floats per row, those 32 addresses fall in 32 different banks:
+// bank = (8 * (lane % 4) + lane / 4 + const) mod 32. A stride of 65 left
+// them in only 14 banks (up to four-way conflicts).
+constexpr int kSrTreeStride = kSrKeyBlock + 4;
 constexpr int kSrBiasStride = kSrKeyBlock + 8;
 constexpr int kSrDsStride = kSrKeyBlock + 8;
+
+// Q/K/V element strides; see QkvStrides in the forward source. dQ/dK/dV,
+// the dQ partials, and the dK/dV continuation state reuse the same index
+// as the input element they belong to, so all of them follow Q's order.
+//   element(plane, head, row, channel) =
+//       plane * H * N * D + head * head + row * row + channel
+//   head-major      [B, O, H, N, D]: head = N * D, row = D
+//   sequence-major  [B, O, N, H, D]: head = D,     row = H * D
+struct QkvStrides {
+  int64_t head;
+  int64_t row;
+};
 
 __device__ __forceinline__ void sr_cp_async_16(__nv_bfloat16* dst, const __nv_bfloat16* src) {
   asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" ::"r"(shared_u32(dst)), "l"(src));
@@ -1002,6 +1024,68 @@ __device__ __forceinline__ void sr_cp_async_commit() {
 
 __device__ __forceinline__ void sr_cp_async_wait_all() {
   asm volatile("cp.async.wait_group 0;\n");
+}
+
+// Tensor Memory Accelerator (TMA) loads of the Q, K, V, and dO tiles.
+// Each tensor map describes a 4-D array [plane, head, row, channel] in the
+// tensor's own storage order (built by make_sr_tile_map), and one load copies
+// a [rows, HeadDim] box of one (plane, head) into a dense shared tile. The
+// map's 32/64/128-byte swizzle places 16-byte chunks exactly where
+// wg_swz_col expects them, so WGMMA descriptors and ldmatrix reads see the
+// same tile contents as with per-thread copies. Channels from io_head_dim up
+// to HeadDim lie outside the map and arrive as zeros.
+// A TMA load writes whole 128-byte shared lines regardless of how many
+// global lines a tile row spans, which removes the per-line LDGSTS
+// wavefronts of the sequence-major Q/dO rows.
+// One thread issues the loads; a shared mbarrier counts the arriving bytes,
+// and every thread waits on it before reading the tiles.
+__device__ __forceinline__ void sr_mbarrier_init(uint64_t* barrier) {
+  asm volatile("mbarrier.init.shared::cta.b64 [%0], 1;\n" ::"r"(shared_u32(barrier)));
+}
+
+// Make the initialized barriers visible to the TMA unit and other threads.
+__device__ __forceinline__ void sr_mbarrier_init_fence() {
+  asm volatile("fence.mbarrier_init.release.cluster;\n" ::: "memory");
+}
+
+// Arrive once (the barrier expects one arrival) and announce the bytes the
+// pending TMA loads will deliver to this barrier.
+__device__ __forceinline__ void sr_mbarrier_expect_bytes(uint64_t* barrier, uint32_t bytes) {
+  asm volatile(
+      "mbarrier.arrive.expect_tx.shared::cta.b64 _, [%0], %1;\n" ::"r"(shared_u32(barrier)),
+      "r"(bytes));
+}
+
+// Block until the barrier's current phase (0 or 1) has completed.
+__device__ __forceinline__ void sr_mbarrier_wait(uint64_t* barrier, uint32_t phase) {
+  asm volatile(
+      "{\n"
+      "  .reg .pred done;\n"
+      "  wait:\n"
+      "  mbarrier.try_wait.parity.shared::cta.b64 done, [%0], %1;\n"
+      "  @!done bra wait;\n"
+      "}\n" ::"r"(shared_u32(barrier)),
+      "r"(phase));
+}
+
+// Copy rows [row, row + box rows) of (plane, head) into dst. Coordinates are
+// ordered from innermost (channel, always 0) to outermost (plane).
+__device__ __forceinline__ void sr_tma_load_tile(
+    const CUtensorMap* map,
+    __nv_bfloat16* dst,
+    uint64_t* barrier,
+    int row,
+    int head,
+    int plane) {
+  asm volatile(
+      "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier::complete_tx"
+      "::bytes [%0], [%1, {%2, %3, %4, %5}], [%6];\n" ::"r"(shared_u32(dst)),
+      "l"(reinterpret_cast<uint64_t>(map)),
+      "r"(0),
+      "r"(row),
+      "r"(head),
+      "r"(plane),
+      "r"(shared_u32(barrier)));
 }
 
 // Load the query-row contraction operand for dK = dS^T Q and dV = P^T dO.
@@ -1021,10 +1105,10 @@ __device__ __forceinline__ void ldmatrix_b_rowtrans_sw_sr(
 
 template <int HeadDim, bool TaskInGridZ, bool OuterEqSeq>
 __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
-    const __nv_bfloat16* __restrict__ q,
-    const __nv_bfloat16* __restrict__ k,
-    const __nv_bfloat16* __restrict__ v,
-    const __nv_bfloat16* __restrict__ d_output,
+    const __grid_constant__ CUtensorMap q_map,
+    const __grid_constant__ CUtensorMap k_map,
+    const __grid_constant__ CUtensorMap v_map,
+    const __grid_constant__ CUtensorMap d_output_map,
     const float* __restrict__ logsumexp,
     const float* __restrict__ delta,
     const float* __restrict__ mask,
@@ -1047,6 +1131,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
     int query_capacity,
     int leaf_base,
     int io_head_dim,
+    QkvStrides qkv_strides,
     float attention_scale) {
   // A. Assign the key block, head, and outer leaf. Here each warp owns
   // 16 key rows, unlike the query-row ownership in the split kernels.
@@ -1102,30 +1187,30 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
       return leaf * kOuterLeaf + slot < outer_extent;
     }
   };
+  // First Q/K/V element of (slot plane, head); add row * qkv_strides.row.
+  const auto slot_head_base = [&](int slot) -> int64_t {
+    return slot_plane(slot) * heads * static_cast<int64_t>(sequence) * io_head_dim
+           + head * qkv_strides.head;
+  };
 
   // B. Stage this block's K/V and masks once, retaining them across queries.
   // The single-outer case stages only slot 0; the other slots are not read.
-#pragma unroll 1
+  // K/V tiles arrive by TMA together with the first query step (step D).
+  // Barrier b (0 or 1) tracks the TMA bytes of the steps that use buffer b.
   const int staged_slots = single_outer ? 1 : kOuterLeaf;
-  for (int slot = 0; slot < staged_slots; ++slot) {
-    __nv_bfloat16* dst_k = shared_k + slot * kSrKeyBlock * HeadDim;
-    __nv_bfloat16* dst_v = shared_v + slot * kSrKeyBlock * HeadDim;
-    const int64_t tensor_base =
-        (slot_plane(slot) * heads + head) * static_cast<int64_t>(sequence) * io_head_dim;
-    for (int element = threadIdx.x; element < kSrKeyBlock * HeadDim; element += kThreadsWg) {
-      const int row = element / HeadDim;
-      const int col = element - row * HeadDim;
-      const int64_t src = tensor_base + static_cast<int64_t>(key_start + row) * io_head_dim + col;
-      const int dst_index = row * HeadDim + wg_swz_col<HeadDim>(row, col);
-      dst_k[dst_index] = col < io_head_dim ? k[src] : __float2bfloat16_rn(0.0F);
-      dst_v[dst_index] = col < io_head_dim ? v[src] : __float2bfloat16_rn(0.0F);
-    }
+  __shared__ __align__(8) uint64_t staging_barriers[2];
+  if (threadIdx.x == 0) {
+    sr_mbarrier_init(&staging_barriers[0]);
+    sr_mbarrier_init(&staging_barriers[1]);
+    sr_mbarrier_init_fence();
   }
   for (int element = threadIdx.x; element < staged_slots * kSrKeyBlock; element += kThreadsWg) {
     const int slot = element / kSrKeyBlock;
     const int key = element - slot * kSrKeyBlock;
     shared_mask[element] = mask[slot_plane(slot) * sequence + key_start + key];
   }
+  // Publish the barrier initialization before any thread waits on it.
+  __syncthreads();
 
   // C. Start dK/dV at zero, or resume the raw FP32 sums from an earlier slab.
   // Their register values persist across every query tile in this launch.
@@ -1146,9 +1231,9 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
       if (!slot_is_active(slot)) {
         continue;
       }
+      // The continuation state uses the same element index as dK/dV.
       const int64_t out_base =
-          (slot_plane(slot) * heads + head) * static_cast<int64_t>(sequence) * io_head_dim
-          + static_cast<int64_t>(key_start + warp_key_start) * io_head_dim;
+          slot_head_base(slot) + (key_start + warp_key_start) * qkv_strides.row;
 #pragma unroll
       for (int tile = 0; tile < HeadDim / 8; ++tile) {
 #pragma unroll
@@ -1158,7 +1243,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
           if (column >= io_head_dim) {
             continue;
           }
-          const int64_t index = out_base + static_cast<int64_t>(row) * io_head_dim + column;
+          const int64_t index = out_base + row * qkv_strides.row + column;
           const float2 dv_pair = *reinterpret_cast<const float2*>(dv_continuation + index);
           const float2 dk_pair = *reinterpret_cast<const float2*>(dk_continuation + index);
           dv_accumulators[local_slot][tile].values[half * 2] = dv_pair.x;
@@ -1170,39 +1255,41 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
     }
   }
 
-  // D. Stage Q/dO and bias with 16-byte copies into the selected buffer.
-  // Commit groups are per thread; the loop waits and then publishes to WGMMA.
-  constexpr int kSrChunks = HeadDim / 8;
-  const auto stage_q_d_output_and_bias = [&](int query_start, int parity) {
+  // D. Stage one 32-query step into buffer `parity`.
+  // Thread 0 issues TMA loads of the Q and dO tiles of every staged slot
+  // (and, for the first step, the block's resident K/V tiles) and announces
+  // their total bytes on that buffer's barrier. All threads then copy the
+  // bias tile with 16-byte cp.async into rows of kSrBiasStride elements.
+  constexpr uint32_t kQueryTileBytes = kSrQueryTile * HeadDim * sizeof(__nv_bfloat16);
+  constexpr uint32_t kKeyTileBytes = kSrKeyBlock * HeadDim * sizeof(__nv_bfloat16);
+  const auto stage_query_step = [&](int query_start, int parity, bool with_key_value) {
     __nv_bfloat16* staging_q_buffer = shared_q + parity * kOuterLeaf * kSrQueryTile * HeadDim;
     __nv_bfloat16* staging_d_output_buffer =
         shared_d_output + parity * kOuterLeaf * kSrQueryTile * HeadDim;
     __nv_bfloat16* staging_bias_buffer = shared_bias + parity * kSrQueryTile * kSrBiasStride;
-#pragma unroll 1
-    for (int slot = 0; slot < staged_slots; ++slot) {
-      __nv_bfloat16* dst_q = staging_q_buffer + slot * kSrQueryTile * HeadDim;
-      __nv_bfloat16* dst_do = staging_d_output_buffer + slot * kSrQueryTile * HeadDim;
-      const int64_t plane = slot_plane(slot);
-      const int64_t tensor_base =
-          (plane * heads + head) * static_cast<int64_t>(sequence) * io_head_dim;
-      const int64_t dout_base = plane * static_cast<int64_t>(sequence) * heads * io_head_dim
-                                + static_cast<int64_t>(head) * io_head_dim;
-      for (int chunk = threadIdx.x; chunk < kSrQueryTile * kSrChunks; chunk += kThreadsWg) {
-        const int row = chunk / kSrChunks;
-        const int col = (chunk - row * kSrChunks) * 8;
-        const int global_query = query_start + row;
-        const int dst_index = row * HeadDim + wg_swz_col<HeadDim>(row, col);
-        if (col < io_head_dim) {
-          sr_cp_async_16(
-              dst_q + dst_index,
-              q + tensor_base + static_cast<int64_t>(global_query) * io_head_dim + col);
-          sr_cp_async_16(
-              dst_do + dst_index,
-              d_output + dout_base + static_cast<int64_t>(global_query) * heads * io_head_dim
-                  + col);
-        } else {
-          *reinterpret_cast<uint4*>(dst_q + dst_index) = uint4{0U, 0U, 0U, 0U};
-          *reinterpret_cast<uint4*>(dst_do + dst_index) = uint4{0U, 0U, 0U, 0U};
+    if (threadIdx.x == 0) {
+      // The block barrier before this call finished every read of this
+      // buffer; the proxy fence orders those reads before the TMA writes.
+      wg_proxy_fence();
+      const uint32_t step_bytes =
+          staged_slots * (2 * kQueryTileBytes + (with_key_value ? 2 * kKeyTileBytes : 0U));
+      sr_mbarrier_expect_bytes(&staging_barriers[parity], step_bytes);
+      for (int slot = 0; slot < staged_slots; ++slot) {
+        // slot_plane < batch * outer, which the launcher checks fits int32.
+        const int plane = static_cast<int>(slot_plane(slot));
+        sr_tma_load_tile(
+            &q_map, staging_q_buffer + slot * kSrQueryTile * HeadDim, &staging_barriers[parity],
+            query_start, head, plane);
+        sr_tma_load_tile(
+            &d_output_map, staging_d_output_buffer + slot * kSrQueryTile * HeadDim,
+            &staging_barriers[parity], query_start, head, plane);
+        if (with_key_value) {
+          sr_tma_load_tile(
+              &k_map, shared_k + slot * kSrKeyBlock * HeadDim, &staging_barriers[parity],
+              key_start, head, plane);
+          sr_tma_load_tile(
+              &v_map, shared_v + slot * kSrKeyBlock * HeadDim, &staging_barriers[parity],
+              key_start, head, plane);
         }
       }
     }
@@ -1216,18 +1303,23 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
     sr_cp_async_commit();
   };
 
-  stage_q_d_output_and_bias(query_base, 0);
+  stage_query_step(query_base, 0, /*with_key_value=*/true);
 
   const int query_end = query_base + query_rows;
 #pragma unroll 1
   for (int query_start = query_base; query_start < query_end; query_start += kSrQueryTile) {
-    const int parity = ((query_start - query_base) / kSrQueryTile) & 1;
+    const int step = (query_start - query_base) / kSrQueryTile;
+    const int parity = step & 1;
     // Complete the current buffer, then prefetch into the other buffer.
+    // Each barrier completes once per use of its buffer, so its phase bit
+    // flips every second step: step 0, 1, 2, 3 -> phase 0, 0, 1, 1.
+    // The proxy fence follows the forward kernel's pattern after TMA waits.
     sr_cp_async_wait_all();
+    sr_mbarrier_wait(&staging_barriers[parity], (step >> 1) & 1);
     wg_proxy_fence();
     __syncthreads();
     if (query_start + kSrQueryTile < query_end) {
-      stage_q_d_output_and_bias(query_start + kSrQueryTile, parity ^ 1);
+      stage_query_step(query_start + kSrQueryTile, parity ^ 1, /*with_key_value=*/false);
     }
     const __nv_bfloat16* current_q_buffer = shared_q + parity * kOuterLeaf * kSrQueryTile * HeadDim;
     const __nv_bfloat16* current_d_output_buffer =
@@ -1433,15 +1525,15 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
             mma_m16n8k16(dq_accumulators[tile], a_fragment, key_fragment);
           }
         }
-        // Partial layout matches the contiguous [B,O,H,N,D] output per
-        // key block: idx = ((kb * total_planes + plane) * heads + head)
-        //                  * sequence + q) * io_head_dim + col
-        const int64_t plane = slot_plane(slot);
-        const int64_t idx_base =
-            (((static_cast<int64_t>(key_block) * total_planes + plane) * heads + head)
-                 * static_cast<int64_t>(sequence)
-             + (query_start + row_half * kQueryTile))
-            * io_head_dim;
+        // Each key block owns one dQ-sized partial; within it an element
+        // uses dQ's own index (and therefore Q's storage order):
+        //   index = key_block * partial_stride + dQ index(plane, head, q, col)
+        // The reducer folds the partials elementwise in key-block order.
+        const int64_t partial_stride =
+            static_cast<int64_t>(total_planes) * heads * sequence * io_head_dim;
+        const int64_t idx_base = static_cast<int64_t>(key_block) * partial_stride
+                                 + slot_head_base(slot)
+                                 + (query_start + row_half * kQueryTile) * qkv_strides.row;
 #pragma unroll
         for (int tile = 0; tile < HeadDim / 8; ++tile) {
 #pragma unroll
@@ -1451,7 +1543,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
             if (column >= io_head_dim) {
               continue;
             }
-            const int64_t index = idx_base + static_cast<int64_t>(row) * io_head_dim + column;
+            const int64_t index = idx_base + row * qkv_strides.row + column;
             *reinterpret_cast<uint32_t*>(dq_partials + index) = pack_bf16_pair(
                 dq_accumulators[tile].values[half * 2],
                 dq_accumulators[tile].values[half * 2 + 1]);
@@ -1471,9 +1563,8 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
     if (!slot_is_active(slot)) {
       continue;
     }
-    const int64_t out_base =
-        (slot_plane(slot) * heads + head) * static_cast<int64_t>(sequence) * io_head_dim
-        + static_cast<int64_t>(key_start + warp_key_start) * io_head_dim;
+    // dK/dV (and the continuation state) use K's element index.
+    const int64_t out_base = slot_head_base(slot) + (key_start + warp_key_start) * qkv_strides.row;
 #pragma unroll
     for (int tile = 0; tile < HeadDim / 8; ++tile) {
 #pragma unroll
@@ -1483,7 +1574,7 @@ __global__ __launch_bounds__(kThreadsWg, 2) void turbopairformer_sr_leaf_kernel(
         if (column >= io_head_dim) {
           continue;
         }
-        const int64_t index = out_base + static_cast<int64_t>(row) * io_head_dim + column;
+        const int64_t index = out_base + row * qkv_strides.row + column;
         if (final_query_stripe) {
           *reinterpret_cast<uint32_t*>(out_dv + index) = pack_bf16_pair(
               dv_accumulators[local_slot][tile].values[half * 2],
@@ -1901,12 +1992,84 @@ void set_sr_leaf_shared_memory(int kSharedBytesSr) {
       "failed to opt in TurboPairFormer SR shared memory");
 }
 
+// Resolve cuTensorMapEncodeTiled through the runtime instead of linking
+// directly against libcuda (as the forward source does).
+using SrTensorMapEncodeFn = CUresult (*)(
+    CUtensorMap*,
+    CUtensorMapDataType,
+    cuuint32_t,
+    void*,
+    const cuuint64_t*,
+    const cuuint64_t*,
+    const cuuint32_t*,
+    const cuuint32_t*,
+    CUtensorMapInterleave,
+    CUtensorMapSwizzle,
+    CUtensorMapL2promotion,
+    CUtensorMapFloatOOBfill);
+
+SrTensorMapEncodeFn sr_tensor_map_encode_fn() {
+  static const SrTensorMapEncodeFn encode = [] {
+    void* symbol = nullptr;
+    cudaDriverEntryPointQueryResult query = cudaDriverEntryPointSymbolNotFound;
+    const cudaError_t status =
+        cudaGetDriverEntryPoint("cuTensorMapEncodeTiled", &symbol, cudaEnableDefault, &query);
+    TORCH_CHECK(
+        status == cudaSuccess && query == cudaDriverEntryPointSuccess && symbol != nullptr,
+        "cuTensorMapEncodeTiled is unavailable in this driver");
+    return reinterpret_cast<SrTensorMapEncodeFn>(symbol);
+  }();
+  return encode;
+}
+
+// Describe Q, K, V, or dO for the SR leaf's TMA loads as the 4-D array
+// [planes, heads, sequence, io_head_dim] with the tensor's element strides
+// (planes = B * O; one plane spans heads * sequence * io_head_dim elements).
+// One load copies box_rows rows of one (plane, head) into a dense
+// [box_rows, HeadDim] shared tile with the swizzle that wg_swz_col assumes
+// (32, 64, or 128 bytes for HeadDim 16, 32, or 64). Channels from
+// io_head_dim up to HeadDim are out of bounds and arrive as zeros.
+template <int HeadDim>
+CUtensorMap make_sr_tile_map(
+    const torch::Tensor& tensor,
+    int io_head_dim,
+    int sequence,
+    int heads,
+    int64_t planes,
+    QkvStrides strides,
+    int box_rows) {
+  static_assert(HeadDim == 16 || HeadDim == 32 || HeadDim == 64, "SR storage widths");
+  CUtensorMap tensor_map;
+  const cuuint64_t global_dim[4] = {
+      static_cast<cuuint64_t>(io_head_dim), static_cast<cuuint64_t>(sequence),
+      static_cast<cuuint64_t>(heads), static_cast<cuuint64_t>(planes)};
+  // Byte strides of the row, head, and plane dimensions (channels are dense).
+  const cuuint64_t global_stride[3] = {
+      static_cast<cuuint64_t>(strides.row) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(strides.head) * sizeof(__nv_bfloat16),
+      static_cast<cuuint64_t>(heads) * sequence * io_head_dim * sizeof(__nv_bfloat16)};
+  const cuuint32_t box_dim[4] = {
+      static_cast<cuuint32_t>(HeadDim), static_cast<cuuint32_t>(box_rows), 1, 1};
+  const cuuint32_t element_stride[4] = {1, 1, 1, 1};
+  constexpr CUtensorMapSwizzle kSwizzle =
+      HeadDim == 16 ? CU_TENSOR_MAP_SWIZZLE_32B
+                    : (HeadDim == 32 ? CU_TENSOR_MAP_SWIZZLE_64B : CU_TENSOR_MAP_SWIZZLE_128B);
+  const CUresult result = sr_tensor_map_encode_fn()(
+      &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 4, tensor.data_ptr(), global_dim,
+      global_stride, box_dim, element_stride, CU_TENSOR_MAP_INTERLEAVE_NONE, kSwizzle,
+      CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+  TORCH_CHECK(
+      result == CUDA_SUCCESS, "cuTensorMapEncodeTiled (SR tile) failed: ",
+      static_cast<int>(result));
+  return tensor_map;
+}
+
 template <int HeadDim, bool TaskInZ, bool OuterEq>
 void launch_sr_leaf_kernel(
-    const torch::Tensor& q,
-    const torch::Tensor& k,
-    const torch::Tensor& v,
-    const torch::Tensor& d_output,
+    const CUtensorMap& q_map,
+    const CUtensorMap& k_map,
+    const CUtensorMap& v_map,
+    const CUtensorMap& d_output_map,
     const torch::Tensor& logsumexp,
     const torch::Tensor& delta,
     const torch::Tensor& mask,
@@ -1929,16 +2092,14 @@ void launch_sr_leaf_kernel(
     int query_span,
     int leaf_base,
     int io_head_dim,
+    QkvStrides qkv_strides,
     float attention_scale,
     dim3 grid,
     int kSharedBytesSr,
     cudaStream_t stream) {
   turbopairformer_sr_leaf_kernel<HeadDim, TaskInZ, OuterEq>
       <<<grid, kThreadsWg, kSharedBytesSr, stream>>>(
-          reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
-          reinterpret_cast<const __nv_bfloat16*>(k.data_ptr()),
-          reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()),
-          reinterpret_cast<const __nv_bfloat16*>(d_output.data_ptr()), logsumexp.data_ptr<float>(),
+          q_map, k_map, v_map, d_output_map, logsumexp.data_ptr<float>(),
           delta.data_ptr<float>(), mask.data_ptr<float>(),
           reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
           reinterpret_cast<__nv_bfloat16*>(out_dk.data_ptr()),
@@ -1947,7 +2108,7 @@ void launch_sr_leaf_kernel(
           reinterpret_cast<__nv_bfloat16*>(dq_partials.data_ptr()),
           reinterpret_cast<__nv_bfloat16*>(workspace.data_ptr()), sequence, outer_count,
           total_planes, heads, batch_base, active_batch, batch_chunk, query_base, query_rows,
-          query_span, leaf_base, io_head_dim, attention_scale);
+          query_span, leaf_base, io_head_dim, qkv_strides, attention_scale);
 }
 
 template <int HeadDim>
@@ -2220,7 +2381,10 @@ void launch_sr(
     int resident_leaves,
     int batch_chunk,
     int io_head_dim,
+    QkvStrides qkv_strides,
     cudaStream_t stream) {
+  // K | V | double-buffered Q | dO | dS | double-buffered bias (BF16), then
+  // masks | two FP32 dBias pair-sum tiles. The order matches the kernel.
   constexpr int kSharedBytesSr =
       (2 * kOuterLeaf * kSrKeyBlock * HeadDim + 4 * kOuterLeaf * kSrQueryTile * HeadDim
        + kOuterLeaf * kSrQueryTile * kSrDsStride + 2 * kSrQueryTile * kSrBiasStride)
@@ -2256,6 +2420,18 @@ void launch_sr(
       "dK/dV continuation state is smaller than the query-stripe plan");
   set_sr_leaf_shared_memory<HeadDim, true>(kSharedBytesSr);
   set_sr_leaf_shared_memory<HeadDim, false>(kSharedBytesSr);
+  // TMA maps for the leaf's tiles: 32-query steps of Q and dO, 64-key K/V
+  // blocks. dO is always contiguous [B, O, N, H, D] (sequence-major).
+  const int64_t planes = static_cast<int64_t>(total_planes);
+  const QkvStrides d_output_strides{io_head_dim, static_cast<int64_t>(heads) * io_head_dim};
+  const CUtensorMap q_map = make_sr_tile_map<HeadDim>(
+      q, io_head_dim, sequence, heads, planes, qkv_strides, kSrQueryTile);
+  const CUtensorMap k_map = make_sr_tile_map<HeadDim>(
+      k, io_head_dim, sequence, heads, planes, qkv_strides, kSrKeyBlock);
+  const CUtensorMap v_map = make_sr_tile_map<HeadDim>(
+      v, io_head_dim, sequence, heads, planes, qkv_strides, kSrKeyBlock);
+  const CUtensorMap d_output_map = make_sr_tile_map<HeadDim>(
+      d_output, io_head_dim, sequence, heads, planes, d_output_strides, kSrQueryTile);
   const int finalize_threads = 256;
   for (int batch_base = 0; batch_base < batch;) {
     const int active_batch = std::min(batch_chunk, batch - batch_base);
@@ -2288,10 +2464,11 @@ void launch_sr(
                       static_cast<unsigned int>(key_blocks));
         const auto launch_leaf = select_sr_leaf_launcher<HeadDim>(task_in_grid_z, outer_eq);
         launch_leaf(
-            q, k, v, d_output, logsumexp, delta, mask, bias, out_dk, out_dv, dk_continuation,
+            q_map, k_map, v_map, d_output_map, logsumexp, delta, mask, bias, out_dk, out_dv,
+            dk_continuation,
             dv_continuation, dq_partials, workspace, sequence, outer_count, total_planes, heads,
             batch_base, active_batch, batch_chunk, query_base, query_rows, query_span, leaf_base,
-            io_head_dim, attention_scale, grid, kSharedBytesSr, stream);
+            io_head_dim, qkv_strides, attention_scale, grid, kSharedBytesSr, stream);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "TurboPairFormer SR leaf launch failed");
         turbopairformer_dq_dbias_finalize_kernel<<<
             static_cast<unsigned int>(finalize_blocks), finalize_threads, 0, stream>>>(
@@ -2325,8 +2502,27 @@ void launch_sr(
 // C++ entry points: validate tensor layouts, then choose storage specialization
 // -----------------------------------------------------------------------------
 
-// Production SR entry point. The Python facade supplies padded contiguous
-// tensors, a bounded workspace plan, forward logsumexp, and backward delta.
+// Return the QkvStrides of a [B, O, H, N, D] tensor stored head-major or
+// sequence-major, and reject every other layout. When H == 1 or N == 1 both
+// orders describe the same memory; is_contiguous() then selects head-major.
+QkvStrides sr_qkv_strides_of(const torch::Tensor& tensor, const char* name) {
+  TORCH_CHECK(tensor.dim() == 5, name, " must have shape [B,O,H,N,D]");
+  const int64_t heads = tensor.size(2);
+  const int64_t sequence = tensor.size(3);
+  const int64_t head_dim = tensor.size(4);
+  if (tensor.is_contiguous()) {
+    return QkvStrides{sequence * head_dim, head_dim};
+  }
+  TORCH_CHECK(
+      tensor.transpose(2, 3).is_contiguous(), name,
+      " must be contiguous [B,O,H,N,D] or a contiguous [B,O,N,H,D] tensor viewed as "
+      "[B,O,H,N,D]");
+  return QkvStrides{head_dim, heads * head_dim};
+}
+
+// Production SR entry point. The Python facade supplies padded tensors (Q/K/V
+// in either storage order), a bounded workspace plan, forward logsumexp, and
+// backward delta. dQ/dK/dV are written in Q's storage order.
 void turbopairformer_triangle_sr_backward_out(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -2359,18 +2555,33 @@ void turbopairformer_triangle_sr_backward_out(
   TORCH_CHECK(
       head_dim % 8 == 0 && head_dim <= 64,
       "SR backward serves D<=64 (D=128 keeps the two-pass path)");
-  TORCH_CHECK(q.is_contiguous());
-  const auto check_q_like = [&](const torch::Tensor& tensor) {
+  // Q, K, V and the three gradient outputs share one storage order, either
+  // head-major or sequence-major (see QkvStrides). The TMA tile loads of
+  // Q, K, V, and dO need 16-byte-aligned base addresses; with D % 8 == 0
+  // every row, head, and plane stride is then a multiple of 16 bytes too.
+  const QkvStrides qkv_strides = sr_qkv_strides_of(q, "q");
+  const auto check_q_like = [&](const torch::Tensor& tensor, const char* name) {
     TORCH_CHECK(
         tensor.is_cuda() && tensor.device() == q.device() && tensor.dtype() == torch::kBFloat16
-            && tensor.sizes() == q.sizes() && tensor.is_contiguous(),
-        "k/v/out_dq/out_dk/out_dv must be contiguous BF16 matching q");
+            && tensor.sizes() == q.sizes(),
+        name, " must be a BF16 tensor matching q");
+    const QkvStrides strides = sr_qkv_strides_of(tensor, name);
+    TORCH_CHECK(
+        strides.head == qkv_strides.head && strides.row == qkv_strides.row,
+        name, " must use the same storage order as q");
   };
-  check_q_like(k);
-  check_q_like(v);
-  check_q_like(out_dq);
-  check_q_like(out_dk);
-  check_q_like(out_dv);
+  check_q_like(k, "k");
+  check_q_like(v, "v");
+  check_q_like(out_dq, "out_dq");
+  check_q_like(out_dk, "out_dk");
+  check_q_like(out_dv, "out_dv");
+  const auto is_16_byte_aligned = [](const torch::Tensor& tensor) {
+    return reinterpret_cast<std::uintptr_t>(tensor.data_ptr()) % 16 == 0;
+  };
+  TORCH_CHECK(
+      is_16_byte_aligned(q) && is_16_byte_aligned(k) && is_16_byte_aligned(v)
+          && is_16_byte_aligned(d_output),
+      "SR backward Q/K/V/d_output storage must be 16-byte aligned");
   TORCH_CHECK(
       d_output.is_cuda() && d_output.dtype() == torch::kBFloat16 && d_output.is_contiguous()
           && d_output.dim() == 5 && d_output.size(0) == q.size(0) && d_output.size(1) == q.size(1)
@@ -2418,19 +2629,19 @@ void turbopairformer_triangle_sr_backward_out(
     launch_sr<16>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dq, out_dk, out_dv, out_dbias,
         workspace, dq_partials, dk_continuation, dv_continuation, sequence, outer_count, heads,
-        batch, query_span, resident_leaves, batch_chunk, io_head_dim, stream);
+        batch, query_span, resident_leaves, batch_chunk, io_head_dim, qkv_strides, stream);
     break;
   case 32:
     launch_sr<32>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dq, out_dk, out_dv, out_dbias,
         workspace, dq_partials, dk_continuation, dv_continuation, sequence, outer_count, heads,
-        batch, query_span, resident_leaves, batch_chunk, io_head_dim, stream);
+        batch, query_span, resident_leaves, batch_chunk, io_head_dim, qkv_strides, stream);
     break;
   default:
     launch_sr<64>(
         q, k, v, d_output, logsumexp, delta, mask, bias, out_dq, out_dk, out_dv, out_dbias,
         workspace, dq_partials, dk_continuation, dv_continuation, sequence, outer_count, heads,
-        batch, query_span, resident_leaves, batch_chunk, io_head_dim, stream);
+        batch, query_span, resident_leaves, batch_chunk, io_head_dim, qkv_strides, stream);
     break;
   }
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "TurboPairFormer SR launch failed");

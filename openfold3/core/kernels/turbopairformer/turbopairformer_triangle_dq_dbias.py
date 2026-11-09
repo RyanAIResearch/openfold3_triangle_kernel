@@ -479,8 +479,10 @@ def turbopairformer_triangle_sr_backward(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Reconstruct each probability tile once for dQ, dK, dV, and dBias.
 
-    Input layouts and the per-batch FP32 dBias result match the split path.
-    dQ/dK/dV outputs are BF16. The caller-supplied FP32 delta is used to form
+    Input layouts and the per-batch FP32 dBias result match the split path,
+    except that Q/K/V may also be the projection layout [B, O, N, H, D]
+    viewed as [B, O, H, N, D]. dQ/dK/dV outputs are BF16 and use Q's storage
+    order. The caller-supplied FP32 delta is used to form
     dS; the public facade computes delta using the forward rounding residual
     by default. Requires ``sequence % 64 == 0``, ``D <= 64``, and ``D % 8 == 0``.
 
@@ -509,6 +511,8 @@ def turbopairformer_triangle_sr_backward(
         batch_chunk=batch_chunk,
     )
     # 2. Allocate the reusable dBias slab and one dQ partial per key block.
+    # Each key block's partial is a dQ-sized slice that the kernel indexes
+    # exactly like dQ, so it follows Q's storage order too.
     workspace = torch.empty(plan.elements, device=q.device, dtype=torch.bfloat16)
     key_blocks = sequence // 64
     dq_partials = torch.empty(
@@ -527,6 +531,8 @@ def turbopairformer_triangle_sr_backward(
     )
     dv_continuation = torch.empty_like(dk_continuation)
     # 4. Allocate the final gradients, then launch all waves and reductions.
+    # Both accepted Q orders are dense, so empty_like keeps Q's strides; the
+    # kernel requires dQ/dK/dV in Q's storage order.
     out_dq = torch.empty_like(q)
     out_dk = torch.empty_like(q)
     out_dv = torch.empty_like(q)

@@ -12,15 +12,22 @@ but intentionally does not claim bitwise alignment with the stock PyTorch
 floating-point path.
 
 Contract: q is RAW (unscaled); the kernels apply 1/sqrt(D) internally.
-The public wrapper validates inputs, pads supported dimensions, packs Q/K/V,
-calls autograd, then removes padding. Q/K/V use [*, O, H, N, D]; the forward
-kernel writes [*, O, N, H, D] directly, and the wrapper returns it contiguously.
+The public wrapper validates inputs, pads supported dimensions, calls
+autograd, then removes padding. Q/K/V use [*, O, H, N, D]; the forward kernel
+writes [*, O, N, H, D] directly, and the wrapper returns it contiguously.
 Here * is the batch prefix, O the outer index, H the attention heads, N the
 query/key sequence, and D the channels per head.
 
+The kernels read Q/K/V in either of two storage orders: contiguous
+[*, O, H, N, D], or the projection layout [*, O, N, H, D] viewed as
+[*, O, H, N, D] (what attention modules produce with ``transpose(-2, -3)``).
+The second order is passed through without a copy, and backward writes
+dQ/dK/dV in the same order, so the projection's backward needs no copy
+either. Any other strides are copied once into the contiguous order.
+
 Reading order: start at ``turbopairformer_triangle_attention`` for preparation
 and output layout, then ``_TurboPairFormerTriangleAttention`` for the tensors
-saved between forward and backward. ``_PackQKV`` handles the fused input copy.
+saved between forward and backward.
 """
 
 from __future__ import annotations
@@ -49,7 +56,7 @@ _FORWARD: Any = None
 _DELTA: Any = None
 _INVOCATIONS = 0
 # Support verdicts depend on shape, dtype, device, and requires_grad.
-# Strides are not part of this key: the facade packs supported strided inputs.
+# Strides are not part of this key: the facade copies unsupported strides.
 _SUPPORT_CACHE: dict = {}
 _SUPPORT_CACHE_LIMIT = 4096
 
@@ -60,7 +67,7 @@ def invocation_count() -> int:
 
 
 def _forward_extension() -> Any:
-    """Load the forward/packing extension on first use and retain the module."""
+    """Load the forward extension on first use and retain the module."""
     global _FORWARD
     if _FORWARD is None:
         from openfold3.core.kernels.turbopairformer.turbopairformer_triangle_forward import (  # noqa: E501
@@ -213,51 +220,11 @@ def _is_turbopairformer_supported_uncached(
     return True, "supported"
 
 
-class _PackQKV(torch.autograd.Function):
-    """Fused q/k/v gather into kernel layout.
-
-    Forward reads the [.., N, H, D]-major producer views in one launch and
-    emits three contiguous [.., H, N, D] tensors. The transpose before
-    flattening is essential: flattening the public [.., H, N, D] view directly
-    would materialize logical H-major order and then permute it a second time
-    in CUDA. Backward is the same logical identity as ``contiguous()``; the
-    producer transpose owns the inverse layout mapping.
-    """
-
-    @staticmethod
-    def forward(ctx, q, k, v, bo, heads, seq, dim):
-        ctx.view_shapes = (q.shape, k.shape, v.shape)
-        packed = _forward_extension().turbopairformer_pack_qkv(
-            q.transpose(-2, -3).reshape(-1),
-            k.transpose(-2, -3).reshape(-1),
-            v.transpose(-2, -3).reshape(-1),
-            bo,
-            heads,
-            seq,
-            dim,
-        )
-        return packed[0], packed[1], packed[2]
-
-    @staticmethod
-    def backward(ctx, dq, dk, dv):
-        # Same contract as .contiguous(): identity pass-through. The upstream
-        # permute's own backward inverts the layout symbolically.
-        q_shape, k_shape, v_shape = ctx.view_shapes
-        return (
-            dq.reshape(q_shape),
-            dk.reshape(k_shape),
-            dv.reshape(v_shape),
-            None,
-            None,
-            None,
-            None,
-        )
-
-
 class _TurboPairFormerTriangleAttention(torch.autograd.Function):
     """Run the CUDA kernels and own the saved state for their backward pass.
 
-    Kernel inputs have flattened batches and padded, contiguous storage.
+    Kernel inputs have flattened batches and padded storage. Q/K/V share one
+    of the two storage orders the kernels read; dQ/dK/dV come back in it.
     ``expanded_bias`` is detached; ``source_bias`` keeps the autograd edge and
     unexpanded bias shape, after any dtype conversion or sequence padding.
     """
@@ -353,6 +320,24 @@ class _TurboPairFormerTriangleAttention(torch.autograd.Function):
         return d_q, d_k, d_v, None, None, d_bias, None, None
 
 
+def _qkv_storage_order(tensor: torch.Tensor) -> str | None:
+    """Name the kernel-readable storage order of a [B, O, H, N, D] tensor.
+
+    ``"head_major"`` is contiguous [B, O, H, N, D]. ``"sequence_major"`` is a
+    contiguous [B, O, N, H, D] tensor viewed as [B, O, H, N, D], which is the
+    transposed projection output; it also needs the 16-byte-aligned base the
+    kernels' vector copies use. With H == 1 or N == 1 both orders describe
+    the same memory and the tensor reports ``"head_major"``. Returns ``None``
+    for any other strides, so the caller copies into the contiguous order.
+    """
+
+    if tensor.is_contiguous():
+        return "head_major"
+    if tensor.transpose(-2, -3).is_contiguous() and tensor.data_ptr() % 16 == 0:
+        return "sequence_major"
+    return None
+
+
 def turbopairformer_triangle_attention(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -367,7 +352,7 @@ def turbopairformer_triangle_attention(
     all four gradients. The mask is additive and must not require gradients.
     """
 
-    # 1. Validate before allocating padded or packed copies.
+    # 1. Validate before allocating padded or copied inputs.
     validate_turbopairformer_attention_policy()
     supported, reason = is_turbopairformer_supported(q, k, v, res_mask, pair_bias)
     if not supported:
@@ -433,43 +418,22 @@ def turbopairformer_triangle_attention(
         padded_mask[..., :outer, :, :, :sequence] = res_mask
         res_mask = padded_mask
 
-    # 3. Flatten the batch prefix and pack each input into its kernel layout.
+    # 3. Flatten the batch prefix and keep Q/K/V in a storage order the
+    # kernels read directly. Reshaping only merges the batch prefix, so it
+    # stays a view for both supported orders.
     kernel_tail_shape = tuple(q.shape[-4:])
     batch = 1
     for batch_dimension in batch_prefix:
         batch *= int(batch_dimension)
-
-    def _is_swapped_hn_view(tensor):
-        # producer layout [.., N, H, D] viewed as [.., H, N, D]: one fused
-        # gather replaces three separate copy kernels.
-        outer_count, num_heads, sequence_length, head_channels = tensor.shape[-4:]
-        strides = tensor.stride()
-        return (
-            tensor.dtype == torch.bfloat16
-            and head_channels % 2 == 0
-            and strides[-1] == 1
-            and strides[-2] == num_heads * head_channels
-            and strides[-3] == head_channels
+    q_flat, k_flat, v_flat = (
+        tensor.reshape((batch,) + kernel_tail_shape) for tensor in (q, k, v)
+    )
+    storage_orders = {_qkv_storage_order(t) for t in (q_flat, k_flat, v_flat)}
+    if len(storage_orders) != 1 or None in storage_orders:
+        # Mixed or unsupported strides: one copy into the contiguous order.
+        q_flat, k_flat, v_flat = (
+            tensor.contiguous() for tensor in (q_flat, k_flat, v_flat)
         )
-
-    if _is_swapped_hn_view(q) and _is_swapped_hn_view(k) and _is_swapped_hn_view(v):
-        packed_outer, packed_heads, packed_sequence, packed_head_dim = kernel_tail_shape
-        q_flat, k_flat, v_flat = _PackQKV.apply(
-            q,
-            k,
-            v,
-            batch * packed_outer,
-            packed_heads,
-            packed_sequence,
-            packed_head_dim,
-        )
-        q_flat = q_flat.view((batch,) + kernel_tail_shape)
-        k_flat = k_flat.view((batch,) + kernel_tail_shape)
-        v_flat = v_flat.view((batch,) + kernel_tail_shape)
-    else:
-        q_flat = q.reshape((batch,) + kernel_tail_shape).contiguous()
-        k_flat = k.reshape((batch,) + kernel_tail_shape).contiguous()
-        v_flat = v.reshape((batch,) + kernel_tail_shape).contiguous()
     # Materialize the mask and bias over the flattened batch prefix.
     mask_flat = (
         res_mask.expand(batch_prefix + tuple(res_mask.shape[-4:]))

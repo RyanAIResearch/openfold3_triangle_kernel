@@ -18,7 +18,13 @@
 // for the backward pass. The Python facade enables this by default.
 //
 // Tensor layouts at the C++ entry point (the Python facade has its own limits):
-//   q, k, v : [B, O, H, N, D] BF16, contiguous
+//   q, k, v : [B, O, H, N, D] BF16 in one of two storage orders, shared by
+//             all three tensors (see QkvStrides below):
+//               head-major      contiguous [B, O, H, N, D];
+//               sequence-major  contiguous [B, O, N, H, D] viewed as
+//                               [B, O, H, N, D], which is the transposed
+//                               projection output the model produces.
+//             The kernels read either order in place; no packing pass.
 //   mask    : [B, O, 1, 1, N] FP32 additive mask
 //   bias    : [B, 1, H, N, N] BF16 additive
 //   out     : [B, O, N, H, D] BF16; optional residual has the same layout
@@ -63,6 +69,19 @@ constexpr int kMaxGridYZ = 65535;
 constexpr long long kMaxGridX = 2147483647LL;
 constexpr long long kMaxTmaPlanes = 2147483647LL;
 
+// Element strides of the head and sequence axes of a [B, O, H, N, D] Q/K/V
+// view. Channels are always contiguous, and one (batch, outer) plane always
+// spans H * N * D contiguous elements, so these two strides locate any row:
+//   element(plane, head, row, channel) =
+//       plane * H * N * D + head * head + row * row + channel
+//   head-major      [B, O, H, N, D]: head = N * D, row = D
+//   sequence-major  [B, O, N, H, D]: head = D,     row = H * D
+// Reading either order performs the same arithmetic on the same values.
+struct QkvStrides {
+    int64_t head;
+    int64_t row;
+};
+
 // -----------------------------------------------------------------------------
 // QKV layout conversion
 // -----------------------------------------------------------------------------
@@ -71,6 +90,9 @@ constexpr long long kMaxTmaPlanes = 2147483647LL;
 // in one launch. The caller passes flat views in the source memory order.
 // CopyT sets the copy width; the launcher chooses it from row size and
 // pointer alignment so that each copy stays within one row.
+// The forward and SR backward kernels now read the sequence-major order
+// directly, so the Python facade no longer calls this pack. It remains an
+// exported utility with an unchanged contract.
 template <typename CopyT>
 __global__ void turbopairformer_pack_qkv_kernel(
     const CopyT* __restrict__ q,
@@ -230,18 +252,24 @@ __device__ __forceinline__ void mbarrier_wait_parity(uint64_t* bar, uint32_t par
         "r"(parity));
 }
 
-__device__ __forceinline__ void tma_load_3d_slice(
+// Load one K or V tile through the 4-D map [plane, head, key, channel]
+// built by make_kv_tensor_map. Coordinates are ordered from innermost
+// (channel) to outermost (batch-outer plane); the box always starts at
+// channel 0 and covers kBlockN keys of one head.
+__device__ __forceinline__ void tma_load_kv_tile(
     const CUtensorMap* map,
     __nv_bfloat16* dst,
     uint64_t* bar,
     int coord_key,
+    int coord_head,
     int coord_plane) {
     asm volatile(
-        "cp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx"
-        "::bytes [%0], [%1, {%2, %3, %4}], [%5];\n" ::"r"(shared_u32(dst)),
+        "cp.async.bulk.tensor.4d.shared::cluster.global.mbarrier::complete_tx"
+        "::bytes [%0], [%1, {%2, %3, %4, %5}], [%6];\n" ::"r"(shared_u32(dst)),
         "l"(reinterpret_cast<uint64_t>(map)),
         "r"(0),
         "r"(coord_key),
+        "r"(coord_head),
         "r"(coord_plane),
         "r"(shared_u32(bar)));
 }
@@ -435,6 +463,7 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_ker
     int heads,
     int batch,
     int io_dim,
+    QkvStrides qkv_strides,
     float attention_scale) {
     constexpr int kKVStride = HeadDim + 8;
     static_assert(HeadDim % 16 == 0 && (kKVStride * 2) % 16 == 0);
@@ -467,7 +496,10 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_ker
         static_cast<int64_t>(batch_index) * outer_extent + outer_index;
     const int64_t head_row_offset =
         (batch_outer_plane * heads + head_index) * static_cast<int64_t>(sequence);
-    const int64_t qkv_head_offset = head_row_offset * io_dim;
+    // Q/K/V row r of this (plane, head) starts at qkv_head_offset + r * row stride.
+    const int64_t qkv_head_offset =
+        batch_outer_plane * heads * static_cast<int64_t>(sequence) * io_dim
+        + head_index * qkv_strides.head;
     const int64_t bias_head_offset = (static_cast<int64_t>(batch_index) * heads + head_index)
                                      * static_cast<int64_t>(sequence) * sequence;
     const int64_t mask_plane_offset = batch_outer_plane * sequence;
@@ -486,7 +518,7 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_ker
             (NoPartialTiles || warp_query_start + row < sequence) ? warp_query_start + row : 0;
         shared_warp_q[row * kKVStride + channel] =
             channel < io_dim
-                ? q[qkv_head_offset + static_cast<int64_t>(query_row) * io_dim + channel]
+                ? q[qkv_head_offset + query_row * qkv_strides.row + channel]
                 : __float2bfloat16_rn(0.0F);
     }
     __syncwarp();
@@ -528,7 +560,7 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_ker
                 (NoPartialTiles || key_tile_start + row < sequence) ? key_tile_start + row : 0;
             if (channel < io_dim) {
                 const int64_t source_offset =
-                    qkv_head_offset + static_cast<int64_t>(key_row) * io_dim + channel;
+                    qkv_head_offset + key_row * qkv_strides.row + channel;
                 cp_async_16(destination_k_tile + row * kKVStride + channel, k + source_offset);
                 cp_async_16(destination_v_tile + row * kKVStride + channel, v + source_offset);
             } else {
@@ -754,6 +786,7 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_tma
     int sequence,
     int outer_count,
     int heads,
+    QkvStrides qkv_strides,
     float attention_scale) {
     // The Python facade and AOT/JIT loaders restrict execution to Hopper CC 9.0;
     // the extension is built for sm_90a. This guard is for device compilation,
@@ -805,7 +838,10 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_tma
         static_cast<int64_t>(batch_index) * outer_extent + outer_index;
     const int64_t head_row_offset =
         (batch_outer_plane * heads + head_index) * static_cast<int64_t>(sequence);
-    const int64_t q_head_offset = head_row_offset * HeadDim;
+    // Q row r of this (plane, head) starts at q_head_offset + r * row stride.
+    const int64_t q_head_offset =
+        batch_outer_plane * heads * static_cast<int64_t>(sequence) * HeadDim
+        + head_index * qkv_strides.head;
     const int64_t mask_plane_offset = batch_outer_plane * sequence;
     const int64_t bias_head_offset = (static_cast<int64_t>(batch_index) * heads + head_index)
                                      * static_cast<int64_t>(sequence) * sequence;
@@ -813,8 +849,9 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_tma
     const int64_t output_head_offset =
         batch_outer_plane * static_cast<int64_t>(sequence) * heads * HeadDim
         + static_cast<int64_t>(head_index) * HeadDim;
-    // The launcher checks that batch * outer * heads fits int32.
-    const int kv_tma_plane = static_cast<int>(batch_outer_plane * heads + head_index);
+    // K/V tiles are addressed by (plane, head, key) in the 4-D tensor maps.
+    // The launcher checks that batch * outer fits int32.
+    const int kv_tma_plane = static_cast<int>(batch_outer_plane);
     // Each (batch, head) has one bias matrix shared by all outer indices.
     const int bias_tma_plane = batch_index * heads + head_index;
 
@@ -840,7 +877,7 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_tma
         const int query_row =
             (NoPartialTiles || warp_query_start + row < sequence) ? warp_query_start + row : 0;
         shared_warp_q[row * kQueryRowStride + channel] =
-            q[q_head_offset + static_cast<int64_t>(query_row) * HeadDim + channel];
+            q[q_head_offset + query_row * qkv_strides.row + channel];
     }
     // Load the first 64 mask values. All query rows in this block share them;
     // later iterations prefetch the next mask tile.
@@ -886,11 +923,12 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_tma
             mbarrier_expect_tx(
                 &k_load_barriers[buffer_slot],
                 kKVTileElements * static_cast<int>(sizeof(__nv_bfloat16)));
-            tma_load_3d_slice(
+            tma_load_kv_tile(
                 &k_map,
                 shared_k_buffers + buffer_slot * kKVTileElements,
                 &k_load_barriers[buffer_slot],
                 key_tile_index * kBlockN,
+                head_index,
                 kv_tma_plane);
         }
     };
@@ -899,11 +937,12 @@ __global__ __launch_bounds__(kThreads) void turbopairformer_triangle_forward_tma
             mbarrier_expect_tx(
                 &v_load_barriers[buffer_slot],
                 kKVTileElements * static_cast<int>(sizeof(__nv_bfloat16)));
-            tma_load_3d_slice(
+            tma_load_kv_tile(
                 &v_map,
                 shared_v_buffers + buffer_slot * kKVTileElements,
                 &v_load_barriers[buffer_slot],
                 key_tile_index * kBlockN,
+                head_index,
                 kv_tma_plane);
         }
     };
@@ -1263,27 +1302,35 @@ TensorMapEncodeFn tensor_map_encode_fn() {
     return encode;
 }
 
-// Describe K or V as [planes, sequence, HeadDim], where planes = B * O * H.
-// Each TMA load covers one key tile, with the swizzle matched to its row width.
+// Describe K or V as the 4-D array [planes, heads, sequence, HeadDim], where
+// planes = B * O, using the element strides of either Q/K/V storage order.
+// Each TMA load covers kBlockN keys of one head (a dense [kBlockN, HeadDim]
+// shared tile), with the swizzle matched to the row width. The shared tile
+// is the same for both storage orders; only the global addresses differ.
+// Keys at or beyond the sequence end are out of bounds and arrive as zeros.
 CUtensorMap make_kv_tensor_map(
     const torch::Tensor& source,
     int head_dim,
     int sequence,
-    int64_t planes) {
+    int heads,
+    int64_t planes,
+    QkvStrides strides) {
     CUtensorMap tensor_map;
-    const cuuint64_t global_dim[3] = {
+    const cuuint64_t global_dim[4] = {
         static_cast<cuuint64_t>(head_dim), static_cast<cuuint64_t>(sequence),
-        static_cast<cuuint64_t>(planes)};
-    const cuuint64_t global_stride[2] = {
-        static_cast<cuuint64_t>(head_dim) * sizeof(__nv_bfloat16),
-        static_cast<cuuint64_t>(head_dim) * sequence * sizeof(__nv_bfloat16)};
-    const cuuint32_t box_dim[3] = {static_cast<cuuint32_t>(head_dim), kBlockN, 1};
-    const cuuint32_t element_stride[3] = {1, 1, 1};
+        static_cast<cuuint64_t>(heads), static_cast<cuuint64_t>(planes)};
+    // Byte strides of the key, head, and plane dimensions (channels are dense).
+    const cuuint64_t global_stride[3] = {
+        static_cast<cuuint64_t>(strides.row) * sizeof(__nv_bfloat16),
+        static_cast<cuuint64_t>(strides.head) * sizeof(__nv_bfloat16),
+        static_cast<cuuint64_t>(heads) * sequence * head_dim * sizeof(__nv_bfloat16)};
+    const cuuint32_t box_dim[4] = {static_cast<cuuint32_t>(head_dim), kBlockN, 1, 1};
+    const cuuint32_t element_stride[4] = {1, 1, 1, 1};
     const CUtensorMapSwizzle swizzle =
         head_dim == 16 ? CU_TENSOR_MAP_SWIZZLE_32B
                        : (head_dim == 32 ? CU_TENSOR_MAP_SWIZZLE_64B : CU_TENSOR_MAP_SWIZZLE_128B);
     const CUresult result = tensor_map_encode_fn()(
-        &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 3, source.data_ptr(), global_dim,
+        &tensor_map, CU_TENSOR_MAP_DATA_TYPE_BFLOAT16, 4, source.data_ptr(), global_dim,
         global_stride, box_dim, element_stride, CU_TENSOR_MAP_INTERLEAVE_NONE, swizzle,
         CU_TENSOR_MAP_L2_PROMOTION_NONE, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
     TORCH_CHECK(
@@ -1332,6 +1379,7 @@ void launch_forward_tma_kernel(
     int sequence,
     int outer_count,
     int heads,
+    QkvStrides qkv_strides,
     float attention_scale,
     dim3 grid,
     cudaStream_t stream) {
@@ -1353,7 +1401,7 @@ void launch_forward_tma_kernel(
             k_map, v_map, bias_map, reinterpret_cast<const __nv_bfloat16*>(q.data_ptr()),
             mask.data_ptr<float>(), reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
             reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), lse.data_ptr<float>(),
-            shadow_residual, sequence, outer_count, heads, attention_scale);
+            shadow_residual, sequence, outer_count, heads, qkv_strides, attention_scale);
 }
 
 template <int HeadDim, bool BiasTma>
@@ -1431,12 +1479,15 @@ void launch_forward_tma_specialized(
     int outer_count,
     int heads,
     int batch,
+    QkvStrides qkv_strides,
     __nv_bfloat16* shadow_residual,
     cudaStream_t stream) {
     // 1. Describe the K/V tensors, and bias when it also uses TMA.
-    const int64_t kv_plane_count = static_cast<int64_t>(batch) * outer_count * heads;
-    const CUtensorMap k_map = make_kv_tensor_map(k, HeadDim, sequence, kv_plane_count);
-    const CUtensorMap v_map = make_kv_tensor_map(v, HeadDim, sequence, kv_plane_count);
+    const int64_t kv_plane_count = static_cast<int64_t>(batch) * outer_count;
+    const CUtensorMap k_map =
+        make_kv_tensor_map(k, HeadDim, sequence, heads, kv_plane_count, qkv_strides);
+    const CUtensorMap v_map =
+        make_kv_tensor_map(v, HeadDim, sequence, heads, kv_plane_count, qkv_strides);
     CUtensorMap bias_map{};
     if constexpr (BiasTma) {
         bias_map = make_bias_tensor_map(bias, sequence, static_cast<int64_t>(batch) * heads);
@@ -1471,7 +1522,7 @@ void launch_forward_tma_specialized(
     // 4. Configure shared memory and launch once with the common arguments.
     selected_launcher(
         k_map, v_map, bias_map, q, mask, bias, out, lse, shadow_residual, sequence, outer_count,
-        heads, attention_scale, grid, stream);
+        heads, qkv_strides, attention_scale, grid, stream);
 }
 
 template <int HeadDim>
@@ -1487,6 +1538,7 @@ void launch_forward_tma(
     int outer_count,
     int heads,
     int batch,
+    QkvStrides qkv_strides,
     __nv_bfloat16* shadow_residual,
     cudaStream_t stream) {
     // Bias TMA needs a 16-byte-aligned address and row stride.
@@ -1495,12 +1547,12 @@ void launch_forward_tma(
         sequence % 8 == 0 && reinterpret_cast<std::uintptr_t>(bias.data_ptr()) % 16 == 0;
     if (bias_tma_ok) {
         launch_forward_tma_specialized<HeadDim, true>(
-            q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, shadow_residual,
-            stream);
+            q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, qkv_strides,
+            shadow_residual, stream);
     } else {
         launch_forward_tma_specialized<HeadDim, false>(
-            q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, shadow_residual,
-            stream);
+            q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, qkv_strides,
+            shadow_residual, stream);
     }
 }
 
@@ -1519,6 +1571,7 @@ void launch_forward_kernel(
     int heads,
     int batch,
     int io_dim,
+    QkvStrides qkv_strides,
     float attention_scale,
     dim3 grid,
     cudaStream_t stream) {
@@ -1540,7 +1593,8 @@ void launch_forward_kernel(
             reinterpret_cast<const __nv_bfloat16*>(v.data_ptr()), mask.data_ptr<float>(),
             reinterpret_cast<const __nv_bfloat16*>(bias.data_ptr()),
             reinterpret_cast<__nv_bfloat16*>(out.data_ptr()), lse.data_ptr<float>(),
-            shadow_residual, sequence, outer_count, heads, batch, io_dim, attention_scale);
+            shadow_residual, sequence, outer_count, heads, batch, io_dim, qkv_strides,
+            attention_scale);
 }
 
 template <int HeadDim>
@@ -1619,6 +1673,7 @@ void launch_forward(
     int heads,
     int batch,
     int io_dim,
+    QkvStrides qkv_strides,
     __nv_bfloat16* shadow_residual,
     cudaStream_t stream) {
     // 1. Set the attention scale and assign blocks to
@@ -1650,7 +1705,7 @@ void launch_forward(
     // 3. Configure shared memory and launch once with the common arguments.
     selected_launcher(
         q, k, v, mask, bias, out, lse, shadow_residual, sequence, outer_count, heads, batch, io_dim,
-        attention_scale, grid, stream);
+        qkv_strides, attention_scale, grid, stream);
 }
 
 // -----------------------------------------------------------------------------
@@ -1750,6 +1805,24 @@ std::vector<torch::Tensor> turbopairformer_pack_qkv(
     return {out_q, out_k, out_v};
 }
 
+// Return the QkvStrides of a [B, O, H, N, D] tensor stored head-major or
+// sequence-major, and reject every other layout. When H == 1 or N == 1 both
+// orders describe the same memory; is_contiguous() then selects head-major.
+QkvStrides qkv_strides_of(const torch::Tensor& tensor, const char* name) {
+    TORCH_CHECK(tensor.dim() == 5, name, " must have shape [B,O,H,N,D]");
+    const int64_t heads = tensor.size(2);
+    const int64_t sequence = tensor.size(3);
+    const int64_t head_dim = tensor.size(4);
+    if (tensor.is_contiguous()) {
+        return QkvStrides{sequence * head_dim, head_dim};
+    }
+    TORCH_CHECK(
+        tensor.transpose(2, 3).is_contiguous(), name,
+        " must be contiguous [B,O,H,N,D] or a contiguous [B,O,N,H,D] tensor viewed as "
+        "[B,O,H,N,D]");
+    return QkvStrides{head_dim, heads * head_dim};
+}
+
 void turbopairformer_triangle_forward_impl(
     const torch::Tensor& q,
     const torch::Tensor& k,
@@ -1781,21 +1854,26 @@ void turbopairformer_triangle_forward_impl(
     const int heads = static_cast<int>(heads64);
     const int head_dim = static_cast<int>(head_dim64);
 
-    // Check the tensors used by both forward kernels.
-    const auto check_q_like = [&](const torch::Tensor& tensor) {
+    // Check the tensors used by both forward kernels. Q, K, and V must share
+    // one of the two storage orders described by QkvStrides.
+    const QkvStrides qkv_strides = qkv_strides_of(q, "q");
+    const auto check_q_like = [&](const torch::Tensor& tensor, const char* name) {
         TORCH_CHECK(
             tensor.is_cuda() && tensor.device() == q.device() && tensor.dtype() == torch::kBFloat16
-                && tensor.sizes() == q.sizes() && tensor.is_contiguous(),
-            "k/v/out must be contiguous BF16 tensors matching q on one device");
+                && tensor.sizes() == q.sizes(),
+            name, " must be a BF16 tensor matching q on one device");
+        const QkvStrides strides = qkv_strides_of(tensor, name);
+        TORCH_CHECK(
+            strides.head == qkv_strides.head && strides.row == qkv_strides.row,
+            name, " must use the same storage order as q");
     };
-    check_q_like(k);
-    check_q_like(v);
+    check_q_like(k, "k");
+    check_q_like(v, "v");
     TORCH_CHECK(
         out.is_cuda() && out.device() == q.device() && out.dtype() == torch::kBFloat16
             && out.is_contiguous()
             && out.sizes() == torch::IntArrayRef({batch, outer_count, sequence, heads, head_dim}),
         "out must be contiguous BF16 [B,O,N,H,D] on q.device");
-    TORCH_CHECK(q.is_contiguous());
     TORCH_CHECK(
         mask.is_cuda() && mask.device() == q.device() && mask.dtype() == torch::kFloat32
             && mask.is_contiguous()
@@ -1828,6 +1906,9 @@ void turbopairformer_triangle_forward_impl(
     // storage is the compiled width, not a change to global tensor strides:
     // the cp.async path zero-fills channels from head_dim through storage-1.
     // Bias alignment is handled independently inside launch_forward_tma.
+    // The 4-D K/V maps address heads separately and need only B*O to fit
+    // int32; the B*O*H bound is kept so each shape selects the same kernel
+    // as builds that used one TMA coordinate per (plane, head).
     const bool tma_planes_ok = batch64 * outer64 * heads64 <= kMaxTmaPlanes;
     TORCH_CHECK(
         head_dim % 8 == 0 && head_dim <= 128, "head_dim must be a multiple of 8 and <= 128, got ",
@@ -1837,40 +1918,40 @@ void turbopairformer_triangle_forward_impl(
     case 16:
         if (tma_planes_ok && head_dim == 16) {
             launch_forward_tma<16>(
-                q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, shadow_residual,
-                stream);
+                q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, qkv_strides,
+                shadow_residual, stream);
         } else {
             launch_forward<16>(
                 q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, head_dim,
-                shadow_residual, stream);
+                qkv_strides, shadow_residual, stream);
         }
         break;
     case 32:
         if (tma_planes_ok && head_dim == 32) {
             launch_forward_tma<32>(
-                q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, shadow_residual,
-                stream);
+                q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, qkv_strides,
+                shadow_residual, stream);
         } else {
             launch_forward<32>(
                 q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, head_dim,
-                shadow_residual, stream);
+                qkv_strides, shadow_residual, stream);
         }
         break;
     case 64:
         if (tma_planes_ok && head_dim == 64) {
             launch_forward_tma<64>(
-                q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, shadow_residual,
-                stream);
+                q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, qkv_strides,
+                shadow_residual, stream);
         } else {
             launch_forward<64>(
                 q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, head_dim,
-                shadow_residual, stream);
+                qkv_strides, shadow_residual, stream);
         }
         break;
     default:
         launch_forward<128>(
             q, k, v, mask, bias, out, lse, sequence, outer_count, heads, batch, head_dim,
-            shadow_residual, stream);
+            qkv_strides, shadow_residual, stream);
         break;
     }
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "launch failed");
