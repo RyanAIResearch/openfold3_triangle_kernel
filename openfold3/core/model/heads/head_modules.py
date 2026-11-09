@@ -91,6 +91,49 @@ class AuxiliaryHeadsAllAtom(nn.Module):
                 **self.config["pae"],
             )
 
+    def frozen_tpf_confidence_ineligibility(
+        self,
+        *,
+        num_samples: int,
+        apply_per_sample: bool,
+        offload_inference: bool,
+        inplace_safe: bool,
+        pairformer_dtype: torch.dtype,
+    ) -> str | None:
+        """Why the frozen FP32 TurboPairFormer confidence route cannot run, or None.
+
+        The route runs the confidence Pairformer embedding forward-only, so every
+        confidence head must be frozen with FP32 parameters while the distogram,
+        which lies outside the route, stays trainable. An explicit request raises
+        ValueError with the returned reason; automatic selection skips the route.
+        """
+        if not any(p.requires_grad for p in self.distogram.parameters()):
+            return "Frozen TPF confidence requires a trainable distogram"
+        # Do not infer freezing from train/eval mode or modify the recipe.
+        # PAE can be disabled by configuration; every existing confidence
+        # head must be frozen, including those outside the embedding.
+        for name in (
+            "pairformer_embedding", "pde", "plddt", "experimentally_resolved", "pae"
+        ):
+            head = getattr(self, name, None)
+            if head is None:
+                if name == "pae" and not self.config.pae.enabled:
+                    continue
+                return f"Missing frozen confidence head: {name}"
+            if any(
+                p.requires_grad or p.dtype != torch.float32
+                for p in head.parameters()
+            ):
+                return f"Confidence head {name} must have frozen FP32 parameters"
+        if num_samples != 1 or apply_per_sample or offload_inference or inplace_safe:
+            return (
+                "Frozen TPF confidence requires one sample, without "
+                "per-sample/offload/inplace execution"
+            )
+        if pairformer_dtype != torch.float32:
+            return "Frozen TPF confidence requires pairformer_dtype=torch.float32"
+        return None
+
     def forward(
         self,
         batch: dict,
@@ -151,9 +194,12 @@ class AuxiliaryHeadsAllAtom(nn.Module):
                 model enables this route only for explicitly configured FP32
                 inference, preserving the training and mixed-BF16 defaults.
             use_frozen_tpf_confidence:
-                Explicit forward-only FP32 Turbo route for a frozen confidence
-                embedding. Requires all five confidence heads frozen and one
-                rollout sample; distogram remains outside this boundary.
+                Forward-only FP32 Turbo route for a frozen confidence embedding.
+                Requires all five confidence heads frozen and one rollout
+                sample; distogram remains outside this boundary. The model sets
+                it when explicitly configured, and also selects it on its own
+                for the TurboPairFormer preset in training whenever
+                frozen_tpf_confidence_ineligibility reports no reason.
 
         Returns:
             aux_out:
@@ -211,35 +257,15 @@ class AuxiliaryHeadsAllAtom(nn.Module):
 
         confidence_scope = nullcontext()
         if use_frozen_tpf_confidence:
-            if not any(p.requires_grad for p in self.distogram.parameters()):
-                raise ValueError("Frozen TPF confidence requires a trainable distogram")
-            # Do not infer freezing from train/eval mode or modify the recipe.
-            # PAE can be disabled by configuration; every existing confidence
-            # head must be frozen, including those outside the embedding.
-            for name in (
-                "pairformer_embedding", "pde", "plddt", "experimentally_resolved", "pae"
-            ):
-                head = getattr(self, name, None)
-                if head is None:
-                    if name == "pae" and not self.config.pae.enabled:
-                        continue
-                    raise ValueError(f"Missing frozen confidence head: {name}")
-                if any(
-                    p.requires_grad or p.dtype != torch.float32
-                    for p in head.parameters()
-                ):
-                    raise ValueError(
-                        f"Confidence head {name} must have frozen FP32 parameters"
-                    )
-            if num_samples != 1 or apply_per_sample or offload_inference or inplace_safe:
-                raise ValueError(
-                    "Frozen TPF confidence requires one sample, without "
-                    "per-sample/offload/inplace execution"
-                )
-            if pairformer_dtype != torch.float32:
-                raise ValueError(
-                    "Frozen TPF confidence requires pairformer_dtype=torch.float32"
-                )
+            reason = self.frozen_tpf_confidence_ineligibility(
+                num_samples=num_samples,
+                apply_per_sample=apply_per_sample,
+                offload_inference=offload_inference,
+                inplace_safe=inplace_safe,
+                pairformer_dtype=pairformer_dtype,
+            )
+            if reason is not None:
+                raise ValueError(reason)
             confidence_scope = frozen_confidence_inference_scope(
                 self.pairformer_embedding,
                 si_input, si, zij, repr_x_pred, token_mask, pair_mask,

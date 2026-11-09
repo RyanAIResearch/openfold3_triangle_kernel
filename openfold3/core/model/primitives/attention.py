@@ -89,6 +89,30 @@ if cueq_is_installed:
 
 _TURBOPAIRFORMER_FALLBACK_LOGGED: set = set()
 
+# How the TurboPairFormer preset treats FP32 attention inputs outside the native
+# FP32 inference route. Under BF16 mixed precision these are the confidence-head
+# sites, which run under an FP32 autocast. False (default): they keep FP32 and
+# use the stock attention, as in OpenFold3; the TurboPairFormer kernel has no
+# FP32 backward. A frozen confidence head instead reaches the native FP32
+# kernel through the frozen-confidence scope. True: these inputs are cast to
+# BF16 and run on the BF16 TurboPairFormer kernel. The model
+# sets this from the memory setting ``tpf_bf16_cast_for_fp32_training``. It is
+# module state rather than a call argument so that activation-checkpoint
+# recomputation during backward sees the same choice as the forward.
+_TPF_BF16_CAST_FOR_FP32_TRAINING = False
+
+
+def set_tpf_bf16_cast_for_fp32_training(enabled: bool) -> None:
+    """Choose BF16 casting (True) or FP32 stock attention (False) for FP32 inputs."""
+    global _TPF_BF16_CAST_FOR_FP32_TRAINING
+    _TPF_BF16_CAST_FOR_FP32_TRAINING = bool(enabled)
+
+
+def tpf_bf16_cast_for_fp32_training() -> bool:
+    """Whether TurboPairFormer casts FP32 training inputs to BF16."""
+    return _TPF_BF16_CAST_FOR_FP32_TRAINING
+
+
 DEFAULT_LMA_Q_CHUNK_SIZE = 1024
 DEFAULT_LMA_KV_CHUNK_SIZE = 4096
 
@@ -508,6 +532,21 @@ class Attention(nn.Module):
             # CUDA autocast can be enabled with dtype FP32 (as in the
             # confidence head). Only lower-precision autocast keeps the
             # established mixed-precision route.
+            fp32_compute = q_x.dtype == torch.float32 and (
+                not torch.is_autocast_enabled("cuda")
+                or torch.get_autocast_dtype("cuda") == torch.float32
+            )
+            # FP32 computation outside that route (in BF16 mixed-precision
+            # training, the confidence head under its FP32 autocast) keeps FP32
+            # and uses the stock attention, unless the BF16 cast is
+            # selected (see set_tpf_bf16_cast_for_fp32_training).
+            if (
+                fp32_compute
+                and not native_fp32_inference
+                and not tpf_bf16_cast_for_fp32_training()
+            ):
+                use_stable_triangle_attention = False
+        if use_stable_triangle_attention:
             # Preserve the established training/BF16 coverage gate. Explicit
             # FP32 inference requests fail on unsupported inputs instead of
             # silently substituting the stock implementation.
@@ -607,8 +646,9 @@ class Attention(nn.Module):
             # always validate; blanket-coverage sites with residual shape
             # mismatches fall back to stock math (correct, logged once).
             # Inference keeps FP32 operands for the dedicated FP32/TF32 path.
-            # Training retains the established BF16 forward/backward contract,
-            # including FP32 auxiliary-head inputs under mixed precision.
+            # Training uses the BF16 forward/backward kernels. FP32 training
+            # inputs reach this point only when the BF16 cast is
+            # selected; by default they took the stock FP32 path above.
             orig_dtype = q.dtype
             cast_for_bf16 = orig_dtype != torch.bfloat16 and not (
                 orig_dtype == torch.float32 and native_fp32_inference

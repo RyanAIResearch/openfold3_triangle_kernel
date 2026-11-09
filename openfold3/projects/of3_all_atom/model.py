@@ -36,6 +36,9 @@ from openfold3.core.model.latent.msa_module import MSAModuleStack
 from openfold3.core.model.latent.pairformer import PairFormerStack
 from openfold3.core.model.latent.template_module import TemplateEmbedderAllAtom
 from openfold3.core.model.primitives import LayerNorm, Linear
+from openfold3.core.model.primitives.attention import (
+    set_tpf_bf16_cast_for_fp32_training,
+)
 from openfold3.core.model.structure.diffusion_module import (
     DiffusionModule,
     SampleDiffusion,
@@ -149,6 +152,12 @@ class OpenFold3(nn.Module):
         """
         mode_mem_settings = (
             self.settings.memory.train if self.training else self.settings.memory.eval
+        )
+        # Every forward reads its settings here first, so the TurboPairFormer
+        # FP32-input policy is in place before any attention call and stays in
+        # place for checkpoint recomputation during backward.
+        set_tpf_bf16_cast_for_fp32_training(
+            bool(mode_mem_settings.get("tpf_bf16_cast_for_fp32_training", False))
         )
         return mode_mem_settings
 
@@ -518,6 +527,36 @@ class OpenFold3(nn.Module):
         use_frozen_tpf_confidence = bool(
             mode_mem_settings.get("use_frozen_tpf_confidence", False)
         )
+        # The TurboPairFormer preset keeps the confidence head in FP32 during
+        # training. With every confidence head frozen it selects the frozen
+        # route, which runs the confidence embedding forward-only on the native
+        # FP32 kernels; otherwise the FP32 attention inputs take the stock FP32
+        # path (see set_tpf_bf16_cast_for_fp32_training). An explicit
+        # use_frozen_tpf_confidence keeps its fail-closed checks.
+        if (
+            not use_frozen_tpf_confidence
+            and self.training
+            and torch.is_grad_enabled()
+            and bool(mode_mem_settings.get("use_stable_triangle_attention", False))
+            and not bool(
+                mode_mem_settings.get("tpf_bf16_cast_for_fp32_training", False)
+            )
+            # The frozen scope accepts only FP32 inputs.
+            and all(
+                tensor.dtype == torch.float32
+                for tensor in (si_input, si_trunk, zij_trunk, batch["token_mask"])
+            )
+        ):
+            use_frozen_tpf_confidence = (
+                self.aux_heads.frozen_tpf_confidence_ineligibility(
+                    num_samples=atom_positions_predicted.shape[-3],
+                    apply_per_sample=False,
+                    offload_inference=offload_confidence_heads,
+                    inplace_safe=inplace_safe,
+                    pairformer_dtype=torch.float32,
+                )
+                is None
+            )
         with torch.amp.autocast(
             device_type=autocast_device_type(si_trunk),
             dtype=cast_dtype,

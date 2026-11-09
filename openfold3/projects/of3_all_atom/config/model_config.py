@@ -110,7 +110,13 @@ model_config = mlc.ConfigDict(
                     "use_protenix_triangle_attention": False,
                     "use_stable_triangle_multiplicative": False,
                     # Explicit forward-only FP32 path; does not freeze heads.
+                    # The TurboPairFormer preset also selects it on its own when
+                    # every confidence head is frozen.
                     "use_frozen_tpf_confidence": False,
+                    # TurboPairFormer preset only. False: FP32 attention inputs
+                    # in training (the confidence head) keep FP32. True: they
+                    # are cast to BF16 for the BF16 kernel.
+                    "tpf_bf16_cast_for_fp32_training": False,
                     # Use Staats & Rabe's low-memory attention algorithm. Mutually
                     # exclusive with use_deepspeed_evo_attention.
                     "use_lma": False,
@@ -128,6 +134,7 @@ model_config = mlc.ConfigDict(
                     "use_protenix_triangle_attention": False,
                     "use_stable_triangle_multiplicative": False,
                     "use_frozen_tpf_confidence": False,
+                    "tpf_bf16_cast_for_fp32_training": False,
                     "use_triton_triangle_kernels": True,
                     "use_lma": False,
                     "msa_module": {

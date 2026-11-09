@@ -247,6 +247,61 @@ def test_model_defaults_do_not_enable_frozen_confidence():
     assert model_config.settings.memory.eval.use_frozen_tpf_confidence is False
 
 
+def test_model_defaults_keep_fp32_training_inputs_in_fp32():
+    assert model_config.settings.memory.train.tpf_bf16_cast_for_fp32_training is False
+    assert model_config.settings.memory.eval.tpf_bf16_cast_for_fp32_training is False
+
+
+def test_ineligibility_reports_the_reason_without_raising(real_heads):
+    arguments = dict(num_samples=1, apply_per_sample=False, offload_inference=False,
+                     inplace_safe=False, pairformer_dtype=torch.float32)
+    assert real_heads.frozen_tpf_confidence_ineligibility(**arguments) is None
+    assert real_heads.frozen_tpf_confidence_ineligibility(
+        **dict(arguments, num_samples=2)) == (
+        "Frozen TPF confidence requires one sample, without "
+        "per-sample/offload/inplace execution")
+    real_heads.distogram.requires_grad_(False)
+    assert real_heads.frozen_tpf_confidence_ineligibility(**arguments) == (
+        "Frozen TPF confidence requires a trainable distogram")
+
+
+def rollout_host(memory, reason):
+    host = SimpleNamespace(
+        training=True, _get_mode_mem_settings=lambda: memory,
+        _do_inference_offload=lambda **kw: False, clear_autocast_cache=lambda: None,
+        shared=SimpleNamespace(use_confidence_emb_prob=1.0,
+            diffusion=SimpleNamespace(no_mini_rollout_steps=1, no_mini_rollout_samples=1)),
+        config=SimpleNamespace(architecture=SimpleNamespace(noise_schedule={})),
+        sample_diffusion=mock.Mock(return_value=torch.ones(1, 1, 4, 3)),
+        aux_heads=mock.Mock(return_value={}),
+    )
+    host.aux_heads.frozen_tpf_confidence_ineligibility = mock.Mock(return_value=reason)
+    return host
+
+
+@pytest.mark.parametrize("stable, reason, bf16_cast, expected", [
+    (True, None, False, True),            # TPF preset, frozen heads: FP32 frozen route
+    (True, "not frozen", False, False),   # trainable heads: stock FP32 attention instead
+    (True, None, True, False),            # BF16 cast requested
+    (False, None, False, False),          # other presets keep their own routes
+])
+def test_tpf_preset_selects_the_frozen_fp32_route_on_its_own(monkeypatch, stable, reason, bf16_cast, expected):
+    memory = ConfigDict(model_config.settings.memory.train.to_dict())
+    memory.use_stable_triangle_attention = stable
+    memory.tpf_bf16_cast_for_fp32_training = bf16_cast
+    host = rollout_host(memory, reason)
+    monkeypatch.setattr(model_module, "create_noise_schedule", lambda **kw: None)
+    x, z = torch.ones(1, 4, 384), torch.ones(1, 4, 4, 128)
+    OpenFold3._rollout(host, {"token_mask": torch.ones(1, 4)}, x, x, z)
+    assert host.aux_heads.call_args.kwargs["use_frozen_tpf_confidence"] is expected
+    checked = host.aux_heads.frozen_tpf_confidence_ineligibility
+    if stable and not bf16_cast:
+        assert checked.call_args.kwargs == dict(num_samples=1, apply_per_sample=False,
+            offload_inference=False, inplace_safe=False, pairformer_dtype=torch.float32)
+    else:
+        checked.assert_not_called()
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_model_forwards_option_only_to_confidence(monkeypatch, enabled):
     memory = ConfigDict(model_config.settings.memory.train.to_dict())
