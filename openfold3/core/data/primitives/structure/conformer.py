@@ -78,6 +78,7 @@ def _compute_conformer(
     use_small_ring_torsions: bool = False,
     remove_hs: bool = True,
     timeout: float | None = 30.0,
+    rng: random.Random | None = None,
 ) -> tuple[Mol, int]:
     """Computes a conformer with the ETKDGv3 strategy.
 
@@ -102,6 +103,8 @@ def _compute_conformer(
         timeout:
             The maximum time in seconds to allow for conformer generation.
             Default value is 30 seconds. If None, no timeout is set.
+        rng:
+            RDKit ``randomSeed`` source; defaults to the ambient stdlib RNG.
 
     Returns:
         mol:
@@ -132,16 +135,28 @@ def _compute_conformer(
     strategy.clearConfs = False
     # RDKit always seems to start from some internal seed instead of a truly random seed
     # initialization if no seed is given, so we set a random seed here
-    strategy.randomSeed = random.randint(0, 10**9)
+    if rng is None:
+        strategy.randomSeed = random.randint(0, 10**9)
+    else:
+        strategy.randomSeed = rng.randint(0, 10**9)
 
     # Disable overly verbose conformer generation warnings
     with rdBase.BlockLogs():
-        if timeout:
-            conf_id = func_timeout(
-                timeout=timeout, func=AllChem.EmbedMolecule, args=(mol, strategy)
-            )
-        else:
-            conf_id = AllChem.EmbedMolecule(mol, strategy)
+        try:
+            if timeout:
+                conf_id = func_timeout(
+                    timeout=timeout, func=AllChem.EmbedMolecule, args=(mol, strategy)
+                )
+            else:
+                conf_id = AllChem.EmbedMolecule(mol, strategy)
+        except RuntimeError as e:
+            # RDKit occasionally fails inside its own minimizer (e.g. "Invariant
+            # Violation: bad direction in linearSearch" from BFGSOpt.h) and throws
+            # instead of returning -1. Treat it like any other embedding failure so
+            # the strategy chain and the fallback conformer can take over.
+            raise ConformerGenerationError(
+                f"RDKit raised during conformer embedding: {e}"
+            ) from e
 
     if remove_hs:
         mol = safe_remove_all_hs(mol)
@@ -159,6 +174,7 @@ def multistrategy_compute_conformer(
     remove_hs: bool = True,
     start_from: str = "default",
     timeouts: dict[str, float | None] | None = None,
+    rng: random.Random | None = None,
 ) -> ConformerResult:
     """Computes 3D coordinates for a molecule trying different strategies in order.
 
@@ -179,6 +195,8 @@ def multistrategy_compute_conformer(
             Optional per-strategy timeout overrides keyed by strategy name. A value of
             `None` disables the timeout for that strategy. Strategies with no entry
             here fall back to their `default_timeout`.
+        rng:
+            Optional source for each attempt's RDKit seed; see `_compute_conformer`.
 
     Returns:
         A `ConformerResult` carrying the molecule, the generated conformer's id, and
@@ -200,12 +218,11 @@ def multistrategy_compute_conformer(
                 mol,
                 remove_hs=remove_hs,
                 timeout=timeouts.get(strat.name, strat.default_timeout),
+                rng=rng,
                 **strat.kwargs,
             )
         except (ConformerGenerationError, FunctionTimedOut) as e:
-            logger.warning(
-                f"Conformer strategy {strat.name!r} failed for {smiles}: {e}"
-            )
+            logger.debug(f"Conformer strategy {strat.name!r} failed for {smiles}: {e}")
             last_exc = e
             continue
         return ConformerResult(mol=mol_out, conf_id=conf_id, strategy=strat.name)

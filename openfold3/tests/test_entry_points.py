@@ -28,6 +28,7 @@ from unittest.mock import patch
 import ml_collections as mlc
 import pytest
 from click.testing import CliRunner
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 import openfold3.core.model.primitives.initialization as initialization
@@ -35,6 +36,7 @@ from openfold3 import run_openfold, setup_openfold
 from openfold3.core.config import config_utils
 from openfold3.core.data.framework.data_module import DataModuleConfig
 from openfold3.core.data.pipelines.preprocessing import template as template_module
+from openfold3.core.utils.callbacks import SecondsPerIterationProgressBar
 from openfold3.entry_points.experiment_runner import (
     InferenceExperimentRunner,
     TrainingExperimentRunner,
@@ -50,10 +52,21 @@ from openfold3.entry_points.parameters import (
     CheckpointEntry,
 )
 from openfold3.entry_points.validator import (
+    CheckpointConfig,
     InferenceExperimentConfig,
+    LoggingConfig,
+    PlTrainerArgs,
     TrainingExperimentConfig,
     TrainingExperimentSettings,
     WandbConfig,
+    generate_seeds,
+)
+from openfold3.projects.of3_all_atom.config.dataset_config_components import (
+    MSASettings,
+    TemplateSettings,
+)
+from openfold3.projects.of3_all_atom.config.dataset_configs import (
+    InferenceDatasetConfigKwargs,
 )
 from openfold3.projects.of3_all_atom.config.inference_query_format import (
     InferenceQuerySet,
@@ -416,6 +429,291 @@ class TestAcceleratorWillUseMps:
             assert _accelerator_will_use_mps(accelerator) is mps_available
 
 
+TEST_CHECKPOINT_FILENAME = "of3-{epoch}"  # differs from the CheckpointConfig default
+
+
+class TestTrainerCallbackFlags:
+    """enable_progress_bar and enable_checkpointing control the callbacks
+    OpenFold3 adds."""
+
+    @staticmethod
+    def _training_runner(
+        output_dir: Path, pl_trainer_args: dict[str, object]
+    ) -> TrainingExperimentRunner:
+        expt_config = TrainingExperimentConfig(
+            dataset_paths={},
+            dataset_configs={},
+            experiment_settings=TrainingExperimentSettings(output_dir=output_dir),
+            pl_trainer_args=PlTrainerArgs.model_validate(
+                {"accelerator": "cpu", **pl_trainer_args}
+            ),
+            checkpoint_config=CheckpointConfig(filename=TEST_CHECKPOINT_FILENAME),
+        )
+        return TrainingExperimentRunner(expt_config)
+
+    @pytest.mark.parametrize(
+        "pl_trainer_args, expect_progress_bar",
+        [
+            ({}, True),
+            ({"enable_progress_bar": True}, True),
+            ({"enable_progress_bar": False}, False),
+        ],
+    )
+    def test_inference_progress_bar(
+        self, dummy_ckpt_file, pl_trainer_args, expect_progress_bar
+    ):
+        expt_config = InferenceExperimentConfig(
+            inference_ckpt_path=dummy_ckpt_file,
+            pl_trainer_args=PlTrainerArgs.model_validate(pl_trainer_args),
+        )
+        callbacks = InferenceExperimentRunner(expt_config).callbacks
+        has_progress_bar = any(
+            isinstance(c, SecondsPerIterationProgressBar) for c in callbacks
+        )
+        assert has_progress_bar == expect_progress_bar
+
+    @pytest.mark.parametrize(
+        "pl_trainer_args, expect_checkpoint, expect_progress_bar",
+        [
+            ({}, True, True),
+            ({"enable_checkpointing": True}, True, True),
+            ({"enable_checkpointing": False}, False, True),
+            ({"enable_progress_bar": False}, True, False),
+        ],
+    )
+    def test_training_trainer_callbacks(
+        self, tmp_path, pl_trainer_args, expect_checkpoint, expect_progress_bar
+    ):
+        runner = self._training_runner(tmp_path, pl_trainer_args)
+        checkpoints = [c for c in runner.callbacks if isinstance(c, ModelCheckpoint)]
+        if expect_checkpoint:
+            assert len(checkpoints) == 1
+            assert checkpoints[0].filename == TEST_CHECKPOINT_FILENAME
+        else:
+            assert checkpoints == []
+        has_progress_bar = any(
+            isinstance(c, SecondsPerIterationProgressBar) for c in runner.callbacks
+        )
+        assert has_progress_bar == expect_progress_bar
+
+        # Lightning accepts the callbacks together with the flags
+        trainer = runner.trainer
+        if not expect_checkpoint:
+            assert trainer.checkpoint_callbacks == []
+
+    @pytest.mark.parametrize(
+        "experiment_settings, match",
+        [
+            ({"restart_checkpoint_path": "last"}, "explicit checkpoint file"),
+            ({"preemption_safe_resume": True}, "preemption_safe_resume requires"),
+        ],
+    )
+    def test_resume_without_checkpointing_rejected(
+        self, tmp_path, experiment_settings, match
+    ):
+        with pytest.raises(ValueError, match=match):
+            TrainingExperimentConfig(
+                dataset_paths={},
+                dataset_configs={},
+                experiment_settings=TrainingExperimentSettings(
+                    output_dir=tmp_path, **experiment_settings
+                ),
+                pl_trainer_args=PlTrainerArgs(enable_checkpointing=False),
+                logging_config=LoggingConfig(
+                    wandb_config=WandbConfig(project="p", id="run")
+                ),
+            )
+
+    def test_explicit_restart_without_checkpointing_accepted(self, tmp_path):
+        ckpt = tmp_path / "restart.ckpt"
+        ckpt.touch()
+        expt_config = TrainingExperimentConfig(
+            dataset_paths={},
+            dataset_configs={},
+            experiment_settings=TrainingExperimentSettings(
+                output_dir=tmp_path, restart_checkpoint_path=str(ckpt)
+            ),
+            pl_trainer_args=PlTrainerArgs(enable_checkpointing=False),
+        )
+        assert expt_config.experiment_settings.restart_checkpoint_path == str(ckpt)
+
+
+class TestPlTrainerArgsPassthrough:
+    """pl_trainer_args reach pl.Trainer, with OpenFold3's defaults applied."""
+
+    # Non-default clip val so we're sure the value is coming from the test
+    _CLIP_VAL = (
+        OF3ProjectEntry()
+        .get_model_config_with_update(ModelUpdate(presets=["train"]))
+        .settings.gradient_clipping.clip_val
+        + 1
+    )
+
+    @staticmethod
+    def _pl_trainer_kwargs(
+        ckpt: Path, pl_trainer_args: dict[str, object]
+    ) -> dict[str, object]:
+        expt_config = InferenceExperimentConfig(
+            inference_ckpt_path=ckpt,
+            pl_trainer_args=PlTrainerArgs.model_validate(pl_trainer_args),
+        )
+        with patch("pytorch_lightning.Trainer") as mock_trainer:
+            _ = InferenceExperimentRunner(expt_config).trainer
+        mock_trainer.assert_called_once()
+        return dict(mock_trainer.call_args.kwargs)
+
+    @staticmethod
+    def _training_config(
+        output_dir: Path,
+        pl_trainer_args: dict[str, object],
+        gradient_clipping: dict[str, object] | None = None,
+    ) -> TrainingExperimentConfig:
+        """Training config on CPU; gradient_clipping overrides the train
+        preset's model settings."""
+        custom = {}
+        if gradient_clipping is not None:
+            custom = {"settings": {"gradient_clipping": gradient_clipping}}
+        return TrainingExperimentConfig(
+            dataset_paths={},
+            dataset_configs={},
+            experiment_settings=TrainingExperimentSettings(output_dir=output_dir),
+            pl_trainer_args=PlTrainerArgs.model_validate(
+                {"accelerator": "cpu", **pl_trainer_args}
+            ),
+            model_update=ModelUpdate(presets=["train"], custom=custom),
+        )
+
+    def test_openfold3_defaults(self, dummy_ckpt_file):
+        kwargs = self._pl_trainer_kwargs(dummy_ckpt_file, {})
+        expected = {
+            "max_epochs": 1000,
+            "accelerator": "gpu",
+            "precision": "32-true",
+            "num_nodes": 1,
+            "devices": 1,
+            "log_every_n_steps": 1,
+            "enable_model_summary": False,
+            "enable_progress_bar": True,
+            "enable_checkpointing": True,
+            "accumulate_grad_batches": 1,
+            "gradient_clip_val": None,
+            "gradient_clip_algorithm": None,
+            "use_distributed_sampler": True,
+        }
+        assert {k: kwargs[k] for k in expected} == expected
+
+    def test_openfold3_only_settings_not_passed(self, dummy_ckpt_file):
+        kwargs = self._pl_trainer_kwargs(dummy_ckpt_file, {})
+        for name in (
+            "deepspeed_config_path",
+            "distributed_timeout",
+            "mpi_plugin",
+            "cluster_environment",
+        ):
+            assert name not in kwargs
+
+    @pytest.mark.parametrize(
+        "pl_trainer_args",
+        [
+            {"num_sanity_val_steps": 0},
+            {"deterministic": True},
+            {"enable_checkpointing": False},
+            {"profiler": "simple"},
+            {"max_epochs": -1, "log_every_n_steps": 50},
+        ],
+    )
+    def test_user_values_passed_through(self, dummy_ckpt_file, pl_trainer_args):
+        kwargs = self._pl_trainer_kwargs(dummy_ckpt_file, pl_trainer_args)
+        assert {k: kwargs[k] for k in pl_trainer_args} == pl_trainer_args
+
+    @pytest.mark.parametrize(
+        "name", ["default_root_dir", "strategy", "callbacks", "logger"]
+    )
+    def test_runner_managed_args_rejected(self, name):
+        with pytest.raises(ValueError, match="cannot be set"):
+            PlTrainerArgs(**{name: None})
+
+    def test_profiler_conflict_rejected(self, dummy_ckpt_file):
+        with pytest.raises(ValueError, match="not both"):
+            InferenceExperimentConfig(
+                inference_ckpt_path=dummy_ckpt_file,
+                pl_trainer_args={"profiler": "simple"},
+                profiler={"enabled": True},
+            )
+
+    @pytest.mark.parametrize(
+        "per_sample_clipping, pl_trainer_args, conflicts",
+        [
+            (True, {"gradient_clip_val": _CLIP_VAL}, True),
+            (True, {"gradient_clip_algorithm": "norm"}, True),
+            (
+                False,
+                {"gradient_clip_val": _CLIP_VAL, "gradient_clip_algorithm": "norm"},
+                False,
+            ),
+            (False, {"gradient_clip_val": _CLIP_VAL + 1}, True),
+            (False, {"gradient_clip_algorithm": "value"}, True),
+        ],
+    )
+    def test_training_gradient_clipping_conflict(
+        self, tmp_path, per_sample_clipping, pl_trainer_args, conflicts
+    ):
+        expt_config = self._training_config(
+            tmp_path,
+            pl_trainer_args,
+            {"per_sample_clipping": per_sample_clipping, "clip_val": self._CLIP_VAL},
+        )
+        if conflicts:
+            with pytest.raises(ValueError, match="conflicts with the settings implied"):
+                TrainingExperimentRunner(expt_config)
+        else:
+            TrainingExperimentRunner(expt_config)
+
+    @pytest.mark.parametrize("per_sample_clipping", [True, False])
+    def test_dumped_training_config_reloads(self, tmp_path, per_sample_clipping):
+        """The config dumped after the runner rewrites gradient clipping (as in
+        the wandb runner.json) can be loaded again."""
+        runner = TrainingExperimentRunner(
+            self._training_config(
+                tmp_path,
+                {},
+                {
+                    "per_sample_clipping": per_sample_clipping,
+                    "clip_val": self._CLIP_VAL,
+                },
+            )
+        )
+        dumped = runner.experiment_config.model_dump_json()
+        TrainingExperimentRunner(TrainingExperimentConfig.model_validate_json(dumped))
+
+    def test_training_without_distributed_sampler_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="use_distributed_sampler"):
+            self._training_config(tmp_path, {"use_distributed_sampler": False})
+
+    def test_inference_without_distributed_sampler_passed_through(
+        self, dummy_ckpt_file
+    ):
+        kwargs = self._pl_trainer_kwargs(
+            dummy_ckpt_file, {"use_distributed_sampler": False}
+        )
+        assert kwargs["use_distributed_sampler"] is False
+
+    @pytest.mark.parametrize("devices", [-1, 0])
+    def test_non_positive_devices_rejected(self, devices):
+        with pytest.raises(ValueError, match="positive number of devices"):
+            PlTrainerArgs(devices=devices)
+
+    @pytest.mark.parametrize("devices", ["auto", [0, 1]])
+    def test_non_int_devices_rejected(self, devices):
+        with pytest.raises(ValueError, match="devices"):
+            PlTrainerArgs.model_validate({"devices": devices})
+
+    @pytest.mark.parametrize("devices", [1, 8])
+    def test_positive_devices_passed_through(self, dummy_ckpt_file, devices):
+        kwargs = self._pl_trainer_kwargs(dummy_ckpt_file, {"devices": devices})
+        assert kwargs["devices"] == devices
+
+
 class DummyWandbExperiment:
     def __init__(self, directory):
         self.dir = directory
@@ -606,6 +904,48 @@ class TestInferenceCommandLineSettings:
             expt_runner.output_dir / "msas" / msa_settings.run_directory_name
         )
 
+    def test_num_seeds_default_start_seed_is_unchanged(self, dummy_ckpt_file):
+        """Without a configured seed, generated seeds still start from 42."""
+        expt_config = InferenceExperimentConfig(inference_ckpt_path=dummy_ckpt_file)
+        expt_runner = InferenceExperimentRunner(expt_config, num_model_seeds=3)
+        assert expt_runner.seeds == generate_seeds(42, 3)
+
+    def test_num_seeds_starts_from_configured_seed(self, dummy_ckpt_file):
+        """A seed set in experiment_settings is the start of the generated seeds."""
+        expt_config = InferenceExperimentConfig(
+            inference_ckpt_path=dummy_ckpt_file,
+            experiment_settings={"seeds": [7]},
+        )
+        expt_runner = InferenceExperimentRunner(expt_config, num_model_seeds=3)
+        assert expt_runner.seeds == generate_seeds(7, 3)
+
+    def test_partial_dataset_config_kwargs_keep_inference_defaults(
+        self, dummy_ckpt_file
+    ):
+        inference_default_subsample_main = InferenceDatasetConfigKwargs.model_fields[
+            "msa"
+        ].default.subsample_main
+        class_default_subsample_main = MSASettings.model_fields[
+            "subsample_main"
+        ].default
+        # The point is to test a field where these differ. If they no longer do, pick a different field
+        assert inference_default_subsample_main != class_default_subsample_main
+        max_rows = MSASettings.model_fields["max_rows"].default + 1
+        n_templates = TemplateSettings.model_fields["n_templates"].default + 1
+        expt_config = InferenceExperimentConfig(
+            inference_ckpt_path=dummy_ckpt_file,
+            dataset_config_kwargs={
+                "template": {"n_templates": n_templates},
+                "msa": {"max_rows": max_rows},
+            },
+        )
+        kwargs = expt_config.dataset_config_kwargs
+        assert kwargs.template.n_templates == n_templates
+        assert kwargs.msa.max_rows == max_rows
+
+        # The inference instance default
+        assert kwargs.msa.subsample_main == inference_default_subsample_main
+
     def test_output_override_controls_default_intermediate_paths(
         self, tmp_path, dummy_ckpt_file
     ):
@@ -682,6 +1022,9 @@ class TestInferenceCommandLineSettings:
                     str(minimal_query_json),
                     "--inference-ckpt-path",
                     str(dummy_ckpt_file),
+                    # TF32 is a process global setting that this test does not need
+                    "--use_tf32",
+                    "False",
                 ],
             )
 

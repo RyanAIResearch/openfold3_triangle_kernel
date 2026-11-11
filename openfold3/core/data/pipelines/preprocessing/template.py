@@ -20,8 +20,9 @@ import os
 import random
 import re
 import traceback
-from datetime import datetime
+from datetime import date, datetime
 from functools import wraps
+from multiprocessing.pool import Pool, ThreadPool
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -49,6 +50,7 @@ from openfold3.core.config.config_utils import (
 )
 from openfold3.core.data.io.dataset_cache import read_datacache, write_datacache_to_json
 from openfold3.core.data.io.s3 import open_local_or_s3
+from openfold3.core.data.io.sequence.fasta import get_chain_id_to_seq_from_fasta
 from openfold3.core.data.io.sequence.template import (
     A3mParser,
     CifDirectParser,
@@ -62,7 +64,12 @@ from openfold3.core.data.io.structure.atom_array import (
     write_atomarray_to_npz,
 )
 from openfold3.core.data.io.structure.cif import _load_ciffile, parse_mmcif
-from openfold3.core.data.primitives.caches.format import DatasetCache
+from openfold3.core.data.primitives.caches.format import (
+    ClusteredDatasetCache,
+    ClusteredDatasetStructureDataCache,
+    DatasetCache,
+    ValidationDatasetCache,
+)
 from openfold3.core.data.primitives.quality_control.logging_utils import (
     PDB_ID,
     TEMPLATE_PROCESS_LOGGER,
@@ -127,15 +134,14 @@ def create_template_precache_entry_for_template(
     """
 
     template_process_logger = TEMPLATE_PROCESS_LOGGER.get()
+    assert template_process_logger is not None
 
     try:
-        cif_file = _load_ciffile(
-            template_structures_directory
-            / (
-                template_structures_filename.format(pdb=template_pdb_id)
-                + f".{template_file_format}"
-            )
+        template_structure_path = template_structures_directory / (
+            template_structures_filename.format(pdb=template_pdb_id)
+            + f".{template_file_format}"
         )
+        cif_file = _load_ciffile(template_structure_path)
         chain_id_seq_map = get_asym_id_to_canonical_seq_dict(cif_file)
         release_date = get_release_date(get_cif_block(cif_file)).strftime("%Y-%m-%d")
 
@@ -143,16 +149,22 @@ def create_template_precache_entry_for_template(
             "release_date": release_date,
             "chain_id_seq_map": chain_id_seq_map,
         }
-
+        template_process_logger.info(
+            "Template precache dir:"
+            f" {template_precache_dir / Path(f'{template_pdb_id}.npz')}"
+        )
         np.savez_compressed(
             template_precache_dir / Path(f"{template_pdb_id}.npz"),
             **template_precache,
         )
         template_process_logger.info(f"Sequence cache for {template_pdb_id} saved.")
-    except FileNotFoundError:
-        template_process_logger.info(
-            f"Template structure {template_pdb_id} not found in "
-            f"{template_structures_directory}. Skipping this template."
+    except FileNotFoundError as exc:
+        template_process_logger.warning(
+            "Could not create template precache entry; structure file is missing:\n"
+            f"  entry_id: {template_pdb_id}\n"
+            f"  expected path: {template_structure_path}\n"
+            f"  exception: {exc}",
+            exc_info=True,
         )
         return
 
@@ -1547,10 +1559,37 @@ def build_template_cache_key(
     return None
 
 
+def _is_template_cache_entry(path: Path | str | None) -> bool:
+    """Reports whether a declared template alignment path is a `.npz` cache entry."""
+    return path is not None and Path(path).suffix == ".npz"
+
+
+def _make_worker_pool(
+    worker_pool: Literal["process", "thread"], n_processes: int
+) -> Pool:
+    """Creates the pool that template preprocessing runs its workers in.
+
+    Process workers run in parallel. Thread workers run in the calling process, which
+    spares process startup and keeps them within reach of debuggers and tests.
+    """
+    if worker_pool == "thread":
+        return ThreadPool(n_processes)
+    return mp.Pool(n_processes)
+
+
 # New template preprocessing pipelines
 # TODO: replace old versions from above with these new ones
 class TemplatePreprocessorInputTrain(BaseModel):
-    pass
+    """Template alignment of one training-set alignment representative."""
+
+    aln_path: Path
+    rep_id: str
+    query_seq_str: str
+
+    @property
+    def cache_key(self) -> str:
+        """Training reads `{template_cache_directory}/{rep_id}.npz`."""
+        return self.rep_id
 
 
 class TemplatePreprocessorInputInference(BaseModel):
@@ -1599,7 +1638,7 @@ class TemplatePreprocessorSettings(BaseModel):
     See AF3 SI Section 2.4. for details on some of these settings.
 
     Attributes:
-        mode (Literal["train", "inference"]):
+        mode (Literal["train", "predict"]):
             Whether templates are preprocessed for training or inference.
         moltypes (list[MoleculeType]):
             List of molecule types to preprocess templates for.
@@ -1641,6 +1680,10 @@ class TemplatePreprocessorSettings(BaseModel):
             files for faster subsequent online template processing.
         n_processes (int):
             Number of processes to use template preprocessing.
+        worker_pool (Literal["process", "thread"]):
+            Whether the `n_processes` workers are separate processes or threads in the
+            calling process. Threads avoid process startup, which suits tests and
+            debugging; processes parallelize the work. Defaults to "process".
         chunksize (int):
             Number of tasks per worker in multiprocessing.
         preprocess_timeout (int):
@@ -1663,6 +1706,13 @@ class TemplatePreprocessorSettings(BaseModel):
         ccd_file_path (FilePath | None):
             Path to the Chemical Component Dictionary file. Only required if
             `preparse_structures` is True.
+        template_alignment_directory (DirectoryPath | None):
+            Train mode only. Directory with one `<rep_id>/colabfold_template.m8` per
+            alignment representative, the layout align-msa-server writes. Template
+            IDs must use label chain IDs.
+        alignment_representatives_fasta (FilePath | None):
+            Train mode only. FASTA with alignment representative IDs as headers and
+            their sequences, one line each.
     """
 
     model_config = PydanticConfigDict(extra="forbid")
@@ -1686,6 +1736,7 @@ class TemplatePreprocessorSettings(BaseModel):
     preparse_structures: bool = False
     create_logs: bool = False
     n_processes: int = 1
+    worker_pool: Literal["process", "thread"] = "process"
     chunksize: int = 1
     preprocess_timeout: int = 60
 
@@ -1699,19 +1750,33 @@ class TemplatePreprocessorSettings(BaseModel):
     log_directory: Path | None = None
 
     ccd_file_path: Path | None = None
+    template_alignment_directory: Path | None = None
+    alignment_representatives_fasta: Path | None = None
     _implicit_paths: set[str] = PrivateAttr(default_factory=set)
     _output_directory_is_run_default: bool = PrivateAttr(default=False)
     _run_owned_output_directory: Path | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
+    def _check_min_release_date_diff(self) -> TemplatePreprocessorSettings:
+        # Train mode applies it per structure, in _update_dataset_cache. Inference
+        # queries have no release date to measure the difference from.
+        if self.mode == "predict" and self.min_release_date_diff is not None:
+            raise ValueError(
+                "min_release_date_diff only applies in train mode: inference queries "
+                "have no release date. Use max_release_date to exclude recent "
+                "templates."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _prepare_output_directories(self) -> TemplatePreprocessorSettings:
         # TODO: add .pdb support
-        if self.structure_file_format not in ["cif", "npz"]:
+        if self.structure_file_format not in ["cif", "npz", "cif.gz"]:
             raise NotImplementedError(
                 f"structure_file_format {self.structure_file_format} was provided but "
-                "currently, only cif and npz file format is supported for template "
-                "structure preprocessing due to metadata requirements of the template "
-                "pipeline."
+                "currently, only cif, cif.gz and npz file format is supported "
+                "for template structure preprocessing due to metadata requirements "
+                "of the template pipeline."
             )
 
         if self.output_directory is None:
@@ -1797,6 +1862,12 @@ class TemplatePreprocessorSettings(BaseModel):
         self._run_owned_output_directory = None
 
 
+# Stands in for a worker's log when `create_logs` is off. Created directly rather than
+# with `logging.getLogger`, so that logging configuration cannot re-enable it.
+_NO_WORKER_LOG = logging.Logger("template_preprocess_disabled")
+_NO_WORKER_LOG.disabled = True
+
+
 class TemplatePreprocessor:
     """Template preprocessing pipeline for OF3.
 
@@ -1821,6 +1892,8 @@ class TemplatePreprocessor:
         self.max_release_date = config.max_release_date
         self.min_release_date_diff = config.min_release_date_diff
         self.max_templates = config.max_templates
+        self.template_alignment_directory = config.template_alignment_directory
+        self.alignment_representatives_fasta = config.alignment_representatives_fasta
 
         self.cif_direct_min_score = config.cif_direct_min_score
 
@@ -1829,6 +1902,7 @@ class TemplatePreprocessor:
         self.preparse_structures = config.preparse_structures
         self.create_logs = config.create_logs
         self.n_processes = config.n_processes
+        self.worker_pool = config.worker_pool
         self.chunksize = config.chunksize
         self.preprocess_timeout = config.preprocess_timeout
 
@@ -1904,8 +1978,84 @@ class TemplatePreprocessor:
             if directory is not None:
                 directory.mkdir(parents=True, exist_ok=True)
 
+    def _train_structure_data(self) -> ClusteredDatasetStructureDataCache:
+        """The input dataset cache's structure_data, keyed by PDB ID."""
+        if not isinstance(
+            self.input_set, (ClusteredDatasetCache, ValidationDatasetCache)
+        ):
+            raise TypeError(
+                "Train mode requires a clustered or validation dataset cache: it reads "
+                "per-structure release dates and per-chain molecule types."
+            )
+        return self.input_set.structure_data
+
     def _parse_dataset_cache(self) -> None:
-        raise NotImplementedError
+        """Creates one input per alignment representative of the requested moltypes.
+
+        Template cache entries are shared by every chain with the same representative,
+        so they are built without per-query release date filtering; that is applied
+        per structure in `_update_dataset_cache`.
+        """
+        if (
+            self.template_alignment_directory is None
+            or self.alignment_representatives_fasta is None
+        ):
+            raise ValueError(
+                "Train mode requires template_alignment_directory and "
+                "alignment_representatives_fasta in TemplatePreprocessorSettings."
+            )
+        rep_id_to_seq = get_chain_id_to_seq_from_fasta(
+            self.alignment_representatives_fasta
+        )
+
+        moltype_names = {moltype.name for moltype in self.moltypes}
+        inputs: dict[str, TemplatePreprocessorInputTrain] = {}
+        seen_rep_ids: set[str] = set()
+        no_alignment: list[str] = []
+        not_in_fasta: list[str] = []
+        for structure in self._train_structure_data().values():
+            for chain in structure.chains.values():
+                rep_id = chain.alignment_representative_id
+                if (
+                    chain.molecule_type not in moltype_names
+                    or rep_id is None
+                    or rep_id in seen_rep_ids
+                ):
+                    continue
+                seen_rep_ids.add(rep_id)
+
+                aln_path = (
+                    self.template_alignment_directory / rep_id / "colabfold_template.m8"
+                )
+                if not aln_path.exists():
+                    no_alignment.append(rep_id)
+                    continue
+                if rep_id not in rep_id_to_seq:
+                    not_in_fasta.append(rep_id)
+                    continue
+                inputs[rep_id] = TemplatePreprocessorInputTrain(
+                    aln_path=aln_path,
+                    rep_id=rep_id,
+                    query_seq_str=rep_id_to_seq[rep_id],
+                )
+
+        if seen_rep_ids and not inputs:
+            raise ValueError(
+                f"None of the {len(seen_rep_ids)} alignment representatives in the "
+                f"dataset cache has a template alignment in "
+                f"{self.template_alignment_directory} and a sequence in "
+                f"{self.alignment_representatives_fasta}. Check that these belong to "
+                "the same dataset as the dataset cache."
+            )
+        if no_alignment or not_in_fasta:
+            logger.warning(
+                f"{len(no_alignment) + len(not_in_fasta)} of {len(seen_rep_ids)} "
+                "alignment representatives have no template inputs and get no "
+                f"templates. No alignment in {self.template_alignment_directory}: "
+                f"{no_alignment}. Not in {self.alignment_representatives_fasta}: "
+                f"{not_in_fasta}."
+            )
+        self.inputs = inputs
 
     def _parse_inference_query_set(self) -> None:
         inputs: dict[str, TemplatePreprocessorInputInference] = {}
@@ -1916,6 +2066,10 @@ class TemplatePreprocessor:
 
                 # CASE 1: Alignment file mode
                 if chain.template_alignment_file_path is not None:
+                    # A reused query set points this field at the cache entry
+                    # the previous run wrote; it is already preprocessed.
+                    if _is_template_cache_entry(chain.template_alignment_file_path):
+                        continue
                     template_input = TemplatePreprocessorInputInference(
                         aln_path=Path(chain.template_alignment_file_path),
                         query_seq_str=chain.sequence,
@@ -1947,12 +2101,57 @@ class TemplatePreprocessor:
         self.inputs = inputs
 
     def _update_dataset_cache(self) -> None:
-        raise NotImplementedError
+        """Sets each chain's template_ids from its representative's cache entry.
+
+        Templates are filtered against the chain's own structure release date, ordered
+        by their rank in the alignment, then capped at `max_templates`. Chains whose
+        representative has no template inputs get no templates; chains of other
+        molecule types are left unchanged.
+        """
+        if self.cache_directory is None:
+            raise RuntimeError("Template cache directory was not configured")
+        entries_by_rep_id: dict[str, dict[str, dict]] = {}
+        for rep_id in self.inputs:
+            cache_entry_file = self.cache_directory / f"{rep_id}.npz"
+            if cache_entry_file.exists():
+                with np.load(cache_entry_file, allow_pickle=True) as cache_npz:
+                    entries_by_rep_id[rep_id] = {
+                        key: value.item() for key, value in cache_npz.items()
+                    }
+            else:
+                entries_by_rep_id[rep_id] = {}
+
+        moltype_names = {moltype.name for moltype in self.moltypes}
+        for structure in self._train_structure_data().values():
+            query_release_date = _to_datetime(structure.release_date)
+            for chain in structure.chains.values():
+                rep_id = chain.alignment_representative_id
+                if chain.molecule_type not in moltype_names or rep_id is None:
+                    continue
+                entries = entries_by_rep_id.get(rep_id, {})
+                valid = sorted(
+                    (entry["index"], template_id)
+                    for template_id, entry in entries.items()
+                    if not fails_template_release_date_checks(
+                        template_release_date=_to_datetime(entry["release_date"]),
+                        query_release_date=query_release_date,
+                        max_template_release_date=self.max_release_date,
+                        min_release_date_diff=self.min_release_date_diff,
+                    )
+                )
+                chain.template_ids = [
+                    template_id for _, template_id in valid[: self.max_templates]
+                ]
 
     def _update_inference_query_set(self) -> None:
         for query_name, query in self.input_set.queries.items():
             for idx, chain in enumerate(query.chains):
                 if chain.molecule_type not in self.moltypes:
+                    continue
+                # Cache entries carried over from a previous run keep their
+                # declared path and IDs: a key rebuilt from the entry's own bytes
+                # cannot match its name, which hashes the original alignment.
+                if _is_template_cache_entry(chain.template_alignment_file_path):
                     continue
                 # Must be derived from the chain's *declared* template source, before
                 # `template_alignment_file_path` is overwritten with the cache path
@@ -1993,7 +2192,7 @@ class TemplatePreprocessor:
             manager = mp.Manager()
             self.processed_cache_keys = manager.dict()
             self.template_ids_by_cache_key = manager.dict()
-            with mp.Pool(self.n_processes) as pool:
+            with _make_worker_pool(self.worker_pool, self.n_processes) as pool:
                 for _ in tqdm(
                     pool.imap_unordered(
                         self.preprocess_templates,
@@ -2030,12 +2229,11 @@ class TemplatePreprocessor:
         Returns:
             Dictionary mapping indices to TemplateData objects
         """
-        if self.create_logs:
-            worker_logger = logging.getLogger(f"template_preprocess_{os.getpid()}")
-            worker_logger.info(
-                "CIF-direct mode: "
-                f"Processing {len(input_data.template_cif_paths)} CIF files"
-            )
+        worker_logger = self._worker_logger()
+        worker_logger.info(
+            "CIF-direct mode: "
+            f"Processing {len(input_data.template_cif_paths)} CIF files"
+        )
 
         templates = {}
         parser = CifDirectParser(
@@ -2043,18 +2241,15 @@ class TemplatePreprocessor:
             min_score_threshold=self.cif_direct_min_score,
         )
 
-        if self.create_logs:
-            worker_logger = logging.getLogger(f"template_preprocess_{os.getpid()}")
-            worker_logger.info(
-                f"Processing {len(input_data.template_cif_paths)} CIF files "
-                "in CIF-direct mode..."
-            )
+        worker_logger.info(
+            f"Processing {len(input_data.template_cif_paths)} CIF files "
+            "in CIF-direct mode..."
+        )
 
         for idx, cif_path in enumerate(input_data.template_cif_paths):
             try:
                 if not cif_path.exists():
-                    if self.create_logs:
-                        worker_logger.warning(f"CIF file not found: {cif_path}")
+                    worker_logger.warning(f"CIF file not found: {cif_path}")
                     continue
 
                 entry_id = cif_path.stem
@@ -2088,16 +2283,14 @@ class TemplatePreprocessor:
                     template = template._replace(index=idx, cif_path=cif_path)
                     templates[idx] = template
 
-                    if self.create_logs:
-                        worker_logger.info(
-                            f"Selected chain {template.chain_id} from {entry_id} "
-                            f"(seq_id={template.seq_id:.3f}, "
-                            f"q_cov={template.q_cov:.3f})"
-                        )
+                    worker_logger.info(
+                        f"Selected chain {template.chain_id} from {entry_id} "
+                        f"(seq_id={template.seq_id:.3f}, "
+                        f"q_cov={template.q_cov:.3f})"
+                    )
 
             except Exception as e:
-                if self.create_logs:
-                    worker_logger.warning(f"Failed to process CIF file {cif_path}: {e}")
+                worker_logger.warning(f"Failed to process CIF file {cif_path}: {e}")
                 continue
 
         if templates:
@@ -2108,23 +2301,19 @@ class TemplatePreprocessor:
             )
             templates = {i: t._replace(index=i) for i, t in enumerate(templates_list)}
 
-            if self.create_logs:
-                worker_logger.info(f"Parsed {len(templates)} templates from CIF files")
+            worker_logger.info(f"Parsed {len(templates)} templates from CIF files")
             for t in templates_list[:5]:
-                if self.create_logs:
-                    worker_logger.info(
-                        f"  - {t.entry_id}_{t.chain_id}: "
-                        f"seq_id={t.seq_id:.3f}, q_cov={t.q_cov:.3f}"
-                    )
-
-            if self.create_logs:
                 worker_logger.info(
-                    f"Parsed {len(templates)} templates from CIF files, "
-                    f"sorted by alignment quality"
+                    f"  - {t.entry_id}_{t.chain_id}: "
+                    f"seq_id={t.seq_id:.3f}, q_cov={t.q_cov:.3f}"
                 )
+
+            worker_logger.info(
+                f"Parsed {len(templates)} templates from CIF files, "
+                f"sorted by alignment quality"
+            )
         else:
-            if self.create_logs:
-                worker_logger.info("No templates parsed from CIF files")
+            worker_logger.info("No templates parsed from CIF files")
 
         return templates
 
@@ -2153,36 +2342,54 @@ class TemplatePreprocessor:
                 f"\n\nType:\n{type(e).__name__}"
                 f"\n\nTraceback:\n{traceback.format_exc()}"
             )
+        finally:
+            if self.create_logs:
+                worker_logger = logging.getLogger(f"template_preprocess_{os.getpid()}")
+                for handler in list(worker_logger.handlers):
+                    handler.flush()
+                    worker_logger.removeHandler(handler)
+                    handler.close()
+
+    def _worker_logger(self) -> logging.Logger:
+        """This worker's preprocessing log, or a disabled stand-in for it.
+
+        The log writes to `<log_directory>/<pid>.log` once
+        `_preprocess_templates_for_query` has set it up. Without `create_logs` the
+        stand-in drops every message, so log calls need no guard.
+        """
+        if not self.create_logs:
+            return _NO_WORKER_LOG
+        return logging.getLogger(f"template_preprocess_{os.getpid()}")
 
     def _preprocess_templates_for_query(
         self,
         input_data: TemplatePreprocessorInputTrain | TemplatePreprocessorInputInference,
     ) -> None:
+        worker_logger = self._worker_logger()
         if self.create_logs:
-            worker_logger = logging.getLogger(f"template_preprocess_{os.getpid()}")
             worker_logger.setLevel(logging.INFO)
             handler = logging.FileHandler(self.log_directory / f"{os.getpid()}.log")
             handler.setLevel(logging.INFO)
             formatter = logging.Formatter("%(message)s")
             handler.setFormatter(formatter)
-            if not worker_logger.hasHandlers():
-                worker_logger.addHandler(handler)
-            worker_logger.propagate = False
+            worker_logger.addHandler(handler)
+            worker_logger.info(
+                f"Template worker logging initialized: {handler.baseFilename}"
+            )
+            handler.flush()
 
         # preprocess templates for a single chain
         # 1. Parse template alignment file or CIF files
         if isinstance(input_data, TemplatePreprocessorInputInference):
             if input_data.aln_path is not None:
-                if self.create_logs:
-                    worker_logger.info(
-                        f"Parsing template alignment {input_data.aln_path}..."
-                    )
-            elif input_data.template_cif_paths is not None:  # noqa: SIM102
-                if self.create_logs:
-                    worker_logger.info(
-                        f"Processing {len(input_data.template_cif_paths)} CIF files "
-                        "in CIF-direct mode..."
-                    )
+                worker_logger.info(
+                    f"Parsing template alignment {input_data.aln_path}..."
+                )
+            elif input_data.template_cif_paths is not None:
+                worker_logger.info(
+                    f"Processing {len(input_data.template_cif_paths)} CIF files "
+                    "in CIF-direct mode..."
+                )
 
         # TODO: 2. if template entry and chain ID list provided in the IQS - skip some
         # below:
@@ -2193,6 +2400,9 @@ class TemplatePreprocessor:
         # by entry ID, and cannot index by sequence hash due to the way filtering is
         # done
         cache_key = input_data.cache_key
+        # Train-mode entries are shared by all chains of a representative: capping at
+        # max_templates happens per structure in _update_dataset_cache instead.
+        is_train = isinstance(input_data, TemplatePreprocessorInputTrain)
         # skip template preprocessing for chain if already done. Keyed on sequence +
         # template source, so a second chain only short-circuits when it would produce
         # exactly the same cache entry
@@ -2201,18 +2411,15 @@ class TemplatePreprocessor:
         self.processed_cache_keys[cache_key] = True
         template_cache_entry_file = self.cache_directory / f"{cache_key}.npz"
         cache_entry_available = template_cache_entry_file.exists()
-        if self.create_logs:
-            worker_logger.info(
-                f"Template cache entry {template_cache_entry_file} available:"
-                f" {cache_entry_available}"
-            )
+        worker_logger.info(
+            f"Template cache entry {template_cache_entry_file} available:"
+            f" {cache_entry_available}"
+        )
 
         # 5. Template consistency checks and filtering
-        if not cache_entry_available:  # !!! cannot do this for training!
-            if self.create_logs:
-                worker_logger.info(
-                    f"Creating new cache entry {template_cache_entry_file}."
-                )
+        # Train-mode entries are not filtered per query, so reusing them is safe.
+        if not cache_entry_available:
+            worker_logger.info(f"Creating new cache entry {template_cache_entry_file}.")
 
             # Parse templates based on mode
             if isinstance(input_data, TemplatePreprocessorInputInference):
@@ -2232,8 +2439,7 @@ class TemplatePreprocessor:
                     input_data.query_seq_str,
                     self.max_sequences_parse,
                 )
-            if self.create_logs:
-                worker_logger.info(f"Parsed {len(templates)} templates...")
+            worker_logger.info(f"Parsed {len(templates)} templates...")
             template_cache_entry = {}
             template_ids = []
             for _, template in templates.items():
@@ -2241,11 +2447,10 @@ class TemplatePreprocessor:
                 if fails_template_sequence_checks(
                     template, self.max_seq_id, self.min_align, self.min_len
                 ):
-                    if self.create_logs:
-                        worker_logger.info(
-                            f"{template.entry_id} {template.chain_id} does not pass"
-                            " sequence checks."
-                        )
+                    worker_logger.info(
+                        f"{template.entry_id} {template.chain_id} does not pass"
+                        " sequence checks."
+                    )
                     continue
 
                 # B. Get which files are available
@@ -2273,17 +2478,16 @@ class TemplatePreprocessor:
                 else:
                     template_structure_array_subdirectory = None
                     structure_arrays_available = False
-                if self.create_logs:
-                    worker_logger.info(
-                        f"Data availability for {template.entry_id} "
-                        f"{template.chain_id}:\n"
-                        f"  Structure file: {structure_available} - "
-                        f"{template_structure_file}\n"
-                        f"  Precache entry: {precache_entry_available} - "
-                        f"{precache_entry_file}\n"
-                        f"  Structure arrays: {structure_arrays_available} - "
-                        f"{template_structure_array_subdirectory}"
-                    )
+                worker_logger.info(
+                    f"Data availability for {template.entry_id} "
+                    f"{template.chain_id}:\n"
+                    f"  Structure file: {structure_available} - "
+                    f"{template_structure_file}\n"
+                    f"  Precache entry: {precache_entry_available} - "
+                    f"{precache_entry_file}\n"
+                    f"  Structure arrays: {structure_arrays_available} - "
+                    f"{template_structure_array_subdirectory}"
+                )
 
                 # C. Fetch template structure if needed
                 # We need
@@ -2291,33 +2495,45 @@ class TemplatePreprocessor:
                 # - or the precache entry and the structure arrays both
                 if (not structure_available) & (not precache_entry_available):
                     if not self.fetch_missing_structures:
-                        if self.create_logs:
-                            worker_logger.info(
-                                f"Template structure for {template.entry_id} is "
-                                "missing, but fetching is disabled. Please either "
-                                "provide the missing template structure or set "
-                                "`template_preprocessor_settings.fetch_missing_structures=True`.",
-                            )
+                        worker_logger.info(
+                            f"Template structure for {template.entry_id} is "
+                            "missing, but fetching is disabled. Please either "
+                            "provide the missing template structure or set "
+                            "`template_preprocessor_settings.fetch_missing_structures=True`.",
+                        )
                         continue
                     else:
-                        if self.create_logs:
-                            worker_logger.info(
-                                "Structure not available, fetching"
-                                f" {template.entry_id}."
-                            )
+                        worker_logger.info(
+                            f"Structure not available, fetching {template.entry_id}."
+                        )
                         try:
                             fetch(
                                 pdb_ids=template.entry_id,
                                 format="cif",
                                 target_path=self.structure_directory,
                             )
-                        except RequestError as _:
+                            if not template_structure_file.exists():
+                                message = (
+                                    "Structure fetch completed, but the expected "
+                                    "file is still missing:\n"
+                                    f"  entry_id: {template.entry_id}\n"
+                                    f"  expected path: {template_structure_file}\n"
+                                    f"  structure directory: {self.structure_directory}"
+                                )
+                                if self.create_logs:
+                                    worker_logger.error(message)
+                                else:
+                                    print(message)
+                                continue
+                        except RequestError:
                             msg = (
-                                f" {template.entry_id} is not a valid PDB ID."
-                                " Skipping this template."
+                                f"Template {template.entry_id} could not be fetched "
+                                "from the RCSB structure service. "
+                                f"Expected path: {template_structure_file}. "
+                                "Skipping this template."
                             )
                             if self.create_logs:
-                                worker_logger.info(msg)
+                                worker_logger.warning(msg, exc_info=True)
                             else:
                                 print(msg)
                             continue
@@ -2325,10 +2541,7 @@ class TemplatePreprocessor:
                 # D. Load template structure
                 # i. from precache if available
                 if precache_entry_available:
-                    if self.create_logs:
-                        worker_logger.info(
-                            f"Loading precache entry {precache_entry_file}."
-                        )
+                    worker_logger.info(f"Loading precache entry {precache_entry_file}.")
 
                     with np.load(
                         precache_entry_file, allow_pickle=True
@@ -2340,11 +2553,10 @@ class TemplatePreprocessor:
                 else:
                     # Preprocess into per-chain arrays if prompted
                     if self.preparse_structures & (not structure_arrays_available):
-                        if self.create_logs:
-                            worker_logger.info(
-                                f"Loading structure {template_structure_file} and"
-                                " preparsing."
-                            )
+                        worker_logger.info(
+                            f"Loading structure {template_structure_file} and"
+                            " preparsing."
+                        )
                         cif_file, _ = preprocess_template_structure_for_template(
                             template_structure_file,
                             template_structure_array_subdirectory,
@@ -2352,10 +2564,9 @@ class TemplatePreprocessor:
                             self.moltypes,
                         )
                     else:
-                        if self.create_logs:
-                            worker_logger.info(
-                                f"Loading structure {template_structure_file}."
-                            )
+                        worker_logger.info(
+                            f"Loading structure {template_structure_file}."
+                        )
                         cif_file = _load_ciffile(template_structure_file)
 
                     chain_id_seq_map = get_asym_id_to_canonical_seq_dict(cif_file)
@@ -2364,10 +2575,9 @@ class TemplatePreprocessor:
                     )
 
                     if self.create_precache:
-                        if self.create_logs:
-                            worker_logger.info(
-                                f"Saving new precache entry {precache_entry_file}."
-                            )
+                        worker_logger.info(
+                            f"Saving new precache entry {precache_entry_file}."
+                        )
                         np.savez_compressed(
                             precache_entry_file,
                             **{
@@ -2386,37 +2596,49 @@ class TemplatePreprocessor:
                         template.q_cov,
                     ]
                 ):
-                    if self.create_logs:
-                        worker_logger.info(
-                            "Residue-wise template alignment missing for"
-                            f" {template.entry_id} {template.chain_id}. Realigning."
-                        )
+                    worker_logger.info(
+                        "Residue-wise template alignment missing for"
+                        f" {template.entry_id} {template.chain_id}. Realigning."
+                    )
                     template_sequence = chain_id_seq_map.get(template.chain_id)
                     if template_sequence is None:
-                        # TODO: add warning - the chain ID from the alignment is not
-                        # present in the structure file
+                        # Usually an author chain ID that was never remapped, e.g. raw
+                        # ColabFold hits
+                        msg = (
+                            f"Skipping template {template.entry_id}_{template.chain_id}"
+                            f" for {cache_key}: chain {template.entry_id}_"
+                            f"{template.chain_id} not found in its structure (chains:"
+                            f" {sorted(chain_id_seq_map)}). Template IDs must use"
+                            " label chain IDs; remap author chain IDs first."
+                        )
+                        logger.warning(msg)
+                        worker_logger.warning(msg)
                         continue
                     parser = A3mParser(max_sequences=None)
-                    template = parser(
+                    realigned = parser(
                         f">query_X/1-{len(input_data.query_seq_str)}\n{input_data.query_seq_str}\n>{template.entry_id}_{template.chain_id}/{1}-{len(template_sequence)}\n{template_sequence}\n",
                         input_data.query_seq_str,
                         realign=True,
                     )[1]
+                    # The realignment holds only this hit (row 1); keep its rank in the
+                    # original alignment, which orders the cache entry's templates.
+                    template = realigned._replace(index=template.index)
 
                 # F. Apply release date checks
                 if not isinstance(release_date, datetime):
                     release_date = datetime.strptime(release_date, "%Y-%m-%d")
+                # min_release_date_diff needs the query's release date: applied per
+                # structure in _update_dataset_cache, and not used in predict mode.
                 if fails_template_release_date_checks(
                     template_release_date=release_date,
-                    query_release_date=None,  # TODO: add for training logic
+                    query_release_date=None,
                     max_template_release_date=self.max_release_date,
-                    min_release_date_diff=self.min_release_date_diff,
+                    min_release_date_diff=None,
                 ):
-                    if self.create_logs:
-                        worker_logger.info(
-                            f"{template.entry_id} {template.chain_id} does not pass"
-                            " release date checks."
-                        )
+                    worker_logger.info(
+                        f"{template.entry_id} {template.chain_id} does not pass"
+                        " release date checks."
+                    )
                     continue
 
                 # G. Match template sequence from alignment to template sequence in
@@ -2425,21 +2647,19 @@ class TemplatePreprocessor:
                     template, chain_id_seq_map
                 )
                 if chain_id_matched is None:
-                    if self.create_logs:
-                        worker_logger.info(
-                            f"{template.entry_id} {template.chain_id} sequence could"
-                            " not be matched between alignment and structure."
-                        )
+                    worker_logger.info(
+                        f"{template.entry_id} {template.chain_id} sequence could"
+                        " not be matched between alignment and structure."
+                    )
                     continue
 
                 # H. Add to cache entry
                 idx_map = template.build_residue_idx_map()
                 if idx_map.shape[0] == 0:
-                    if self.create_logs:
-                        worker_logger.info(
-                            f"{template.entry_id} {template.chain_id} has no aligned"
-                            " residue pairs."
-                        )
+                    worker_logger.info(
+                        f"{template.entry_id} {template.chain_id} has no aligned"
+                        " residue pairs."
+                    )
                     continue
                 # `cif_path` is only set in CIF-direct mode and is dropped by `to_dict`
                 # when absent
@@ -2453,32 +2673,28 @@ class TemplatePreprocessor:
                     cache_entry.to_dict()
                 )
                 template_ids.append(f"{template.entry_id}_{chain_id_matched}")
-                if self.create_logs:
-                    worker_logger.info(
-                        f"{template.entry_id} {template.chain_id} added to cache."
-                    )
+                worker_logger.info(
+                    f"{template.entry_id} {template.chain_id} added to cache."
+                )
 
                 # I. Break if max templates reached
-                if len(template_cache_entry) == self.max_templates:
+                if not is_train and len(template_cache_entry) == self.max_templates:
                     break
 
             # 6. Save template cache entry and update shared dict of template IDs
             if len(template_cache_entry) > 0:
-                if self.create_logs:
-                    worker_logger.info(f"Found {len(template_cache_entry)} hits.")
+                worker_logger.info(f"Found {len(template_cache_entry)} hits.")
                 np.savez_compressed(template_cache_entry_file, **template_cache_entry)
                 self.template_ids_by_cache_key[cache_key] = template_ids
             else:
-                if self.create_logs:
-                    worker_logger.info("Found no hits.")
+                worker_logger.info("Found no hits.")
 
         # Load the existing template cache entry if available to add the processed
         # template ids into the shared template_ids_by_cache_key and then input set
         else:
-            if self.create_logs:
-                worker_logger.info(
-                    f"Loading existing cache entry {template_cache_entry_file}."
-                )
+            worker_logger.info(
+                f"Loading existing cache entry {template_cache_entry_file}."
+            )
             if cache_key in self.template_ids_by_cache_key:
                 return
 
@@ -2492,8 +2708,7 @@ class TemplatePreprocessor:
             self.template_ids_by_cache_key[cache_key] = list(
                 template_cache_entry.keys()
             )
-            if self.create_logs:
-                worker_logger.info(f"Found {template_cache_entry.keys()} hits.")
+            worker_logger.info(f"Found {template_cache_entry.keys()} hits.")
 
 
 class TemplatePrecachePreprocessor:
@@ -2505,6 +2720,7 @@ class TemplatePrecachePreprocessor:
     ) -> None:
         self.moltypes = config.moltypes
         self.n_processes = config.n_processes
+        self.worker_pool = config.worker_pool
         self.chunksize = config.chunksize
         self.preprocess_timeout = config.preprocess_timeout
 
@@ -2545,7 +2761,7 @@ class TemplatePrecachePreprocessor:
         if self.precache_directory is None:
             raise RuntimeError("Precache output path was not configured")
         self.precache_directory.mkdir(parents=True, exist_ok=True)
-        with mp.Pool(self.n_processes) as pool:
+        with _make_worker_pool(self.worker_pool, self.n_processes) as pool:
             for _ in tqdm(
                 pool.imap_unordered(
                     self._preprocess_template_precache_entry,
@@ -2696,6 +2912,7 @@ class TemplateStructurePreprocessor:
         self.moltypes = config.moltypes
 
         self.n_processes = config.n_processes
+        self.worker_pool = config.worker_pool
         self.chunksize = config.chunksize
 
         self.structure_directory = config.structure_directory
@@ -2729,7 +2946,7 @@ class TemplateStructurePreprocessor:
         if self.structure_array_directory is None:
             raise RuntimeError("Structure array output path was not configured")
         self.structure_array_directory.mkdir(parents=True, exist_ok=True)
-        with mp.Pool(self.n_processes) as pool:
+        with _make_worker_pool(self.worker_pool, self.n_processes) as pool:
             for _ in tqdm(
                 pool.imap_unordered(
                     self._preprocess_template_structure_for_template,
@@ -2778,6 +2995,15 @@ def fails_template_sequence_checks(
     if min_len is not None and template.seq is not None:
         fails |= len(template.seq) < min_len
     return fails
+
+
+def _to_datetime(value: datetime | date | str) -> datetime:
+    """Normalizes a release date from a dataset cache or template cache entry."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    return datetime.strptime(value, "%Y-%m-%d")
 
 
 def fails_template_release_date_checks(

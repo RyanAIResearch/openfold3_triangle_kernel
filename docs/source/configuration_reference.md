@@ -48,19 +48,28 @@ Configures the PyTorch Lightning trainer for distributed training and multi-GPU 
 
 **Pydantic Model**: [`PlTrainerArgs`](https://github.com/aqlaboratory/openfold-3/blob/main/openfold3/entry_points/validator.py#L121)
 
-**All Options**:
-- `max_epochs` *(int)*: Maximum number of training epochs (default: `1000`)
+Any [`pl.Trainer` argument](https://lightning.ai/docs/pytorch/stable/common/trainer.html#trainer-class-api) can be set here and is passed through to `pl.Trainer`. The options below are the ones OpenFold3 adds, uses itself, or gives a different default from Lightning's. OpenFold3 sets `default_root_dir` (to `experiment_settings.output_dir`), `strategy`, `callbacks` and `logger` itself, so setting them here is an error. `profiler` cannot be set here when the top-level `profiler.enabled` is `true`.
+
+**OpenFold3 Defaults and Options**:
+- `max_epochs` *(int)*: Maximum number of training epochs (default: `1000` always, even when `max_steps` is set)
 - `accelerator` *(str)*: Device type - `gpu` or `cpu` (default: `gpu`)
 - `precision` *(int | str)*: Numerical precision - `32-true`, `16-mixed`, etc. (default: `32-true`)
 - `num_nodes` *(int)*: Number of compute nodes (default: `1`)
-- `devices` *(int)*: Number of GPUs per node (default: `1`)
-- `profiler` *(str | None)*: Profiler to use (default: `null`)
+- `devices` *(int)*: Number of GPUs per node; must be positive (default: `1`)
 - `log_every_n_steps` *(int)*: Logging frequency in steps (default: `1`)
-- `enable_checkpointing` *(bool)*: Enable checkpointing (default: `true`)
+- `enable_checkpointing` *(bool)*: Save checkpoints during training, as configured in `checkpoint_config` (default: `true`)
 - `enable_model_summary` *(bool)*: Enable model summary (default: `false`)
+- `enable_progress_bar` *(bool)*: Show the progress bar (default: `true`)
+- `accumulate_grad_batches` *(int)*: Number of batches to accumulate gradients over (default: `1`)
+- `gradient_clip_val`, `gradient_clip_algorithm`: Set during training from the model config's `settings.gradient_clipping`; setting a different value here is an error
+- `use_distributed_sampler` *(bool)*: Split prediction data across devices; must be `true` for training (default: `true`)
 - `deepspeed_config_path` *(Path | None)*: Path to DeepSpeed configuration file (default: `null`)
 - `distributed_timeout` *(timedelta | None)*: Timeout for distributed operations (default: `PT30M`)
 - `mpi_plugin` *(bool)*: Use MPI plugin (default: `false`)
+- `cluster_environment` *(str)*: How distributed ranks are launched and discovered (default: `auto`).
+  - **Default (`auto`)**: ranks are managed by SLURM only when `run_openfold` was launched with `srun`. Otherwise, including `run_openfold` called directly from an sbatch script, OpenFold3 starts all `devices` ranks itself. This is the same for 1 GPU and for multiple GPUs.
+  - **Changing it**: set `local` to always start the ranks locally and ignore the scheduler, `slurm` to always let SLURM manage the ranks (launch with `srun --ntasks-per-node=<devices>`), or `mpi` to use MPI (requires `mpi4py`). Set it here or with `run_openfold predict --cluster-environment <value>`.
+  - **More**: Lightning's [cluster environments](https://github.com/Lightning-AI/pytorch-lightning/blob/2.6.5/docs/source-pytorch/extensions/plugins.rst#cluster-environments) and [SLURM guide](https://github.com/Lightning-AI/pytorch-lightning/blob/2.6.5/docs/source-pytorch/clouds/cluster_advanced.rst#run-on-a-slurm-managed-cluster).
 
 **Example**:
 ```yaml
@@ -133,9 +142,9 @@ data_module_args:
 ```
 
 ---
-### 3.6 Checkpoint Confiugration (`checkpoint_config`)
+### 3.6 Checkpoint Configuration (`checkpoint_config`)
 
-Configures Checkpoint writing settings, which are passed to [pl.ModelCheckpoint callback](https://lightning.ai/docs/pytorch/stable/api/lightning.pytorch.callbacks.ModelCheckpoint.html). 
+Configures Checkpoint writing settings, which are passed to [pl.ModelCheckpoint callback](https://lightning.ai/docs/pytorch/stable/api/lightning.pytorch.callbacks.ModelCheckpoint.html).
 
 ---
 ### 3.7. Dataset Config Kwargs (`dataset_config_kwargs`)
@@ -160,6 +169,7 @@ Controls how MSAs are parsed and processed into features.
 - `max_rows_paired` *(int)*: Maximum rows for paired MSAs (default: `8191`)
 - `max_rows` *(int)*: Maximum total MSA rows (default: `16384`)
 - `subsample_with_bands` *(bool)*: Use MMSeqs2-style subsampling (default: `false`, not currently supported)
+- `subsample_main` *(bool)*: Apply per-chain main MSA subsampling (default: `false`)
 - `min_chains_paired_partial` *(int)*: Minimum chains for partial pairing (default: `2`)
 - `pairing_mask_keys` *(list[str])*: Masks to apply during pairing (default: `["shared_by_two", "less_than_600"]`)
 - `moltypes` *(list[MoleculeType])*: Molecule types to process (default: `[0, 1]` for protein and RNA)
@@ -185,12 +195,8 @@ Controls template structure processing.
 
 **All Options**:
 - `n_templates` *(int)*: Number of templates to use (default: `4`)
-- `take_top_k` *(bool)*: Use top K templates by quality (default: `false`)
-- `min_n_tokens_per_chain` *(int)*: Minimum number of tokens a chain has to have for it to get template features (default: `4`)
-- `distogram` *(TemplateDistogramSettings)*: Distogram binning settings
-  - `min_bin` *(float)*: Minimum distance bin (default: `3.25`)
-  - `max_bin` *(float)*: Maximum distance bin (default: `50.75`)
-  - `n_bins` *(int)*: Number of bins (default: `39`)
+- `take_top_k` *(bool)*: Use top K templates by quality (default: `true`)
+- `min_n_tokens_per_chain` *(int)*: Minimum number of tokens a chain has to have for it to get template features (default: `5`)
 
 **Example**:
 ```yaml
@@ -300,13 +306,16 @@ Configures template structure preprocessing and filtering.
 - `min_align` *(float | None)*: Minimum alignment coverage (default: `null`)
 - `min_len` *(int | None)*: Minimum aligned residues (default: `null`)
 - `max_release_date` *(datetime | None)*: Maximum template release date (default: `null`)
-- `min_release_date_diff` *(int | None)*: Minimum days between query and template release (default: `null`)
+- `min_release_date_diff` *(int | None)*: Train mode only. Minimum days between a structure's release and its templates' release; inference queries have no release date, so use `max_release_date` there (default: `null`)
 - `max_templates` *(int)*: Maximum templates per chain (default: `20`)
+- `cif_direct_min_score` *(float)*: CIF-direct mode only. Minimum sequence identity × query coverage for a template chain to be used (default: `0.1`)
+- `min_f_resolved` *(float)*: Minimum fraction of resolved residues for a template to be valid; only used when template structure arrays and precache entries are computed separately from the template cache (default: `0.1`)
 - `fetch_missing_structures` *(bool)*: Fetch missing structures from PDB (default: `true`)
 - `create_precache` *(bool)*: Cache template structure data (default: `false`)
 - `preparse_structures` *(bool)*: Preparse structures into .npz files (default: `false`)
 - `create_logs` *(bool)*: Create preprocessing logs (default: `false`)
 - `n_processes` *(int)*: Number of preprocessing processes (default: `1`)
+- `worker_pool` *(str)*: Run the `n_processes` workers as separate processes (`process`) or as threads in the calling process (`thread`); threads start faster and are easier to debug, processes run in parallel (default: `process`)
 - `chunksize` *(int)*: Tasks per worker in multiprocessing (default: `1`)
 - `preprocess_timeout` *(int)*: Maximum preprocessing time in seconds (default: `60`)
 - `structure_directory` *(Path | None)*: Directory for template structures. During inference, the implicit default is `<output_directory>/template_structures`.
@@ -317,6 +326,8 @@ Configures template structure preprocessing and filtering.
 - `cache_directory` *(Path | None)*: Directory for template cache. During inference, the implicit default is `<output_directory>/template_cache`.
 - `log_directory` *(Path | None)*: Directory for logs (default: `null`)
 - `ccd_file_path` *(Path | None)*: Path to Chemical Component Dictionary file (default: `null`)
+- `template_alignment_directory` *(Path | None)*: Train mode only. Directory with one `<rep_id>/colabfold_template.m8` per alignment representative, the layout `align-msa-server` writes; template IDs must use label chain IDs (default: `null`)
+- `alignment_representatives_fasta` *(Path | None)*: Train mode only. FASTA mapping alignment representative IDs (headers) to their sequences, one line each (default: `null`)
 
 **Example**:
 ```yaml
@@ -327,6 +338,8 @@ template_preprocessor_settings:
 ```
 
 Explicit template paths override these inference defaults.
+
+When running [`preprocess_template_alignments_new_of3.py`](https://github.com/aqlaboratory/openfold-3/blob/main/scripts/data_preprocessing/preprocess_template_alignments_new_of3.py), `mode` follows `--input_set_type`, and `--output_directory` replaces `output_directory`, `cache_directory` and `log_directory`. `precache_directory` and `structure_array_directory` are used when given. The settings used are saved as `template_preprocessor_settings.json` in the output directory.
 
 ---
 

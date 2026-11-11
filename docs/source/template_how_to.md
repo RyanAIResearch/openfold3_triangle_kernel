@@ -92,6 +92,15 @@ Note that since `m8` files do not provide actual alignments, we only use them to
 
 For alignment-based templates, template structures currently can only be provided in `cif` format. An upcoming release will add support for parsing templates from `pdb` files.
 
+Template structures must be stored in a flat directory structure ([E.g.](https://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/all/mmCIF/)). Tempalte structures are looked up as follows: `{structure_directory}/{template_pdb_id}.{structure_file_format}`.
+
+```yaml
+structure_directory: /path/to/pdb/database/mmCIF/
+structure_file_format: cif
+```
+
+> Supported `structure_file_format`: `cif`, `cif.gz`, and `bcif`.
+
 **Note:** For {ref}`CIF direct mode <23-cif-direct-templates>`, template CIF files are specified directly in the query JSON without separate structure directories.
 
 (2-specifying-template-information-in-the-inference-query-file)=
@@ -176,7 +185,7 @@ entry3_A     MK----DDARGQGKFT
 (23-cif-direct-templates)=
 ### 2.3. CIF Direct Templates (No Alignments Required)
 
-OpenFold3 supports providing template structures directly as CIF files without requiring pre-computed template alignments. This is particularly useful for:
+OpenFold3 supports providing template structures directly as CIF files, including gzip-compressed `.cif.gz` files, without requiring pre-computed template alignments. Compressed CIF files can be supplied directly; manual decompression is not required. This is particularly useful for:
 - Stateless inference environments (e.g., NVIDIA Inference Microservices)
 - Quick predictions when you have specific template structures
 - Simplified workflows without external alignment tools
@@ -205,7 +214,7 @@ Specify `template_cif_paths` instead of `template_alignment_file_path` in your q
                     "chain_ids": ["A", "B"],
                     "sequence": "XRMKQLEDKVEELLSKNYHLENEVARLKKLVGER",
                     "template_cif_paths": [
-                        "templates/1dgc.cif",
+                        "templates/1dgc.cif.gz",
                         "templates/1ysa.cif",
                         "templates/1zta.cif"
                     ]
@@ -234,7 +243,7 @@ Only chains with a score (sequence identity × coverage) above this threshold wi
 #### Important Notes
 
 - The `template_cif_paths` field is **mutually exclusive** with `template_alignment_file_path` - you must use one or the other, not both
-- Template structures must be in CIF format
+- Template structures must be in CIF format; gzip-compressed `.cif.gz` files are supported
 - Currently supported for protein chains only
 - For multi-chain CIF files, the system automatically selects the best matching chain per file
 
@@ -249,10 +258,11 @@ For high-throughput use cases with alignment-based templates, where a large numb
 
 A recommended workflow for providing template data for very large datasets is the following:
 1. Compute {ref}`template alignments <311-precomputed-template-alignments>`.
-2. [Download the PDB](https://github.com/aqlaboratory/openfold-3/blob/main/scripts/snakemake_msa/download_of3_databases.py) or other template structure dataset locally.
-3. Precompute the {ref}`template precache <312-template-precache>` from template structures to speed up template cache precomputation.
-4. Precompute the {ref}`template cache <313-template-cache>` from template alignments and the template precache.
-5. Preparse the {ref}`template structures <32-template-structure-preprocessing>` into template structure arrays.
+2. [Download the default Jackhmmer and HHblits alignment databases](https://github.com/aqlaboratory/openfold-3/blob/main/scripts/snakemake_msa/download_of3_databases.py) 
+3. [Download the PDB](https://ftp.ebi.ac.uk/pub/databases/pdb/data/structures/all/mmCIF/) or other template structure dataset locally.
+4. Precompute the {ref}`template precache <312-template-precache>` from template structures to speed up template cache precomputation.
+5. Precompute the {ref}`template cache <313-template-cache>` from template alignments and the template precache.
+6. Preparse the {ref}`template structures <32-template-structure-preprocessing>` into template structure arrays.
 
 This workflow produces a set of *template cache entries* and *preparsed template structures* for on-the-fly data processing that happens concurrently with the model forward pass. Each of these steps are detailed below.
 
@@ -326,20 +336,28 @@ python preprocess_template_alignments_new_of3.py \
     --input_set_path <path/to/input/query.json> \
     --input_set_type "predict" \
     --runner_yaml <path/to/runner.yml> \
-    --output_set_path <path/to/updated/output/query.json> \
+    --output_directory <path/to/output/directory>
 ```
 
-where `input_set_path` is the inference query.json, `output_set_path` is the output json with the updated template information following preprocessing and `runner_yaml` contains the preprocessing configuration, for example:
+where `input_set_path` is the inference query.json, `runner_yaml` contains the preprocessing configuration and `output_directory` receives all outputs:
+
+```
+<output_directory>/
+├── query.json                            # the input query set (same file name), with template information
+├── template_preprocessor_settings.json   # settings used for this run
+└── template_cache/                       # template cache entries
+```
+
+An example `runner_yaml`:
 
 ```
 template_preprocessor_settings:
   n_processes: 4  
   chunksize: 1
   precache_directory: <path/to/precache>
-  cache_directory: <path/to/output/template/cache>
 ```
 
-This script runs 4 parallel processes to preprocesse the template alignments specified under the `template_alignment_file_path` field of each chain in the inference query json, using the template structures precached at the path given by `precache_directory` and outputs the template cache to `cache_directory`. If precaching was not done, you can run processing from the raw structures by specifying them under the `structure_directory` field and dropping `precache_directory`.
+This script runs 4 parallel processes to preprocesse the template alignments specified under the `template_alignment_file_path` field of each chain in the inference query json, using the template structures precached at the path given by `precache_directory`, and writes the template cache to `<output_directory>/template_cache`. If precaching was not done, you can run processing from the raw structures by specifying them under the `structure_directory` field and dropping `precache_directory`. `output_directory`, `cache_directory` and `log_directory` in the YAML are ignored in favor of `--output_directory`; `precache_directory` and `structure_array_directory` are used when given.
 
 (32-template-structure-preprocessing)=
 ### 3.2. Template Structure Preprocessing
@@ -364,4 +382,4 @@ template_preprocessor_settings:
   ccd_file_path: <optional/path/to/ccd/file>
 ```
 
-where a CCD file can be optionally provided if the template structures contain custom ligands or other chemical components.
+where a CCD file can be optionally provided if the template structures contain custom ligands or other chemical components. The script writes `<structure_array_directory>/<entry_id>/<entry_id>_<chain_id>.npz` for every chain of the requested molecule types, plus a `chain_id_to_moltype.npz` per entry that maps its chains to molecule types. Template precache creation reads this map and skips entries without one, so keep it with the arrays.

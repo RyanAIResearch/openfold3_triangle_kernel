@@ -41,6 +41,11 @@ try:
     import triton
     import triton.language as tl
 
+    from openfold3.core.kernels.triton.dot_precision import (
+        current_dot_precision,
+        tl_dot,
+    )
+
     TRITON_AVAILABLE = True
 except ImportError:
     TRITON_AVAILABLE = False
@@ -237,6 +242,7 @@ if TRITON_AVAILABLE:
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         BLOCK_K: tl.constexpr,
+        DOT_PRECISION: tl.constexpr,
     ):
         """
         Linear layer: output = x @ weight.T + bias
@@ -279,7 +285,7 @@ if TRITON_AVAILABLE:
                 other=0.0,
             )
 
-            acc = tl.dot(x, w, acc)
+            acc = tl_dot(x, w, acc=acc, input_precision=DOT_PRECISION)
 
         if HAS_BIAS:
             bias_offsets = rn.to(tl.int64)
@@ -329,6 +335,7 @@ if TRITON_AVAILABLE:
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         BLOCK_K: tl.constexpr,
+        DOT_PRECISION: tl.constexpr,
     ):
         """
         Fused linear layer with optional sigmoid, elementwise multiply, mask, and add
@@ -371,7 +378,7 @@ if TRITON_AVAILABLE:
                 other=0.0,
             )
 
-            acc = tl.dot(x, w, acc)
+            acc = tl_dot(x, w, acc=acc, input_precision=DOT_PRECISION)
 
         if HAS_BIAS:
             bias_offsets = rn.to(tl.int64)
@@ -555,6 +562,7 @@ def triton_linear(
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
+        DOT_PRECISION=current_dot_precision(fp32_operands=x_2d.dtype == torch.float32),
     )
 
     output_shape = input_shape[:-1] + (N,)
@@ -686,6 +694,7 @@ def triton_linear_fused(
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
+        DOT_PRECISION=current_dot_precision(fp32_operands=x_2d.dtype == torch.float32),
     )
 
     output_shape = input_shape[:-1] + (N,)

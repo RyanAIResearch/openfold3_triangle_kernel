@@ -28,12 +28,17 @@ import ml_collections as mlc
 import pytorch_lightning as pl
 import torch
 import wandb
+from lightning_fabric.plugins.environments.cluster_environment import (
+    ClusterEnvironment,
+)
+from lightning_fabric.plugins.environments.lightning import LightningEnvironment
+from lightning_fabric.plugins.environments.mpi import MPIEnvironment
+from lightning_fabric.plugins.environments.slurm import SLURMEnvironment
 from lightning_fabric.utilities.rank_zero import _get_rank
 from pydantic import BaseModel
 from pytorch_lightning.callbacks.lr_monitor import LearningRateMonitor
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.plugins.environments import MPIEnvironment
 from pytorch_lightning.profilers import PyTorchProfiler
 from pytorch_lightning.strategies import DDPStrategy, DeepSpeedStrategy
 
@@ -61,6 +66,7 @@ from openfold3.core.utils.distributed_contract import (
 from openfold3.core.utils.precision_utils import OF3DeepSpeedPrecision
 from openfold3.core.utils.script_utils import set_ulimits
 from openfold3.entry_points.validator import (
+    ClusterEnvironmentOption,
     ExperimentConfig,
     InferenceExperimentConfig,
     TrainingExperimentConfig,
@@ -235,15 +241,62 @@ class ExperimentRunner(ABC):
     def is_rank_zero(self) -> bool:
         """Check if the current process is rank zero in an MPI environment."""
         if self.is_mpi:
-            return self.cluster_environment.global_rank() == 0
+            env = self.cluster_environment
+            assert env is not None  # is_mpi always resolves to MPIEnvironment
+            return env.global_rank() == 0
         else:
             _rank = _get_rank()
             return (_rank is None) or (_rank == 0)
 
     @property
-    def cluster_environment(self) -> MPIEnvironment | None:
-        """Return the MPI cluster environment if enabled."""
-        return MPIEnvironment() if self.is_mpi else None
+    def cluster_environment(self) -> ClusterEnvironment | None:
+        """Cluster environment passed to Lightning.
+
+        Default (``auto``): SLURM manages the ranks only if this process was
+        launched by ``srun``; otherwise Lightning starts the ranks locally.
+        This holds for single- and multi-GPU runs alike. Returns
+        ``LightningEnvironment`` inside a SLURM allocation without srun, and
+        ``None`` (Lightning detects the environment) everywhere else.
+
+        To change it, set ``pl_trainer_args.cluster_environment`` in the
+        runner yaml or pass ``run_openfold predict --cluster-environment``:
+        ``local`` -> ``LightningEnvironment``, ``slurm`` ->
+        ``SLURMEnvironment``, ``mpi`` -> ``MPIEnvironment`` (also selected by
+        the legacy ``mpi_plugin`` flag).
+
+        Lightning's own detection adopts ``SLURMEnvironment`` for any process
+        inside a SLURM allocation, including ``sbatch`` without ``srun``, where
+        no sibling ranks are ever launched and distributed init blocks forever
+        (issue #47). ``SLURM_STEP_ID`` is only set for srun-launched steps, so
+        its absence identifies that case.
+        """
+        choice = self.pl_trainer_args.cluster_environment
+        if self.is_mpi:
+            # Legacy flag, equivalent to cluster_environment="mpi".
+            choice = ClusterEnvironmentOption.MPI
+
+        explicit_environments: dict[
+            ClusterEnvironmentOption, type[ClusterEnvironment]
+        ] = {
+            ClusterEnvironmentOption.SLURM: SLURMEnvironment,
+            ClusterEnvironmentOption.LOCAL: LightningEnvironment,
+            ClusterEnvironmentOption.MPI: MPIEnvironment,
+        }
+        if choice in explicit_environments:
+            return explicit_environments[choice]()
+
+        # ClusterEnvironmentOption.AUTO
+        if SLURMEnvironment.detect() and "SLURM_STEP_ID" not in os.environ:
+            logger.warning(
+                "Inside a SLURM allocation but not launched by srun: using the"
+                " local launcher instead of SLURM rank binding. Set"
+                " pl_trainer_args.cluster_environment to 'slurm' or 'local' to"
+                " silence this warning, and launch with"
+                " `srun --ntasks-per-node=<devices>` if SLURM should manage"
+                " the ranks."
+            )
+            return LightningEnvironment()
+        return None
 
     @cached_property
     def strategy(self) -> DDPStrategy | DeepSpeedStrategy | str:
@@ -277,7 +330,9 @@ class ExperimentRunner(ABC):
     @cached_property
     def callbacks(self):
         """Set up and return the list of callbacks."""
-        _callbacks = [SecondsPerIterationProgressBar()]
+        _callbacks: list[pl.Callback] = []
+        if self.pl_trainer_args.enable_progress_bar:
+            _callbacks.append(SecondsPerIterationProgressBar())
 
         if self.memory_snapshot.enabled:
             _callbacks.append(
@@ -328,7 +383,12 @@ class ExperimentRunner(ABC):
     def trainer(self) -> pl.Trainer:
         """Create and return the trainer instance."""
         trainer_args = self.pl_trainer_args.model_dump(
-            exclude={"deepspeed_config_path", "distributed_timeout", "mpi_plugin"}
+            exclude={
+                "deepspeed_config_path",
+                "distributed_timeout",
+                "mpi_plugin",
+                "cluster_environment",
+            }
         )
         trainer_args.update(
             {
@@ -341,6 +401,13 @@ class ExperimentRunner(ABC):
 
         if self.profiler_config.enabled:
             trainer_args["profiler"] = self._build_profiler()
+
+        # DDP/DeepSpeed strategies carry the cluster environment themselves; the
+        # plain "auto" strategy does not, so pass it as a plugin to make the
+        # resolution identical for single- and multi-GPU runs.
+        cluster_environment = self.cluster_environment
+        if isinstance(self.strategy, str) and cluster_environment is not None:
+            trainer_args["plugins"] = [cluster_environment]
 
         return pl.Trainer(**trainer_args)
 
@@ -416,12 +483,33 @@ class TrainingExperimentRunner(ExperimentRunner):
         if self.do_manual_ckpt_loading:
             self.manual_load_checkpoint()
 
+    def _set_trainer_gradient_clipping(
+        self, clip_val: float | None, algorithm: str | None
+    ) -> None:
+        """Set pl_trainer_args gradient clipping, erroring on conflicting settings."""
+        gradient_clip_val = self.pl_trainer_args.gradient_clip_val
+        gradient_clip_algorithm = self.pl_trainer_args.gradient_clip_algorithm
+        val_conflicts = gradient_clip_val not in (None, clip_val)
+        algorithm_conflicts = gradient_clip_algorithm not in (None, algorithm)
+        if val_conflicts or algorithm_conflicts:
+            raise ValueError(
+                f"pl_trainer_args ({gradient_clip_val=}, {gradient_clip_algorithm=}) "
+                f"conflicts with the settings implied by the model config's "
+                f"settings.gradient_clipping ({clip_val=}, {algorithm=}). Configure "
+                f"gradient clipping with "
+                f"model_update.custom.settings.gradient_clipping instead."
+            )
+        self.pl_trainer_args.gradient_clip_val = clip_val
+        self.pl_trainer_args.gradient_clip_algorithm = algorithm
+
     def update_trainer_config(self):
         """
         Update trainer configuration based on model settings.
         This handles gradient clipping and accumulation settings.
         """
         if self.model_config.settings.gradient_clipping.per_sample_clipping:
+            self._set_trainer_gradient_clipping(None, None)
+
             # The training step with per-sample gradient clipping handles this
             # internally PL does not support manual optimization with
             # accumulate_grad_batches
@@ -453,8 +541,7 @@ class TrainingExperimentRunner(ExperimentRunner):
             clip_val = self.model_config.settings.gradient_clipping.clip_val
 
             # If DeepSpeed is enabled, these values will be passed to the DS config
-            self.pl_trainer_args.gradient_clip_val = clip_val
-            self.pl_trainer_args.gradient_clip_algorithm = "norm"
+            self._set_trainer_gradient_clipping(clip_val, "norm")
 
         # Update distributed sync seed used in the model
         # Currently used to sync the number of recycles across ranks
@@ -626,7 +713,7 @@ class TrainingExperimentRunner(ExperimentRunner):
             )
 
         _checkpoint = self.checkpoint_config
-        if _checkpoint is not None:
+        if _checkpoint is not None and self.pl_trainer_args.enable_checkpointing:
             _callbacks.append(ModelCheckpoint(**_checkpoint.model_dump()))
 
         if self.model_config.settings.debug.log_iteration_time:
@@ -739,7 +826,12 @@ class InferenceExperimentRunner(ExperimentRunner):
             self.set_num_diffusion_samples(num_diffusion_samples)
 
         if num_model_seeds:
-            start_seed = 42
+            # Start from configured seed
+            configured_seeds = self.experiment_config.experiment_settings.seeds
+            if isinstance(configured_seeds, int):
+                start_seed = configured_seeds
+            else:
+                start_seed = configured_seeds[0] if configured_seeds else 42
             self.seeds = generate_seeds(start_seed, num_model_seeds)
 
         if use_msa_server is not None:

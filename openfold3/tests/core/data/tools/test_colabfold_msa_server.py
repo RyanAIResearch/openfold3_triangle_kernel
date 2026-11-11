@@ -611,14 +611,13 @@ class TestColabFoldQueryRunner:
             dataloader = data_module.predict_dataloader()
 
             expected_msa = 4  # based on _construct_dummy_a3m
-            expected_shape = (1, expected_msa, len(sequence), 32)
+            expected_shape = (1, expected_msa, len(sequence))
             # the implicit iter here is causing a segfault in Python 3.13
             for batch in dataloader:
-                b, s, t, e = batch["msa"].shape
-                b_expected, s_expected, t_expected, e_expected = expected_shape
+                b, s, t = batch["msa"].shape
+                b_expected, s_expected, t_expected = expected_shape
                 assert b == b_expected, f"Batch size mismatch: {b} != {b_expected}"
                 assert t == t_expected, f"Target length mismatch: {t} != {t_expected}"
-                assert e == e_expected, f"Feature size mismatch: {e} != {e_expected}"
 
             msa_compute_settings.cleanup_workspace()
 
@@ -857,6 +856,36 @@ class TestRemapObsoletePdb:
         assert remapped_ids[0] == "7qe7_A"
         # Non-obsolete entry is remapped normally
         assert remapped_ids[1] == "4pqx_A"
+
+
+class TestQueryColabFoldServerFilesExtractionValidation:
+    """Regression test for issue #508.
+
+    The files from MSA server are untrusted. Validations are required.
+    """
+
+    @staticmethod
+    def _write_tarball(out_tar_gz: Path, members: dict[str, bytes]) -> None:
+        """Write a gzipped tar of ``members`` (name -> bytes) at ``out_tar_gz``."""
+        with tarfile.open(out_tar_gz, "w:gz") as tar:
+            for name, data in members.items():
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+
+    def test_files_extraction_validation(self, tmp_path):
+        path = tmp_path / "destination"
+        path.mkdir()
+
+        tar_gz_file = f"{path}/out.tar.gz"
+        self._write_tarball(tar_gz_file, {"../attack": b">101\nAAAA\n\x00>102\nCCCC\n"})
+
+        with pytest.raises(tarfile.OutsideDestinationError):
+            query_colabfold_msa_server(
+                ["AAAA", "CCCC"], prefix=path, user_agent="test-agent"
+            )
+
+        assert not (tmp_path / "attack").exists()
 
 
 class TestMsaComputationSettings:

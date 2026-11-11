@@ -148,9 +148,9 @@ This command uses the `run_openfold` binary, for which the source code is availa
 - `--num-diffusion-samples` *(int, optional, default = 5)*
     - Number of diffusion samples per query.
 
-- `--num-model-seeds` *(int, optional, default = 1)*
-    - Number of random seeds to use per query.
-    - To manually select specific seeds, please use the `runner.yml` and refer to the {ref}`Custom Random Seeds section <custom-random-seeds-inference>` below.
+- `--num-model-seeds` *(int, optional)*
+    - Number of random seeds to use per query, generated from a starting seed.
+    - To manually select specific seeds, please use the `runner.yml` and refer to the {ref}`Custom Random Seeds section <custom-random-seeds-inference>` below, which also explains how the starting seed is chosen.
 
 - `--runner-yaml` *(Path, optional, default = null)*
     - YAML config for full control over model and data parameters. See the {doc}`configuration reference <configuration_reference>` and [full configuration reference file](https://github.com/aqlaboratory/openfold-3/blob/main/examples/reference_full_config/full_config.yml) for all available options.
@@ -257,6 +257,8 @@ Seeding behavior is controlled in the following priority:
 - Command line argument `--num-model-seeds`
 - `runner.yml` via the `experiment_settings.seeds` field.
 
+When `--num-model-seeds N` is given, `N` seeds are generated starting from the first seed in `experiment_settings.seeds` (`42` by default). The listed seeds themselves are then not used, so `--num-model-seeds 1` runs a single generated seed, not seed `42`. To run exactly the seeds you list, omit `--num-model-seeds`.
+
 ---
 
 #### 📦 Output in PDB Format
@@ -352,7 +354,7 @@ MPS inference is currently ~3-5x faster than CPU-only inference for the same que
 (inference-cif-direct-templates)=
 #### 🧬 CIF Direct Template Mode
 
-OpenFold3 supports providing template structures directly as CIF files without requiring pre-computed template alignments. In this mode, the system automatically:
+OpenFold3 supports providing template structures directly as CIF files, including gzip-compressed `.cif.gz` files, without requiring pre-computed template alignments. Compressed CIF files can be supplied directly; manual decompression is not required. In this mode, the system automatically:
 1. Parses each provided CIF file
 2. Extracts all chains and their sequences
 3. Aligns each chain to your query sequence
@@ -374,7 +376,7 @@ In your query JSON, specify `template_cif_paths` instead of `template_alignment_
                     "chain_ids": ["A"],
                     "sequence": "MKLLVVDDAGQKFT...",
                     "template_cif_paths": [
-                        "path/to/template1.cif",
+                        "path/to/template1.cif.gz",
                         "path/to/template2.cif",
                         "path/to/template3.cif"
                     ],

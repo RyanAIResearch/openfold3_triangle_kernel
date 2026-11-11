@@ -36,8 +36,8 @@ dependencies = [
     "torch",
     "ml-collections",
     "pytorch-lightning >=2.1",
-    "biotite",
-    "rdkit<2026", # aqlaboratory/openfold-3/issues/285 
+    "biotite>=1.6",
+    "rdkit",
     "pdbeccdutils",
     "kalign-python",
     "requests",
@@ -55,13 +55,13 @@ dependencies = [
 ]
 
 optional-dependencies.dev = [
-    "pytest",
+    "pytest<9.2",  # until pytest-benchmark/issues/321 is resolved
     "pytest-xdist",
     "pytest-cov",
     "pytest-benchmark",
     "pytest-regressions",
     "pytest-vcr",
-    "ruff",
+    "ruff==0.16.0",  # keep in sync with pixi.toml
     "mypy",
     "mypy-baseline",
     "pre-commit",
@@ -104,7 +104,7 @@ validate-openfold3-rocm="openfold3.entry_points.validate_rocm:main"
 [dependency-groups]
 test = [
     "pytest",
-    "ruff",
+    "ruff==0.16.0",  # keep in sync with pixi.toml
     "awscli",
     "aria2",
     "pytest-xdist",
@@ -117,7 +117,7 @@ test = [
 
 
 [tool.setuptools_scm]
-fallback_version = "0.5.0"
+fallback_version = "0.5.1"
 
 [tool.setuptools]
 include-package-data = true
@@ -173,6 +173,11 @@ ignore = [
     "E741",
     "SIM108",
     "B905",  # explicit strict= for zip
+    # PEP 695 `type X = ...` / `class C[T]` syntax: unlike TypeAlias, a `type`
+    # alias is a TypeAliasType at runtime and breaks isinstance(x, Alias)
+    "UP040",
+    "UP046",
+    "UP047",
 ]
 extend-safe-fixes = ["UP006"]
 
@@ -183,6 +188,10 @@ known-first-party = ["openfold3"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# Without an explicit setting, tl.dot silently uses tf32 where supported.
+"triton.language.dot".msg = "use `tl_dot` from `openfold3.core.kernels.triton.dot_precision`, which requires `input_precision`."
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["E501"]
@@ -226,6 +235,14 @@ pretty = false
 # latter is a no-op for every other module, since `follow_imports` stays at its
 # default of "normal" outside this override.
 follow_imports_for_stubs = true
+# Every check in --strict, for openfold3 except its tests (see the override
+# below). Existing violations are recorded in mypy-baseline.txt, so these apply
+# in full to new files, and to new code in existing ones.
+strict = true
+# Name modules by their path from the project root. scripts/ has no __init__.py,
+# so otherwise each script is a top-level module named after its file, and the
+# "scripts.*" override below could not match them.
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = ["rdkit.*", "gemmi.*"]
@@ -237,6 +254,24 @@ follow_imports = "skip"
 [[tool.mypy.overrides]]
 module = ["openfold3.core.kernels.protenix._vendor.*"]
 ignore_errors = true
+
+# Tests and scripts are exempt from strict: `strict` itself can only be set
+# globally, so this lists every per-module flag it enables, set back to mypy's
+# default.
+[[tool.mypy.overrides]]
+module = ["openfold3.tests.*", "scripts.*"]
+disallow_any_generics = false
+disallow_subclassing_any = false
+disallow_untyped_calls = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+disallow_untyped_decorators = false
+warn_unused_ignores = false
+warn_return_any = false
+no_implicit_reexport = false
+strict_equality = false
+extra_checks = false
 
 [tool.mypy-baseline]
 # Keep the baseline sorted so its diffs stay reviewable.
@@ -251,7 +286,8 @@ testpaths = ["openfold3/tests"]
 python_files = ["test_*.py"]
 markers = [
     "inference_verification: Tests to verify installation on inference example",
-    "slow: Large size test"
+    "slow: Large size test",
+    "gpu: Needs a GPU; selected by the GPU CI job alongside slow tests",
 ]
 
 # Exclude directories during collection

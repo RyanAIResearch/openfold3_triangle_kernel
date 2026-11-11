@@ -12,21 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the easily-isolated seams of the template preprocessing pipeline.
+"""Tests for the shared and inference halves of the TemplatePreprocessor pipeline.
 
-Scope (see plan): the side-effect-free helpers, the pydantic validators, the no-IO
-instance methods (built via ``object.__new__`` to bypass ``__init__``'s multiprocessing
-and file IO), and the legacy TSV log helpers.
-
-Tier E is the exception: cross-query template source isolation is only observable
-end to end, so those tests run the real ``__call__``. They stay offline by pre-seeding
-the template structure directory and setting ``fetch_missing_structures=False``.
+Train-mode tests live in test_template_train.py.
 """
 
 import getpass
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from unittest.mock import patch
 
 import pytest
@@ -475,6 +471,20 @@ def test_settings_rejects_unsupported_structure_format(tmp_path):
         )
 
 
+def test_settings_rejects_min_release_date_diff_in_predict_mode(tmp_path):
+    """Predict mode has no query release date to measure the difference from."""
+    with pytest.raises(ValueError, match="min_release_date_diff"):
+        TemplatePreprocessorSettings(
+            mode="predict", output_directory=tmp_path, min_release_date_diff=60
+        )
+
+    # Train mode applies it per structure, against each structure's release date
+    settings = TemplatePreprocessorSettings(
+        mode="train", output_directory=tmp_path, min_release_date_diff=60
+    )
+    assert settings.min_release_date_diff == 60
+
+
 def test_settings_derives_default_directories(tmp_path):
     with patch(
         "openfold3.core.data.tools.utils.tempfile.gettempdir",
@@ -568,11 +578,13 @@ def test_standalone_template_consumers_create_output_when_called(
             settings = TemplatePreprocessorSettings(
                 structure_directory=structure_directory,
                 create_precache=True,
+                worker_pool="thread",
             )
         else:
             settings = TemplatePreprocessorSettings(
                 structure_directory=structure_directory,
                 preparse_structures=True,
+                worker_pool="thread",
             )
     output_directory = getattr(settings, output_field)
     preprocessor = preprocessor_cls(settings)
@@ -580,11 +592,8 @@ def test_standalone_template_consumers_create_output_when_called(
     assert output_directory is not None
     assert not output_directory.exists()
 
-    with patch(
-        "openfold3.core.data.pipelines.preprocessing.template.mp.Pool"
-    ) as pool_cls:
-        pool_cls.return_value.__enter__.return_value.imap_unordered.return_value = []
-        preprocessor()
+    # The placeholder structure fails to preprocess, which workers report and skip
+    preprocessor()
 
     assert output_directory.is_dir()
 
@@ -914,6 +923,7 @@ def test_template_sources_do_not_collide_across_queries(tmp_path, order):
         structure_directory=structure_dir,
         fetch_missing_structures=False,
         n_processes=1,
+        worker_pool="thread",
     )
 
     TemplatePreprocessor(input_set=iqs, config=settings)()
@@ -930,3 +940,146 @@ def test_template_sources_do_not_collide_across_queries(tmp_path, order):
     assert (
         custom.template_alignment_file_path != colabfold.template_alignment_file_path
     ), "both queries were pointed at the same template cache entry"
+
+
+def test_workers_run_in_separate_processes(tmp_path):
+    """Preprocessing in real worker processes gives the same templates.
+
+    The tests around this one run their workers as threads, which start faster. This
+    one uses processes, the default, so the preprocessor and its inputs must still
+    pickle, and the results must still come back from the workers.
+    """
+    iqs = _two_source_query_set(tmp_path, ["q_custom", "q_colabfold"])
+    structure_dir = tmp_path / "template_structures"
+    structure_dir.mkdir()
+    shutil.copy(MMCIFS_DIR / TEMPLATE_CIF, structure_dir / TEMPLATE_CIF)
+    settings = TemplatePreprocessorSettings(
+        mode="predict",
+        output_directory=tmp_path / "template_data",
+        structure_directory=structure_dir,
+        fetch_missing_structures=False,
+        n_processes=2,
+        worker_pool="process",
+        create_logs=True,
+    )
+
+    TemplatePreprocessor(input_set=iqs, config=settings)()
+
+    assert iqs.queries["q_custom"].chains[0].template_entry_chain_ids == ["2q2k_B"]
+    assert iqs.queries["q_colabfold"].chains[0].template_entry_chain_ids == ["2q2k_C"]
+    # Each worker writes its log under its own process ID
+    worker_pids = {int(log.stem) for log in settings.log_directory.glob("*.log")}
+    assert worker_pids, "no worker wrote a log"
+    assert os.getpid() not in worker_pids, "the workers ran in the test process"
+
+
+def test_requeued_query_set_keeps_cached_templates(tmp_path):
+    """A reused query set keeps its cached template entry (issue #420).
+
+    Run 1 preprocesses a ColabFold alignment and writes the cache entry path and
+    template ids into the chain. The reused batch mixes that chain, deep-copied
+    from run 1's query set, with a raw CIF source that run 1 never
+    processed, so the write-back still runs while the cached entry is bypassed.
+    """
+    run_1_qs = _two_source_query_set(tmp_path, ["q_colabfold"])
+    structure_dir = tmp_path / "template_structures"
+    structure_dir.mkdir()
+    shutil.copy(MMCIFS_DIR / TEMPLATE_CIF, structure_dir / TEMPLATE_CIF)
+    settings = TemplatePreprocessorSettings(
+        mode="predict",
+        output_directory=tmp_path / "template_data",
+        # Pre-seeded structures + no fetching keeps this offline.
+        structure_directory=structure_dir,
+        fetch_missing_structures=False,
+        n_processes=1,
+        worker_pool="thread",
+    )
+
+    TemplatePreprocessor(input_set=run_1_qs, config=settings)()
+
+    cached_chain = run_1_qs.queries["q_colabfold"].chains[0]
+    cached_path = cached_chain.template_alignment_file_path
+    assert cached_path is not None
+    assert cached_chain.template_entry_chain_ids == ["2q2k_C"]
+
+    run_2_qs = run_1_qs.model_copy(deep=True)
+    fresh_qs = _two_source_query_set(tmp_path, ["q_custom"])
+    run_2_qs.queries |= fresh_qs.queries
+
+    preprocessor = TemplatePreprocessor(input_set=run_2_qs, config=settings)
+    preprocessor()
+
+    requeued_cached = run_2_qs.queries["q_colabfold"].chains[0]
+    assert requeued_cached.template_alignment_file_path == cached_path, (
+        "the cached template entry was dropped when the query set was reused"
+    )
+    assert requeued_cached.template_entry_chain_ids == ["2q2k_C"], (
+        "the template ids were dropped when the query set was reused"
+    )
+    requeued_raw = run_2_qs.queries["q_custom"].chains[0]
+    assert requeued_raw.template_entry_chain_ids == ["2q2k_B"], (
+        "the raw source in the reused batch was not processed"
+    )
+    # Only the raw source needs preprocessing; the cached entry must not be
+    # re-parsed as an alignment.
+    assert len(preprocessor.inputs) == 1
+
+
+# ---------------------------------------------------------------------------
+# Tier F: worker logs (integration, runs __call__)
+# ---------------------------------------------------------------------------
+
+
+def _log_settings(
+    tmp_path: Path,
+    *,
+    create_logs: bool,
+    worker_pool: Literal["process", "thread"] = "process",
+) -> TemplatePreprocessorSettings:
+    structure_dir = tmp_path / "template_structures"
+    structure_dir.mkdir()
+    shutil.copy(MMCIFS_DIR / TEMPLATE_CIF, structure_dir / TEMPLATE_CIF)
+    return TemplatePreprocessorSettings(
+        mode="predict",
+        output_directory=tmp_path / "template_data",
+        # Pre-seeded structures + no fetching keeps this offline.
+        structure_directory=structure_dir,
+        fetch_missing_structures=False,
+        n_processes=1,
+        worker_pool=worker_pool,
+        create_logs=create_logs,
+    )
+
+
+def test_worker_messages_are_written_to_per_process_logs(tmp_path):
+    """With `create_logs`, a worker writes its messages to `<log_directory>/<pid>.log`."""
+    iqs = _two_source_query_set(tmp_path, ["q_custom"])
+    settings = _log_settings(tmp_path, create_logs=True)
+
+    TemplatePreprocessor(input_set=iqs, config=settings)()
+
+    log_text = "".join(log.read_text() for log in settings.log_directory.glob("*.log"))
+    assert "CIF-direct mode" in log_text
+    assert "2q2k B added to cache." in log_text
+
+
+def test_worker_messages_are_dropped_without_create_logs(tmp_path, caplog):
+    """Without `create_logs`, worker messages reach no handler at all.
+
+    Workers log unconditionally, to a stand-in that drops everything when logs are
+    off; none of it may leak to the root logger, even when that would show it.
+    """
+    iqs = _two_source_query_set(tmp_path, ["q_custom", "q_colabfold"])
+    # Thread workers, so caplog would see their records
+    settings = _log_settings(tmp_path, create_logs=False, worker_pool="thread")
+
+    with caplog.at_level("DEBUG"):
+        TemplatePreprocessor(input_set=iqs, config=settings)()
+
+    assert iqs.queries["q_custom"].chains[0].template_entry_chain_ids == ["2q2k_B"]
+    worker_records = [
+        record
+        for record in caplog.records
+        if record.name.startswith("template_preprocess")
+    ]
+    assert worker_records == []
