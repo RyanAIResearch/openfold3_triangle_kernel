@@ -24,6 +24,7 @@ import importlib
 import pkgutil
 
 import pytest
+import torch
 
 import openfold3
 
@@ -45,6 +46,11 @@ BROKEN_MODULES = {
     "openfold3.core.data.tools.jackhmmer",
     "openfold3.core.data.tools.parse_msa_files",
 }
+
+# The vendored Protenix kernels read the CUDA device capability when they are
+# imported (_vendor/autotune_helpers.py), so they import only where a GPU is
+# visible. The Protenix adapter imports them lazily, on the GPU path only.
+CUDA_AT_IMPORT_PACKAGES = ("openfold3.core.kernels.protenix._vendor.",)
 
 
 def _all_modules() -> list[str]:
@@ -71,6 +77,9 @@ def _all_modules() -> list[str]:
     ],
 )
 def test_module_imports(module_name: str) -> None:
+    imports_need_gpu = module_name.startswith(CUDA_AT_IMPORT_PACKAGES)
+    if imports_need_gpu and not torch.cuda.is_available():
+        pytest.skip("reads the CUDA device at import time and no GPU is visible")
     try:
         importlib.import_module(module_name)
     except ModuleNotFoundError as e:

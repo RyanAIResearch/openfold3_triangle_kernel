@@ -488,11 +488,15 @@ def test_training_runner_keeps_aqlab_ddp_and_adds_only_kernel_callback(
         )
     except ModuleNotFoundError as error:
         pytest.skip(f"full OpenFold3 training dependencies are unavailable: {error}")
+    from openfold3.entry_points.validator import PlTrainerArgs
 
     runner = object.__new__(runner_module.TrainingExperimentRunner)
     runner.seed = 42
     runner.model_config = _config(train_attention=True, train_trimul=True)
-    runner.pl_trainer_args = SimpleNamespace(
+    # Use the real trainer-argument model, so every field the runner reads
+    # (for example cluster_environment and enable_progress_bar) has the
+    # validator's default unless it is set here.
+    runner.pl_trainer_args = PlTrainerArgs(
         devices=2,
         num_nodes=1,
         mpi_plugin=False,
