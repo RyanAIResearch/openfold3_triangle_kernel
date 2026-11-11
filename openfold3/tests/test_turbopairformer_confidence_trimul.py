@@ -140,10 +140,16 @@ def test_confidence_embedding_routes_all_five_samples_and_preserves_chunking(
     zij = torch.arange(7 * 7 * 4, dtype=torch.float32).reshape(1, 1, 7, 7, 4)
     extra = {} if enabled is None else {"use_stable_triangle_multiplicative": enabled}
 
+    # The real embed_zij returns a new tensor (zij plus the distance embedding).
+    # Return a copy here too: the per-sample path asserts that each sample's
+    # output storage is freed after it is copied out, which fails if the
+    # output still shares storage with the caller's zij.
     with (
         torch.no_grad(),
         mock.patch.object(
-            embedding, "embed_zij", side_effect=lambda si_input, zij, x_pred: zij
+            embedding,
+            "embed_zij",
+            side_effect=lambda si_input, zij, x_pred: zij.clone(),
         ),
         mock.patch.object(
             torch.amp, "autocast", side_effect=lambda **kwargs: nullcontext()
